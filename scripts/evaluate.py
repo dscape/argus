@@ -14,7 +14,11 @@ from argus.datagen.synth2d import generate_dataset
 from argus.eval.evaluator import Evaluator
 from argus.model.argus_model import ArgusModel
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 logger = logging.getLogger(__name__)
 
 
@@ -29,9 +33,20 @@ def main() -> None:
     device = args.device if torch.cuda.is_available() else "cpu"
 
     logger.info(f"Generating {args.num_clips} synthetic evaluation clips...")
-    clips = generate_dataset(num_clips=args.num_clips, clip_length=16, image_size=224, seed=12345)
+    clips = generate_dataset(
+        num_clips=args.num_clips,
+        clip_length=16,
+        image_size=224,
+        seed=12345,
+    )
     dataset = ArgusInMemoryDataset(clips=clips, clip_length=16)
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, collate_fn=argus_collate_fn, num_workers=0)
+    loader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        collate_fn=argus_collate_fn,
+        num_workers=0,
+    )
 
     model = ArgusModel(use_detector=False)
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
