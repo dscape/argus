@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Training outputs
+outputs/
+checkpoints/
+wandb/
+runs/
+
+# Data (generated, not source)
+data/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Blender
+*.blend1
+
+# Misc
+*.log
+.env
