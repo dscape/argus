@@ -1,0 +1,79 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "argus"
+version = "0.1.0"
+description = "Multi-game chess board state tracking from unconstrained video"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "python-chess>=1.11",
+    "transformers>=4.38",
+    "hydra-core>=1.3",
+    "omegaconf>=2.3",
+    "wandb>=0.16",
+    "numpy>=1.24",
+    "Pillow>=10.0",
+    "opencv-python>=4.8",
+    "av>=11.0",
+    "einops>=0.7",
+    "scipy>=1.11",
+    "safetensors>=0.4",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+cuda = [
+    "mamba-ssm>=2.0",
+    "causal-conv1d>=1.2",
+]
+dev = [
+    "pytest>=7.4",
+    "ruff>=0.2",
+    "mypy>=1.8",
+    "pre-commit>=3.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/argus"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "chess.*",
+    "cv2.*",
+    "mamba_ssm.*",
+    "causal_conv1d.*",
+    "wandb.*",
+    "hydra.*",
+    "omegaconf.*",
+    "einops.*",
+    "scipy.*",
+    "av.*",
+    "transformers.*",
+    "safetensors.*",
+    "timm.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

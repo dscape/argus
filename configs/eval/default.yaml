@@ -1,0 +1,15 @@
+name: default
+batch_size: 16
+frame_tolerance: 3
+metrics:
+  - move_accuracy
+  - move_accuracy_top5
+  - move_detection_f1
+  - pgn_edit_distance
+  - prefix_accuracy
+  - illegal_move_rate
+  - board_detection_map
+  - identity_switch_rate
+  - occlusion_recovery_rate
+visualize: true
+output_dir: eval_outputs

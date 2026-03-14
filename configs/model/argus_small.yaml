@@ -1,0 +1,20 @@
+name: argus_small
+vision_encoder:
+  model_name: facebook/dinov2-small
+  frozen: true
+  embed_dim: 384
+temporal:
+  type: mamba2
+  d_model: 256
+  n_layers: 4
+  d_state: 64
+  expand: 2
+move_head:
+  vocab_size: 1970
+  hidden_dim: 256
+board_detector:
+  num_queries: 32
+  hidden_dim: 256
+  num_heads: 8
+  num_decoder_layers: 3
+  identity_dim: 128

@@ -1,0 +1,18 @@
+name: synthetic
+type: synth2d
+num_train_clips: 5000
+num_val_clips: 500
+num_test_clips: 500
+clip_length: 16
+image_size: 224
+board_size_range: [50, 200]
+num_boards: 1
+pgn_source: lichess
+min_elo: 1500
+augmentations:
+  color_jitter: true
+  perspective_warp: true
+  gaussian_blur: true
+  gaussian_noise: true
+  jpeg_compression: true
+  occlusion: true
