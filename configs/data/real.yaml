@@ -1,0 +1,10 @@
+name: real
+type: video
+video_dir: data/real_videos
+annotation_dir: data/real_annotations
+clip_length: 200
+fps: 1.0
+augmentations:
+  color_jitter: true
+  gaussian_blur: false
+  gaussian_noise: false

@@ -1,0 +1,12 @@
+name: scene_simple
+type: synth2d
+num_clips: 6000
+clip_length: 100
+board_size: 200
+piece_style: lichess
+background: plain
+perspective_range: [-15, 15]
+scale_range: [0.3, 1.0]
+noise_std: 0.02
+blur_range: [0, 2.0]
+occlusion_prob: 0.3

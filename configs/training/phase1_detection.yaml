@@ -1,0 +1,25 @@
+name: phase1
+epochs: 50
+batch_size: 8
+gradient_accumulation: 4
+optimizer:
+  type: adamw
+  lr: 1.0e-4
+  weight_decay: 0.05
+scheduler:
+  type: cosine
+  warmup_steps: 1000
+  min_lr: 1.0e-6
+clip_grad_norm: 1.0
+precision: bf16
+loss_weights:
+  move: 1.0
+  detect: 0.5
+  bbox: 0.0
+  identity: 0.0
+wandb:
+  project: argus
+  enabled: true
+checkpoint:
+  save_every: 5
+  keep_last: 3

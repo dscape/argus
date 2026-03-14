@@ -1,0 +1,33 @@
+name: phase3
+epochs: 150
+batch_size: 4
+gradient_accumulation: 8
+optimizer:
+  type: adamw
+  lr: 5.0e-5
+  weight_decay: 0.05
+  vision_encoder_lr: 1.0e-5
+scheduler:
+  type: cosine
+  warmup_steps: 3000
+  min_lr: 1.0e-6
+clip_grad_norm: 1.0
+precision: bf16
+unfreeze_vision_encoder: true
+curriculum:
+  enabled: true
+  stages:
+    - {max_boards: 4, max_occlusion: 0.1, min_resolution: 150, epochs: 30}
+    - {max_boards: 10, max_occlusion: 0.3, min_resolution: 100, epochs: 50}
+    - {max_boards: 20, max_occlusion: 0.5, min_resolution: 50, epochs: 70}
+loss_weights:
+  move: 1.0
+  detect: 0.5
+  bbox: 1.0
+  identity: 0.5
+wandb:
+  project: argus
+  enabled: true
+checkpoint:
+  save_every: 5
+  keep_last: 3

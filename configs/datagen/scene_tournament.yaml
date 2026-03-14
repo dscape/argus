@@ -1,0 +1,22 @@
+name: scene_tournament
+type: blender3d
+num_clips: 1000
+clip_length_range: [200, 1000]
+resolution: [1920, 1080]
+fps: 5
+num_boards_range: [4, 30]
+camera:
+  fov_range: [70, 120]
+  height_range: [3.0, 6.0]
+  pan_speed: 0.5
+lighting:
+  overhead_intensity_range: [0.5, 1.5]
+  window_intensity_range: [0.0, 0.8]
+  color_temp_range: [4000, 6500]
+players:
+  hand_occlusion: true
+  body_occlusion: true
+  move_duration_range: [0.5, 3.0]
+render:
+  engine: eevee
+  samples: 64
