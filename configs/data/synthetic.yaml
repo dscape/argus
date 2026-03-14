@@ -1,5 +1,6 @@
 name: synthetic
 type: synth2d
+data_dir: null  # set to path to load pre-generated clips (e.g. data/synthetic)
 num_train_clips: 5000
 num_val_clips: 500
 num_test_clips: 500
