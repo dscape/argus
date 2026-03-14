@@ -24,6 +24,23 @@ Per-board features → Mamba-2 SSM (temporal memory) → Constrained Move Head �
 
 ## Setup
 
+### System Dependencies
+
+The synthetic data generator renders chess pieces via SVG and requires the Cairo graphics library:
+
+```bash
+# macOS
+brew install cairo
+
+# Ubuntu / Debian
+sudo apt-get install libcairo2-dev
+
+# Fedora
+sudo dnf install cairo-devel
+```
+
+### Python Environment
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate

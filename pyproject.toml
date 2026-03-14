@@ -25,6 +25,7 @@ dependencies = [
     "scipy>=1.11",
     "safetensors>=0.4",
     "matplotlib>=3.8",
+    "cairosvg>=2.7",
 ]
 
 [project.optional-dependencies]
