@@ -25,59 +25,67 @@ Per-board features → Mamba-2 SSM (temporal memory) → Constrained Move Head �
 ## Setup
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 make dev        # install with dev dependencies
-make test       # run tests
+make test       # run tests (34 tests)
 ```
 
-Requires Python 3.10+ and a CUDA-capable GPU for training.
+Requires Python 3.10+. For training with Mamba-2 (instead of the GRU fallback), install CUDA dependencies on a GPU machine:
+
+```bash
+pip install -e ".[cuda,dev]"
+```
 
 ## Usage
+
+### Synthetic Data Generation
+
+Generate training data to disk first — this is much faster than generating on-the-fly during training:
+
+```bash
+# 2D sprite-based data (Phase 1)
+make datagen ARGS="--num-clips 5000 --output-dir data/train"
+make datagen ARGS="--num-clips 500 --output-dir data/val"
+
+# Smaller/faster for local development
+make datagen ARGS="--num-clips 100 --output-dir data/dev --image-size 64"
+
+# 3D Blender-rendered data (Phase 2+, requires Blender 4.0+)
+make datagen ARGS="--type 3d --num-clips 200 --output-dir data/3d"
+```
 
 ### Training
 
 ```bash
-# Phase 1: Single-board move recognition on 2D synthetic data
-make train ARGS="training=phase1_detection"
+# Train from pre-generated data on disk (recommended)
+make train ARGS="data.data_dir=data training.wandb.enabled=false"
 
-# Phase 2: Multi-board detection + recognition on 3D synthetic data
-make train ARGS="training=phase2_recognition"
+# Or generate on-the-fly (slower, no prep step needed)
+make train ARGS="data.num_train_clips=100 data.num_val_clips=20 data.image_size=64 training.wandb.enabled=false"
 
-# Phase 3: End-to-end fine-tuning with curriculum
-make train ARGS="training=phase3_endtoend"
+# Phase configs
+make train ARGS="training=phase1_detection data.data_dir=data"
+make train ARGS="training=phase2_recognition data.data_dir=data"
+make train ARGS="training=phase3_endtoend data.data_dir=data"
 ```
 
 Training is configured via [Hydra](https://hydra.cc/) YAML configs in `configs/`. Override any parameter from the command line:
 
 ```bash
-make train ARGS="training=phase1_detection training.batch_size=16 training.lr=5e-4"
-```
-
-### Synthetic Data Generation
-
-```bash
-# 2D sprite-based data (fast, for Phase 1)
-make datagen ARGS="--mode synth2d --num-clips 1000 --output-dir data/synth2d"
-
-# 3D Blender-rendered data (requires Blender 4.0+, for Phase 2+)
-make datagen ARGS="--mode blender --config scene_tournament --num-clips 200"
+make train ARGS="training=phase1_detection training.batch_size=16 training.optimizer.lr=5e-4"
 ```
 
 ### Inference
 
 ```bash
-# Single-board video → PGN
-make infer ARGS="--video game.mp4 --output game.pgn"
-
-# Multi-board tournament video
-make infer ARGS="--video tournament.mp4 --output-dir pgns/ --checkpoint model.pt"
+make infer ARGS="--video tournament.mp4 --checkpoint outputs/checkpoint_epoch0050.pt --output-dir pgns/"
 ```
 
 ### Evaluation
 
 ```bash
-make eval ARGS="--checkpoint model.pt --data-dir data/test"
+make eval ARGS="--checkpoint outputs/checkpoint_epoch0050.pt --num-clips 200"
 ```
 
 ## Project Structure

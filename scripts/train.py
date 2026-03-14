@@ -21,8 +21,7 @@ from omegaconf import DictConfig
 from torch.utils.data import DataLoader, random_split
 
 from argus.data.collate import argus_collate_fn
-from argus.data.dataset import ArgusInMemoryDataset
-from argus.datagen.synth2d import generate_dataset
+from argus.data.dataset import ArgusDataset, ArgusInMemoryDataset
 from argus.model.argus_model import ArgusModel
 from argus.training.trainer import Trainer
 
@@ -36,24 +35,46 @@ def main(cfg: DictConfig) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Using device: {device}")
 
-    num_train_clips = cfg.data.get("num_train_clips", 1000)
-    num_val_clips = cfg.data.get("num_val_clips", 100)
-    total_clips = num_train_clips + num_val_clips
-    image_size = cfg.data.get("image_size", 224)
     clip_length = cfg.data.get("clip_length", 16)
     seed = cfg.get("seed", 42)
+    data_dir = cfg.data.get("data_dir", None)
 
-    logger.info(f"Generating {total_clips} synthetic clips ({num_train_clips} train, {num_val_clips} val)...")
-    clips = generate_dataset(
-        num_clips=total_clips,
-        clip_length=clip_length,
-        image_size=image_size,
-        seed=seed,
-    )
-    logger.info(f"Generated {len(clips)} clips")
+    if data_dir is not None:
+        # Load pre-generated data from disk (use make datagen first)
+        from pathlib import Path
+        train_dir = Path(data_dir) / "train"
+        val_dir = Path(data_dir) / "val"
+        if not train_dir.exists():
+            # Flat directory: split by ratio
+            logger.info(f"Loading data from {data_dir}...")
+            full_ds = ArgusDataset(data_dir, clip_length=clip_length)
+            num_val = cfg.data.get("num_val_clips", 100)
+            num_train = len(full_ds) - num_val
+            train_ds, val_ds = random_split(full_ds, [num_train, num_val])
+        else:
+            # Separate train/val directories
+            logger.info(f"Loading train from {train_dir}, val from {val_dir}...")
+            train_ds = ArgusDataset(train_dir, clip_length=clip_length)
+            val_ds = ArgusDataset(val_dir, clip_length=clip_length)
+    else:
+        # Generate synthetic data on-the-fly
+        from argus.datagen.synth2d import generate_dataset
+        num_train_clips = cfg.data.get("num_train_clips", 1000)
+        num_val_clips = cfg.data.get("num_val_clips", 100)
+        total_clips = num_train_clips + num_val_clips
+        image_size = cfg.data.get("image_size", 224)
 
-    dataset = ArgusInMemoryDataset(clips=clips, clip_length=clip_length)
-    train_ds, val_ds = random_split(dataset, [num_train_clips, num_val_clips])
+        logger.info(f"Generating {total_clips} synthetic clips ({num_train_clips} train, {num_val_clips} val)...")
+        clips = generate_dataset(
+            num_clips=total_clips,
+            clip_length=clip_length,
+            image_size=image_size,
+            seed=seed,
+        )
+        logger.info(f"Generated {len(clips)} clips")
+
+        dataset = ArgusInMemoryDataset(clips=clips, clip_length=clip_length)
+        train_ds, val_ds = random_split(dataset, [num_train_clips, num_val_clips])
 
     train_loader = DataLoader(train_ds, batch_size=cfg.training.batch_size, shuffle=True, collate_fn=argus_collate_fn, num_workers=0, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=cfg.training.batch_size, shuffle=False, collate_fn=argus_collate_fn, num_workers=0, pin_memory=True)
