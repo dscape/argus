@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: argus-db
+    environment:
+      POSTGRES_DB: argus
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-argus_dev}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - argus_pgdata:/var/lib/postgresql/data
+      - ./pipeline/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    command: >
+      postgres
+        -c shared_preload_libraries='pg_trgm'
+        -c work_mem='256MB'
+        -c maintenance_work_mem='512MB'
+
+volumes:
+  argus_pgdata:
