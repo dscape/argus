@@ -1,0 +1,172 @@
+# YouTube channels to crawl for chess game videos.
+# channel_id: UC-prefixed YouTube channel ID (immutable, preferred)
+# handle: @-prefixed YouTube handle (can change, used as fallback)
+# tier: 1 = highest priority (per-game coverage), 5 = lowest (supplemental)
+
+channels:
+  # ── Tier 1: Per-Game Coverage ──────────────────────────────────────
+  - name: "agadmator's Chess Channel"
+    handle: "@agadmator"
+    tier: 1
+    notes: "~5000 videos. Gold standard. Title: 'Player A vs Player B, Event Year'. PGN often in description."
+
+  - name: "GothamChess"
+    handle: "@GothamChess"
+    tier: 1
+    notes: "~2000+ videos. Mix of per-game and recaps. Filter to 'vs' titles."
+
+  - name: "Daniel Naroditsky GM"
+    handle: "@DanielNaroditskyGM"
+    tier: 1
+    notes: "Individual game analysis and speed runs."
+
+  - name: "Power Play Chess (Daniel King)"
+    handle: "@PowerPlayChess"
+    tier: 1
+    notes: "Classic and contemporary game analysis."
+
+  - name: "John Bartholomew Chess"
+    handle: "@JohnBartholomew"
+    tier: 1
+    notes: "Large archive of game analysis."
+
+  - name: "Eric Rosen"
+    handle: "@eric-rosen"
+    tier: 1
+    notes: "Primarily his own games. Lower signal for elite matching."
+
+  # ── Tier 2: Official Tournament Channels ───────────────────────────
+  - name: "Saint Louis Chess Club"
+    handle: "@STLChessClub"
+    tier: 2
+    notes: "Sinquefield Cup, US Championship, Grand Chess Tour. Multi-board, use chapters."
+
+  - name: "Chess.com"
+    handle: "@chess-com"
+    tier: 2
+    notes: "Olympiad, Candidates, World Blitz/Rapid. Multi-board with chapters."
+
+  - name: "FIDE Chess"
+    handle: "@fidechess"
+    channel_id: "UC9B47GnzCRFHTT1BIBWvStQ"
+    tier: 2
+    notes: "World Championship, Grand Prix, World Cup, Olympiad. Authoritative."
+
+  - name: "World Chess"
+    handle: "@worldchess"
+    tier: 2
+    notes: "WC matches and FIDE Grand Prix legs."
+
+  - name: "chess24"
+    handle: "@chess24"
+    tier: 2
+    notes: "Archived (website shut down Jan 2024). 10+ years of elite events. Read-only archive."
+
+  - name: "Tata Steel Chess"
+    handle: "@TataSteelChess"
+    tier: 2
+    notes: "Wijk aan Zee. Masters + Challengers. Streams per round."
+
+  - name: "Norway Chess"
+    handle: null
+    tier: 2
+    notes: "RESOLVE MANUALLY. Search 'Norway Chess Official' on YouTube. Handle has changed."
+
+  - name: "Grand Chess Tour"
+    handle: "@GrandChessTour"
+    tier: 2
+    notes: "GCT circuit events not covered by STLCC."
+
+  - name: "Freestyle Chess / Meltwater Champions Chess Tour"
+    handle: "@FreestyleChessGP"
+    tier: 2
+    notes: "Fischer Random circuit. Growing archive from 2024."
+
+  # ── Tier 3: Regional and Language-Segmented ────────────────────────
+  - name: "ChessBase India"
+    handle: "@ChessBaseIndia"
+    tier: 3
+    notes: "English/India. Olympiad and Indian GM coverage. Structured titles."
+
+  - name: "ChessBase India Hindi"
+    handle: "@ChessBaseIndiaHindi"
+    tier: 3
+    notes: "Hindi. Duplicate event coverage, lower parsing signal."
+
+  - name: "BlitzStream"
+    handle: "@BlitzStream"
+    tier: 3
+    notes: "French. Kevin Bordi. Covers major elite events."
+
+  - name: "Crestbook / Sergei Shipov"
+    handle: null
+    tier: 3
+    notes: "RESOLVE MANUALLY. Search 'Crestbook шахматы Шипов'. Russian. Major commentator."
+
+  - name: "Chess Fight Night"
+    handle: "@ChessFightNight"
+    tier: 3
+    notes: "Russian. Multi-board tournament coverage."
+
+  - name: "Шахматы & Сергей Жигалко"
+    handle: null
+    tier: 3
+    notes: "RESOLVE MANUALLY. Search 'Жигалко шахматы'. Cyrillic handle."
+
+  # ── Tier 4: FIDE and National Federation Channels ──────────────────
+  - name: "Chess Olympiad Chennai 2022"
+    handle: null
+    tier: 4
+    notes: "RESOLVE MANUALLY. Search 'Chess Olympiad 2022 official'. Ephemeral host channel."
+
+  - name: "Chess Olympiad Budapest 2024"
+    handle: null
+    tier: 4
+    notes: "RESOLVE MANUALLY. Search 'Chess Olympiad Budapest 2024 official'. Ephemeral."
+
+  - name: "US Chess"
+    handle: "@USChess"
+    tier: 4
+    notes: "US Open, US Championship auxiliary coverage."
+
+  - name: "English Chess Federation"
+    handle: "@ECFchess"
+    tier: 4
+    notes: "British Championship. Small archive."
+
+  - name: "ChessDE / German Chess Federation"
+    handle: null
+    tier: 4
+    notes: "RESOLVE MANUALLY. Search 'Deutscher Schachbund' on YouTube. Bundesliga."
+
+  # ── Tier 5: Individual GM Channels (supplemental) ──────────────────
+  - name: "Hikaru Nakamura"
+    handle: "@GMHikaru"
+    tier: 5
+    notes: "Lower match density. Many online/own games."
+
+  - name: "Magnus Carlsen"
+    handle: "@MagnusCarlsen"
+    tier: 5
+
+  - name: "Anish Giri"
+    handle: "@AnishGiri"
+    tier: 5
+
+  - name: "Anna Cramling"
+    handle: "@AnnaCramling"
+    tier: 5
+
+  - name: "Chessbrah"
+    handle: "@chessbrah"
+    tier: 5
+    notes: "Eric Hansen / Aman Hambleton."
+
+  - name: "BotezLive"
+    handle: "@BotezLive"
+    tier: 5
+
+  - name: "Ben Finegold"
+    handle: "@GMBenFinegold"
+    tier: 5
+    notes: "Verify handle. Legacy URL was /user/BenFinegold."
