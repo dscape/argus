@@ -45,6 +45,15 @@ const config: Config = {
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
       },
+      keyframes: {
+        "clip-appear": {
+          "0%": { opacity: "0", transform: "scale(0.9)" },
+          "100%": { opacity: "1", transform: "scale(1)" },
+        },
+      },
+      animation: {
+        "clip-appear": "clip-appear 0.4s ease-out",
+      },
     },
   },
   plugins: [require("tailwindcss-animate")],

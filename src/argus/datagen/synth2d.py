@@ -10,7 +10,7 @@ from __future__ import annotations
 import io
 import random
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import chess
 import chess.svg
@@ -338,6 +338,7 @@ def generate_dataset(
     max_moves: int = 80,
     output_dir: str | Path | None = None,
     seed: int = 42,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Generate a full synthetic dataset of training clips.
 
@@ -350,14 +351,20 @@ def generate_dataset(
         occlusion_prob: Occlusion probability per frame.
         min_moves: Minimum game length.
         max_moves: Maximum game length.
-        output_dir: If set, save clips to disk.
+        output_dir: If set, save clips to disk incrementally.
         seed: Random seed.
+        on_progress: Optional callback(completed, total) called after each clip.
 
     Returns:
         List of clip dicts (see generate_clip).
     """
     rng = random.Random(seed)
     clips: list[dict[str, Any]] = []
+
+    out: Path | None = None
+    if output_dir is not None:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
 
     for i in range(num_clips):
         game_seed = rng.randint(0, 2**31)
@@ -382,11 +389,11 @@ def generate_dataset(
         )
         clips.append(clip)
 
-    if output_dir is not None:
-        out = Path(output_dir)
-        out.mkdir(parents=True, exist_ok=True)
-        for i, clip in enumerate(clips):
+        if out is not None:
             save_dict = {k: v for k, v in clip.items() if isinstance(v, torch.Tensor)}
-            torch.save(save_dict, out / f"clip_{i:06d}.pt")
+            torch.save(save_dict, out / f"clip_{len(clips) - 1:06d}.pt")
+
+        if on_progress is not None:
+            on_progress(len(clips), num_clips)
 
     return clips

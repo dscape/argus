@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Card,
   CardContent,
@@ -9,23 +9,51 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { scanSyntheticDir, getSyntheticStats } from "@/lib/api";
-import type {
-  SyntheticScanResponse,
-  SyntheticStatsResponse,
-  ClipInspectResponse,
-} from "@/lib/types";
+import { getSyntheticStats } from "@/lib/api";
+import type { SyntheticStatsResponse, ClipInspectResponse } from "@/lib/types";
 import { ClipGallery } from "@/components/ClipGallery";
 import { ClipInspector } from "@/components/ClipInspector";
 import { ValidityChart } from "@/components/ValidityChart";
+import { usePolledScan } from "@/hooks/usePolledScan";
 
 const DIRECTORY = "data/train";
 
 export default function SyntheticPage() {
-  const [scan, setScan] = useState<SyntheticScanResponse | null>(null);
   const [stats, setStats] = useState<SyntheticStatsResponse | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const lastStatsRefreshCount = useRef(0);
+
+  const refreshStats = useCallback(() => {
+    setStatsLoading(true);
+    getSyntheticStats(DIRECTORY)
+      .then((result) => setStats(result))
+      .catch(() => {})
+      .finally(() => setStatsLoading(false));
+  }, []);
+
+  // Auto-refresh stats every 20 clips
+  const handleClipCountChange = useCallback(
+    (count: number) => {
+      const prev = lastStatsRefreshCount.current;
+      if (count === 0 || Math.floor(count / 20) > Math.floor(prev / 20)) {
+        lastStatsRefreshCount.current = count;
+        refreshStats();
+      }
+    },
+    [refreshStats]
+  );
+
+  const {
+    scan,
+    error: scanError,
+    isPolling,
+    setPolling,
+  } = usePolledScan({
+    directory: DIRECTORY,
+    intervalMs: 2000,
+    onClipCountChange: handleClipCountChange,
+  });
+
   const [validCount, setValidCount] = useState(0);
   const [invalidCount, setInvalidCount] = useState(0);
 
@@ -43,27 +71,33 @@ export default function SyntheticPage() {
     }
   }, []);
 
-  // Fetch scan and stats in parallel on mount
+  // Initial stats load
   useEffect(() => {
-    scanSyntheticDir(DIRECTORY)
-      .then((result) => setScan(result))
-      .catch((e) =>
-        setError(e instanceof Error ? e.message : "Scan failed")
-      );
-
-    setStatsLoading(true);
-    getSyntheticStats(DIRECTORY)
-      .then((result) => setStats(result))
-      .catch(() => {})
-      .finally(() => setStatsLoading(false));
-  }, []);
+    refreshStats();
+  }, [refreshStats]);
 
   return (
     <div>
-      <h2 className="text-2xl font-bold mb-6">Tensors</h2>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-2xl font-bold">Synthetic</h2>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span
+            className={`inline-block w-2 h-2 rounded-full ${
+              isPolling ? "bg-green-500 animate-pulse" : "bg-gray-400"
+            }`}
+          />
+          <span>{isPolling ? "Live" : "Paused"}</span>
+          <button
+            onClick={() => setPolling(!isPolling)}
+            className="text-xs underline ml-1"
+          >
+            {isPolling ? "Pause" : "Resume"}
+          </button>
+        </div>
+      </div>
 
-      {error && (
-        <p className="text-sm text-destructive mb-4">{error}</p>
+      {scanError && (
+        <p className="text-sm text-destructive mb-4">{scanError}</p>
       )}
 
       {/* Stats — always visible */}
@@ -83,6 +117,15 @@ export default function SyntheticPage() {
           </div>
         ) : (
           <>
+            <div className="flex items-center gap-2 mb-2">
+              <button
+                onClick={refreshStats}
+                disabled={statsLoading}
+                className="text-xs text-muted-foreground underline hover:text-foreground"
+              >
+                Refresh stats
+              </button>
+            </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
               <StatCard label="Clips" value={stats.clip_count} />
               <StatCard label="Total frames" value={stats.total_frames} />
@@ -126,9 +169,7 @@ export default function SyntheticPage() {
             {(validCount > 0 || invalidCount > 0) && (
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">
-                    Clip validity
-                  </CardTitle>
+                  <CardTitle className="text-sm">Clip validity</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <ValidityChart valid={validCount} invalid={invalidCount} />
@@ -153,10 +194,13 @@ export default function SyntheticPage() {
           }
           onClipInspected={handleClipInspected}
         />
-      ) : !error ? (
+      ) : !scanError ? (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
           {Array.from({ length: 8 }, (_, i) => (
-            <div key={i} className="rounded-lg border bg-card overflow-hidden">
+            <div
+              key={i}
+              className="rounded-lg border bg-card overflow-hidden"
+            >
               <Skeleton className="aspect-square w-full rounded-none" />
               <div className="p-2 space-y-1">
                 <Skeleton className="h-3 w-3/4" />
@@ -181,7 +225,13 @@ export default function SyntheticPage() {
   );
 }
 
-function StatCard({ label, value }: { label: string; value: string | number }) {
+function StatCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
   return (
     <Card>
       <CardHeader className="pb-1 pt-3 px-4">
@@ -193,4 +243,3 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
     </Card>
   );
 }
-
