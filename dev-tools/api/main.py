@@ -7,9 +7,9 @@ for the developer tools web UI.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import overlay, calibration, clips, video, synthetic
+from api.routers import calibration, clips, overlay, synthetic, video
 
-app = FastAPI(title="Argus Dev Tools API", version="0.1.0")
+app = FastAPI(title="Argus API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,

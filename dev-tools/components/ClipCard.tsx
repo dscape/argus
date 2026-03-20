@@ -16,11 +16,12 @@ interface ClipCardProps {
   cache: React.MutableRefObject<
     Map<string, { sessionId: string; clipInfo: ClipInspectResponse }>
   >;
+  isNew?: boolean;
   onClick: (sessionId: string, clipInfo: ClipInspectResponse) => void;
   onInspected?: (clipInfo: ClipInspectResponse) => void;
 }
 
-export function ClipCard({ clip, directory, cache, onClick, onInspected }: ClipCardProps) {
+export function ClipCard({ clip, directory, cache, isNew, onClick, onInspected }: ClipCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [clipInfo, setClipInfo] = useState<ClipInspectResponse | null>(null);
@@ -151,7 +152,9 @@ export function ClipCard({ clip, directory, cache, onClick, onInspected }: ClipC
   return (
     <div
       ref={cardRef}
-      className="group cursor-pointer rounded-lg border bg-card overflow-hidden hover:border-primary/50 transition-colors"
+      className={`group cursor-pointer rounded-lg border bg-card overflow-hidden hover:border-primary/50 transition-colors ${
+        isNew ? "animate-clip-appear" : ""
+      }`}
       onClick={() => {
         if (sessionId && clipInfo) onClick(sessionId, clipInfo);
       }}

@@ -3,12 +3,12 @@ import Link from "next/link";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Argus Dev Tools",
+  title: "Argus",
   description: "Developer tools for the Argus chess video pipeline",
 };
 
 const navItems = [
-  { href: "/synthetic", label: "Tensors" },
+  { href: "/synthetic", label: "Synthetic" },
   { href: "/overlay-tester", label: "Overlay Tester" },
   { href: "/calibration", label: "Calibration" },
   { href: "/video-annotator", label: "Video Annotator" },
@@ -26,9 +26,7 @@ export default function RootLayout({
           <aside className="w-56 border-r bg-muted/40 p-4">
             <div className="mb-6">
               <Link href="/" className="block">
-                <h1 className="text-lg font-bold text-foreground">
-                  Argus Dev Tools
-                </h1>
+                <h1 className="text-lg font-bold text-foreground">Argus</h1>
               </Link>
             </div>
             <nav className="space-y-1">

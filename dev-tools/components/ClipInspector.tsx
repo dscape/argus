@@ -40,7 +40,7 @@ export function ClipInspector({
 
         {/* Tensors */}
         <div className="mb-4">
-          <h4 className="text-sm font-medium mb-2">Tensors</h4>
+          <h4 className="text-sm font-medium mb-2">Synthetic</h4>
           <div className="border rounded-md overflow-hidden">
             <table className="w-full text-sm">
               <thead>

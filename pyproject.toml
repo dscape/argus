@@ -26,6 +26,7 @@ dependencies = [
     "safetensors>=0.4",
     "matplotlib>=3.8",
     "cairosvg>=2.7",
+    "tqdm>=4.66",
 ]
 
 [project.optional-dependencies]

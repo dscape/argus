@@ -9,9 +9,8 @@ import {
 const tools = [
   {
     href: "/synthetic",
-    title: "Tensors",
-    description:
-      "Browse generated tensor clips and view aggregated stats.",
+    title: "Synthetic",
+    description: "Browse generated tensor clips and view aggregated stats.",
   },
   {
     href: "/overlay-tester",

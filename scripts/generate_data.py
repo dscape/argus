@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import torch
+from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
@@ -29,11 +30,20 @@ def main() -> None:
     if args.type == "2d":
         from argus.datagen.synth2d import generate_dataset
         logger.info(f"Generating {args.num_clips} 2D synthetic clips...")
+
+        pbar = tqdm(total=args.num_clips, desc="Generating clips", unit="clip")
+
+        def on_progress(completed: int, total: int) -> None:
+            pbar.n = completed
+            pbar.refresh()
+
         clips = generate_dataset(
             num_clips=args.num_clips, clip_length=args.clip_length,
             image_size=args.image_size, frames_per_move=args.frames_per_move,
             output_dir=str(output_dir), seed=args.seed,
+            on_progress=on_progress,
         )
+        pbar.close()
         logger.info(f"Saved {len(clips)} clips to {output_dir}")
     elif args.type == "3d":
         from argus.datagen.renderer import generate_clip_annotations, save_annotations
