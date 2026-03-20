@@ -1,5 +1,6 @@
 .PHONY: install dev test lint typecheck format train eval datagen infer clean \
-       db-up db-down pipeline-install import-data crawl extract match download-videos generate-clips pipeline-stats
+       db-up db-down pipeline-install import-data crawl extract match download-videos generate-clips pipeline-stats \
+       dev-tools dev-tools-down
 
 install:
 	pip install -e .
@@ -69,3 +70,11 @@ generate-clips:
 
 pipeline-stats:
 	python3 -m pipeline.cli stats
+
+# ── Dev tools targets ────────────────────────────────────────
+
+dev-tools:
+	docker compose --profile dev-tools up --build
+
+dev-tools-down:
+	docker compose --profile dev-tools down
