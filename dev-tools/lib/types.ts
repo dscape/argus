@@ -109,3 +109,33 @@ export interface VideoMoveDetectionResponse {
   num_readable: number;
   segments: GameSegmentResponse[];
 }
+
+// Synthetic data monitoring
+export interface SyntheticClipFile {
+  filename: string;
+  size_mb: number;
+  modified: string;
+}
+
+export interface SyntheticScanResponse {
+  directory: string;
+  exists: boolean;
+  expected_clips: number | null;
+  clip_count: number;
+  total_size_mb: number;
+  clips: SyntheticClipFile[];
+}
+
+export interface SyntheticStatsResponse {
+  clip_count: number;
+  total_frames: number;
+  avg_frames_per_clip: number;
+  total_moves: number;
+  avg_moves_per_clip: number;
+  moves_per_clip_distribution: number[];
+  avg_file_size_mb: number;
+  total_size_mb: number;
+  avg_legal_moves: number | null;
+  image_size: [number, number] | null;
+  clip_length: number | null;
+}

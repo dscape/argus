@@ -90,7 +90,7 @@ The codebase is organized into 5 independent domains. Pick the one you're workin
 | **Data Generation** | `src/argus/datagen/`, `blender/` | Generate synthetic training clips (2D sprites or 3D Blender) | Cairo (2D), Blender 4.0+ (3D) |
 | **Training** | `src/argus/model/`, `src/argus/training/`, `scripts/train.py` | Train the Argus model in 3 phases | PyTorch, GPU, Hydra |
 | **Inference** | `src/argus/inference/`, `scripts/infer.py` | Run a trained model on video files to produce PGN | PyTorch, trained checkpoint |
-| **Dev Tools** | `dev-tools/` | Web UI for inspecting the overlay pipeline (currently: overlay debugging only) | Docker |
+| **Dev Tools** | `dev-tools/` | Web UI for monitoring synthetic data generation and debugging the video overlay pipeline | Docker |
 
 Shared across domains: `src/argus/chess/` (move vocabulary, state machine, constraint masking, PGN writer).
 
@@ -100,11 +100,14 @@ Shared across domains: `src/argus/chess/` (move vocabulary, state machine, const
 
 Generate synthetic data and train a model. No database or API keys needed.
 
+> **Tip:** Start [dev tools](#quick-start-dev-tools) first (`make dev-tools`) to monitor synthetic data generation live in the Synthetic tab at http://localhost:3000/synthetic.
+
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 make dev
 
 # Generate synthetic training data (2D sprites)
+# (progress visible live in dev tools → Synthetic tab)
 make datagen ARGS="--num-clips 100 --output-dir data/train --image-size 64"
 make datagen ARGS="--num-clips 20 --output-dir data/val --image-size 64"
 
@@ -448,49 +451,57 @@ Uses plain argparse (not Hydra).
 ## Developer Tools
 
 > **Domain: Dev Tools** — `dev-tools/`
->
-> **Current scope: overlay pipeline debugging only** (Pipeline Stage 6). There are no dev tools yet for crawling, extraction, matching, training, or inference.
 
-A web-based inspection suite for debugging the overlay pipeline and validating training data. Built with Next.js 14 (frontend) + FastAPI (backend).
+A web-based inspection suite for monitoring synthetic data generation and debugging the video overlay pipeline. Built with Next.js 14 (frontend) + FastAPI (backend).
+
+Tools are grouped into two areas:
+
+- **Synthetic** — monitor data generation progress, inspect training clips
+- **Video** — debug overlay detection, calibrate crop regions, annotate video
 
 ### How Dev Tools Relate to the Pipeline
 
-The dev-tools services are thin REST wrappers — they directly import from `pipeline.overlay.*` and `argus.chess`. Every web tool has a CLI equivalent.
+The dev-tools services are thin REST wrappers — they directly import from `pipeline.overlay.*`, `argus.datagen`, and `argus.chess`. Every web tool has a CLI equivalent.
 
-| Dev Tool | Pipeline Stage | Modules Wrapped | CLI Equivalent |
-|----------|---------------|-----------------|----------------|
-| **Overlay Tester** | Stage 6 — overlay detection | `pipeline.overlay.scanner`, `overlay_reader` | `overlay-test` |
-| **Clip Inspector** | Stage 6 output — clip validation | `argus.chess.move_vocabulary`, PyTorch tensors | `inspect-clip` |
-| **Calibration Editor** | Stage 6 — overlay setup | `pipeline.overlay.calibration` | `overlay-calibrate` |
-| **Video Annotator** | Stage 6 — overlay move detection | `pipeline.overlay.overlay_reader`, `overlay_move_detector` | `overlay-test`, `overlay-generate` |
+| Dev Tool | Area | Modules Wrapped | CLI Equivalent |
+|----------|------|-----------------|----------------|
+| **Synthetic Monitor** | Synthetic | `argus.datagen.synth2d`, filesystem scanner | `datagen` |
+| **Clip Inspector** | Synthetic | `argus.chess.move_vocabulary`, PyTorch tensors | `inspect-clip` |
+| **Overlay Tester** | Video | `pipeline.overlay.scanner`, `overlay_reader` | `overlay-test` |
+| **Calibration Editor** | Video | `pipeline.overlay.calibration` | `overlay-calibrate` |
+| **Video Annotator** | Video | `pipeline.overlay.overlay_reader`, `overlay_move_detector` | `overlay-test`, `overlay-generate` |
 
 ### Dev Tools Architecture
 
 ```mermaid
 graph LR
     subgraph "Browser — localhost:3000"
-        OT[Overlay Tester]
+        SM[Synthetic Monitor]
         CI[Clip Inspector]
+        OT[Overlay Tester]
         CE[Calibration Editor]
         VA[Video Annotator]
     end
 
     subgraph "FastAPI — localhost:8000"
-        R1["/api/overlay/*"]
+        R0["/api/synthetic/*"]
         R2["/api/clips/*"]
+        R1["/api/overlay/*"]
         R3["/api/calibration/*"]
         R4["/api/video/*"]
     end
 
     subgraph "Pipeline Modules"
-        S1["scanner, overlay_reader"]
+        S0["synth2d, filesystem"]
         S2["move_vocabulary, clip tensors"]
+        S1["scanner, overlay_reader"]
         S3["calibration YAML"]
         S4["overlay_reader, overlay_move_detector"]
     end
 
-    OT --> R1 --> S1
+    SM --> R0 --> S0
     CI --> R2 --> S2
+    OT --> R1 --> S1
     CE --> R3 --> S3
     VA --> R4 --> S4
 ```
@@ -518,8 +529,9 @@ cd dev-tools && npm install && npm run dev
 
 | Tool | URL | Purpose |
 |------|-----|---------|
-| **Overlay Tester** | `/overlay-tester` | Upload a screenshot, auto-detect or manually draw the overlay bounding box, get FEN + annotated image |
+| **Synthetic Monitor** | `/synthetic` | Watch synthetic data generation live, browse clips, inspect frames and tensors, view aggregated stats |
 | **Clip Inspector** | `/clip-inspector` | Upload a `.pt` training clip, view frames, inspect tensor metadata, validate move sequence against chess rules |
+| **Overlay Tester** | `/overlay-tester` | Upload a screenshot, auto-detect or manually draw the overlay bounding box, get FEN + annotated image |
 | **Calibration Editor** | `/calibration` | Draw overlay and camera crop regions on a sample frame, save per-channel calibration to YAML |
 | **Video Annotator** | `/video-annotator` | Step through a video frame-by-frame, read overlay FEN at any frame, run full move detection |
 
@@ -537,6 +549,14 @@ python -m pipeline.cli stats  # Pipeline statistics (row counts per table)
 ## Dev Tools REST API
 
 The FastAPI backend at `localhost:8000` exposes these endpoints. The Next.js frontend proxies `/api/*` requests to this server.
+
+### Synthetic Monitor
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/synthetic/scan?directory=...&expected_clips=...` | Scan directory for `.pt` files (lightweight, for polling) |
+| `GET` | `/api/synthetic/stats?directory=...` | Compute aggregated stats across all clips (loads all `.pt` files) |
+| `POST` | `/api/synthetic/inspect` | Load a clip from disk into a clip inspection session |
 
 ### Overlay Tester
 
