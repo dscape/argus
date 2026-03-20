@@ -17,5 +17,43 @@ services:
         -c work_mem='256MB'
         -c maintenance_work_mem='512MB'
 
+  dev-tools-api:
+    build:
+      context: .
+      dockerfile: dev-tools/Dockerfile.api
+    container_name: argus-dev-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./pipeline:/app/pipeline
+      - ./src:/app/src
+      - ./configs:/app/configs
+      - ./dev-tools/api:/app/dev-tools/api
+    environment:
+      - PYTHONPATH=/app/src:/app
+      - DATABASE_URL=postgresql://argus:${POSTGRES_PASSWORD:-argus_dev}@postgres:5432/argus
+    depends_on:
+      - postgres
+    profiles:
+      - dev-tools
+
+  dev-tools-ui:
+    build:
+      context: ./dev-tools
+      dockerfile: Dockerfile.ui
+    container_name: argus-dev-ui
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./dev-tools:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - API_URL=http://dev-tools-api:8000
+    depends_on:
+      - dev-tools-api
+    profiles:
+      - dev-tools
+
 volumes:
   argus_pgdata:
