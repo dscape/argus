@@ -7,21 +7,11 @@ export const metadata: Metadata = {
   description: "Developer tools for the Argus chess video pipeline",
 };
 
-const navGroups = [
-  {
-    label: "Synthetic",
-    items: [
-      { href: "/synthetic", label: "Synthetic Monitor" },
-    ],
-  },
-  {
-    label: "Video",
-    items: [
-      { href: "/overlay-tester", label: "Overlay Tester" },
-      { href: "/calibration", label: "Calibration" },
-      { href: "/video-annotator", label: "Video Annotator" },
-    ],
-  },
+const navItems = [
+  { href: "/synthetic", label: "Tensors" },
+  { href: "/overlay-tester", label: "Overlay Tester" },
+  { href: "/calibration", label: "Calibration" },
+  { href: "/video-annotator", label: "Video Annotator" },
 ];
 
 export default function RootLayout({
@@ -40,28 +30,16 @@ export default function RootLayout({
                   Argus Dev Tools
                 </h1>
               </Link>
-              <p className="text-xs text-muted-foreground">
-                Pipeline diagnostics
-              </p>
             </div>
-            <nav className="space-y-4">
-              {navGroups.map((group) => (
-                <div key={group.label}>
-                  <p className="px-3 mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    {group.label}
-                  </p>
-                  <div className="space-y-1">
-                    {group.items.map((item) => (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        className="block rounded-md px-3 py-2 text-sm text-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-                      >
-                        {item.label}
-                      </Link>
-                    ))}
-                  </div>
-                </div>
+            <nav className="space-y-1">
+              {navItems.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="block rounded-md px-3 py-2 text-sm text-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+                >
+                  {item.label}
+                </Link>
               ))}
             </nav>
           </aside>
