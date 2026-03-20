@@ -5,6 +5,8 @@ import type {
   VideoSession,
   FrameOverlayResponse,
   VideoMoveDetectionResponse,
+  SyntheticScanResponse,
+  SyntheticStatsResponse,
 } from "./types";
 
 // ── Overlay ─────────────────────────────────────────────────
@@ -135,4 +137,38 @@ export async function detectVideoMoves(
 
 export async function deleteVideoSession(sessionId: string): Promise<void> {
   await fetch(`/api/video/${sessionId}`, { method: "DELETE" });
+}
+
+// ── Synthetic ────────────────────────────────────────────────
+
+export async function scanSyntheticDir(
+  directory: string,
+  expectedClips?: number
+): Promise<SyntheticScanResponse> {
+  const params = new URLSearchParams({ directory });
+  if (expectedClips !== undefined) params.set("expected_clips", String(expectedClips));
+  const res = await fetch(`/api/synthetic/scan?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getSyntheticStats(
+  directory: string
+): Promise<SyntheticStatsResponse> {
+  const params = new URLSearchParams({ directory });
+  const res = await fetch(`/api/synthetic/stats?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function inspectSyntheticClip(
+  filepath: string
+): Promise<{ session_id: string }> {
+  const res = await fetch("/api/synthetic/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filepath }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }

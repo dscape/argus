@@ -7,12 +7,21 @@ export const metadata: Metadata = {
   description: "Developer tools for the Argus chess video pipeline",
 };
 
-const navItems = [
-  { href: "/", label: "Home" },
-  { href: "/overlay-tester", label: "Overlay Tester" },
-  { href: "/clip-inspector", label: "Clip Inspector" },
-  { href: "/calibration", label: "Calibration" },
-  { href: "/video-annotator", label: "Video Annotator" },
+const navGroups = [
+  {
+    label: "Synthetic",
+    items: [
+      { href: "/synthetic", label: "Synthetic Monitor" },
+    ],
+  },
+  {
+    label: "Video",
+    items: [
+      { href: "/overlay-tester", label: "Overlay Tester" },
+      { href: "/calibration", label: "Calibration" },
+      { href: "/video-annotator", label: "Video Annotator" },
+    ],
+  },
 ];
 
 export default function RootLayout({
@@ -26,20 +35,33 @@ export default function RootLayout({
         <div className="flex min-h-screen">
           <aside className="w-56 border-r bg-muted/40 p-4">
             <div className="mb-6">
-              <h1 className="text-lg font-bold">Argus Dev Tools</h1>
+              <Link href="/" className="block">
+                <h1 className="text-lg font-bold text-foreground">
+                  Argus Dev Tools
+                </h1>
+              </Link>
               <p className="text-xs text-muted-foreground">
                 Pipeline diagnostics
               </p>
             </div>
-            <nav className="space-y-1">
-              {navItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className="block rounded-md px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-                >
-                  {item.label}
-                </Link>
+            <nav className="space-y-4">
+              {navGroups.map((group) => (
+                <div key={group.label}>
+                  <p className="px-3 mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    {group.label}
+                  </p>
+                  <div className="space-y-1">
+                    {group.items.map((item) => (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        className="block rounded-md px-3 py-2 text-sm text-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+                      >
+                        {item.label}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
               ))}
             </nav>
           </aside>

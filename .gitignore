@@ -45,6 +45,12 @@ data/
 # Blender
 *.blend1
 
+# Next.js / Node
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+
 # Misc
 *.log
 .env
