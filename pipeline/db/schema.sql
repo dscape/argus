@@ -210,3 +210,9 @@ CREATE TABLE IF NOT EXISTS api_quota_log (
 
 CREATE INDEX IF NOT EXISTS idx_api_quota_log_date
     ON api_quota_log (logged_at);
+
+-- ============================================================
+-- Overlay pipeline: layout type tag for video screening
+-- ============================================================
+ALTER TABLE youtube_videos ADD COLUMN IF NOT EXISTS layout_type VARCHAR(20);
+-- Values: NULL (unscreened), 'overlay' (has 2D board overlay), 'otb_only' (camera only)

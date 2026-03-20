@@ -1,0 +1,7 @@
+# Per-channel OBS layout calibrations.
+# Each entry defines where the 2D overlay and OTB camera regions are
+# in the video frame. Coordinates are in pixels at the reference resolution.
+#
+# Add entries via: pipeline overlay-calibrate --channel @Handle --overlay x,y,w,h --camera x,y,w,h
+#
+layouts: {}

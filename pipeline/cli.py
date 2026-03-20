@@ -75,6 +75,113 @@ def cmd_generate_clips(args):
     )
 
 
+def cmd_overlay_scan(args):
+    """Screen crawled videos for overlay presence."""
+    from pipeline.overlay.scanner import scan_crawled_videos
+    scan_crawled_videos(channel_handle=args.channel, limit=args.limit)
+
+
+def cmd_overlay_calibrate(args):
+    """Set layout calibration for a channel."""
+    from pipeline.overlay.calibration import LayoutCalibration, set_calibration
+
+    def parse_bbox(s):
+        parts = [int(x) for x in s.split(",")]
+        if len(parts) != 4:
+            raise ValueError(f"Expected x,y,w,h but got: {s}")
+        return tuple(parts)
+
+    overlay = parse_bbox(args.overlay)
+    camera = parse_bbox(args.camera)
+
+    if args.resolution:
+        ref = tuple(int(x) for x in args.resolution.split("x"))
+    else:
+        ref = (1920, 1080)
+
+    cal = LayoutCalibration(
+        overlay=overlay,
+        camera=camera,
+        ref_resolution=ref,
+        board_flipped=args.flipped,
+        board_theme=args.theme or "lichess_default",
+    )
+
+    set_calibration(args.channel, cal)
+    print(f"Calibration saved for {args.channel}")
+    print(f"  Overlay: {overlay}")
+    print(f"  Camera:  {camera}")
+    print(f"  Ref resolution: {ref}")
+
+
+def cmd_overlay_generate(args):
+    """Generate training clips from overlay videos."""
+    from pipeline.overlay.overlay_clip_generator import generate_from_video
+
+    if args.video:
+        results = generate_from_video(
+            args.video,
+            channel_handle=args.channel,
+        )
+        if results:
+            print(f"Generated {len(results)} clip(s):")
+            for r in results:
+                print(f"  {r['filepath']} ({r['num_moves']} moves, {r['num_frames']} frames)")
+        else:
+            print("No clips generated.")
+    else:
+        print("--video is required. Provide a local file path or YouTube URL.")
+
+
+def cmd_overlay_test(args):
+    """Test overlay detection + reading on a single image."""
+    from pipeline.overlay.diagnostics import test_image
+
+    def parse_bbox(s):
+        parts = [int(x) for x in s.split(",")]
+        if len(parts) != 4:
+            raise ValueError(f"Expected x,y,w,h but got: {s}")
+        return tuple(parts)
+
+    overlay_bbox = parse_bbox(args.overlay) if args.overlay else None
+
+    test_image(
+        image_path=args.image,
+        overlay_bbox=overlay_bbox,
+        flipped=args.flipped,
+        theme=args.theme or "lichess_default",
+        output_path=args.output,
+    )
+
+
+def cmd_overlay_test_reader(args):
+    """Test overlay reader on a specific image region."""
+    from pipeline.overlay.diagnostics import test_reader
+
+    parts = [int(x) for x in args.overlay.split(",")]
+    if len(parts) != 4:
+        print("ERROR: --overlay must be x,y,w,h")
+        return
+
+    test_reader(
+        image_path=args.image,
+        overlay_bbox=tuple(parts),
+        flipped=args.flipped,
+        theme=args.theme or "lichess_default",
+    )
+
+
+def cmd_inspect_clip(args):
+    """Inspect a .pt training clip file."""
+    from pipeline.overlay.diagnostics import inspect_clip
+
+    inspect_clip(
+        clip_path=args.file,
+        save_frames=args.save_frames,
+        output_dir=args.output_dir,
+    )
+
+
 def cmd_stats(args):
     """Print pipeline statistics."""
     from pipeline.db.connection import get_conn
@@ -192,6 +299,47 @@ def main():
     p.add_argument("--min-confidence", type=float, default=70.0, help="Minimum match confidence")
     p.add_argument("--limit", type=int, default=None, help="Max clips to generate")
 
+    # overlay-scan
+    p = subparsers.add_parser("overlay-scan", help="Screen videos for 2D overlay presence")
+    p.add_argument("--channel", type=str, default=None, help="Scan specific channel handle")
+    p.add_argument("--limit", type=int, default=None, help="Max videos to scan")
+
+    # overlay-calibrate
+    p = subparsers.add_parser("overlay-calibrate", help="Set overlay layout calibration")
+    p.add_argument("--channel", type=str, required=True, help="Channel handle (e.g. @STLChessClub)")
+    p.add_argument("--overlay", type=str, required=True, help="Overlay bbox: x,y,w,h")
+    p.add_argument("--camera", type=str, required=True, help="Camera bbox: x,y,w,h")
+    p.add_argument("--resolution", type=str, default=None, help="Reference resolution: WxH (default: 1920x1080)")
+    p.add_argument("--flipped", action="store_true", help="Board is flipped (Black at bottom)")
+    p.add_argument("--theme", type=str, default=None, help="Board theme (lichess_default, chess_com_green)")
+
+    # overlay-generate
+    p = subparsers.add_parser("overlay-generate", help="Generate clips from overlay videos")
+    p.add_argument("--video", type=str, default=None, help="Video file path or YouTube URL")
+    p.add_argument("--channel", type=str, required=True, help="Channel handle for calibration lookup")
+    p.add_argument("--limit", type=int, default=None, help="Max clips to generate")
+
+    # overlay-test
+    p = subparsers.add_parser("overlay-test", help="Test overlay pipeline on a screenshot")
+    p.add_argument("--image", type=str, required=True, help="Path to screenshot image")
+    p.add_argument("--overlay", type=str, default=None, help="Manual overlay bbox: x,y,w,h (skip auto-detect)")
+    p.add_argument("--flipped", action="store_true", help="Board is flipped (Black at bottom)")
+    p.add_argument("--theme", type=str, default=None, help="Board theme (lichess_default, chess_com_green)")
+    p.add_argument("--output", type=str, default=None, help="Output path for annotated image")
+
+    # overlay-test-reader
+    p = subparsers.add_parser("overlay-test-reader", help="Test overlay reader on a specific region")
+    p.add_argument("--image", type=str, required=True, help="Path to screenshot image")
+    p.add_argument("--overlay", type=str, required=True, help="Overlay bbox: x,y,w,h")
+    p.add_argument("--flipped", action="store_true", help="Board is flipped (Black at bottom)")
+    p.add_argument("--theme", type=str, default=None, help="Board theme")
+
+    # inspect-clip
+    p = subparsers.add_parser("inspect-clip", help="Inspect a .pt training clip file")
+    p.add_argument("--file", type=str, required=True, help="Path to .pt clip file")
+    p.add_argument("--save-frames", action="store_true", help="Save individual frames as images")
+    p.add_argument("--output-dir", type=str, default=None, help="Directory for saved frames")
+
     # stats
     subparsers.add_parser("stats", help="Print pipeline statistics")
 
@@ -217,6 +365,12 @@ def main():
         "match": cmd_match,
         "download": cmd_download,
         "generate-clips": cmd_generate_clips,
+        "overlay-scan": cmd_overlay_scan,
+        "overlay-calibrate": cmd_overlay_calibrate,
+        "overlay-generate": cmd_overlay_generate,
+        "overlay-test": cmd_overlay_test,
+        "overlay-test-reader": cmd_overlay_test_reader,
+        "inspect-clip": cmd_inspect_clip,
         "stats": cmd_stats,
     }
 
