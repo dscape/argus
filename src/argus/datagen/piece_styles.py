@@ -501,17 +501,24 @@ def apply_piece_style(
     style: PieceStyle,
     board_size: int,
     rng: random.Random,
+    skip_3d_effects: bool = False,
 ) -> tuple[Image.Image, Image.Image]:
-    """Transform flat SVG piece layer into 3D-styled pieces.
+    """Transform piece layer with material effects.
 
-    Applies color remapping, bevel/emboss, lighting, specular highlights,
-    and material surface texture. Also generates a drop shadow layer.
+    When skip_3d_effects is False (legacy SVG path): applies all 6 stages
+    including color remapping, bevel, gradient, and specular.
+
+    When skip_3d_effects is True (3D renderer path): only generates the
+    shadow layer. The 3D renderer already handles shading, so bevel,
+    gradient, and specular are redundant.
 
     Args:
-        piece_layer: RGBA piece layer from SVG extraction.
-        style: PieceStyle defining the material appearance.
-        board_size: Board image size in pixels (used for scaling effects).
-        rng: Random number generator for surface textures.
+        piece_layer: RGBA piece layer.
+        style: PieceStyle defining shadow and texture params.
+        board_size: Board image size in pixels.
+        rng: Random number generator.
+        skip_3d_effects: If True, only generate shadow (3D renderer
+            handles shading intrinsically).
 
     Returns:
         Tuple of (styled_piece_layer, shadow_layer) — both RGBA Images.
@@ -520,22 +527,18 @@ def apply_piece_style(
     piece_arr = np.array(piece_layer)
     sq_size = board_size // 8
 
-    # Stage 1: Color remapping
-    piece_arr = _remap_piece_colors(piece_arr, style)
-
-    # Stage 2: Shadow (computed from original alpha before any modifications)
+    # Shadow is always generated (position-dependent, adds realism)
     shadow = _create_shadow_layer(piece_arr[:, :, 3], style, sq_size)
 
-    # Stage 3: Bevel / emboss
+    if skip_3d_effects:
+        # 3D renderer handles color, bevel, gradient, specular already
+        return piece_layer, shadow
+
+    # Full 2D post-processing pipeline (legacy SVG path)
+    piece_arr = _remap_piece_colors(piece_arr, style)
     piece_arr = _apply_bevel(piece_arr, style, sq_size)
-
-    # Stage 4: Top-down lighting gradient
     piece_arr = _apply_gradient(piece_arr, style)
-
-    # Stage 5: Specular highlights
     piece_arr = _apply_specular(piece_arr, style, sq_size)
-
-    # Stage 6: Material surface texture
     piece_arr = _apply_surface_texture(piece_arr, style, rng)
 
     return Image.fromarray(piece_arr, "RGBA"), shadow
