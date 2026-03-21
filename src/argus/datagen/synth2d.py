@@ -400,9 +400,60 @@ def apply_perspective(
     return apply_projection(img, elevation_deg, azimuth_deg, rng, mode="perspective")
 
 
+class ClipAugmentParams:
+    """Pre-sampled clip-level augmentation parameters for temporal coherence.
+
+    Sample once per clip via ``sample_clip_augment_params()``, then pass to
+    each frame's ``apply_augmentations()`` call.  Per-frame jitter is added
+    automatically so frames look consistent but not identical.
+    """
+
+    __slots__ = (
+        "brightness", "contrast", "noise_sigma", "blur_radius",
+        "apply_blur", "apply_noise", "rotation",
+    )
+
+    def __init__(
+        self, brightness: float, contrast: float, noise_sigma: float,
+        blur_radius: float, apply_blur: bool, apply_noise: bool,
+        rotation: float,
+    ):
+        self.brightness = brightness
+        self.contrast = contrast
+        self.noise_sigma = noise_sigma
+        self.blur_radius = blur_radius
+        self.apply_blur = apply_blur
+        self.apply_noise = apply_noise
+        self.rotation = rotation
+
+
+def _scale_factor(image_size: int) -> float:
+    """Return a [0, 1] factor that reduces augmentation intensity for small images."""
+    return min(image_size / 224.0, 1.0)
+
+
+def sample_clip_augment_params(
+    rng: random.Random,
+    image_size: int = 224,
+) -> ClipAugmentParams:
+    """Sample augmentation parameters once per clip for temporal coherence."""
+    s = _scale_factor(image_size)
+    return ClipAugmentParams(
+        brightness=rng.uniform(1.0 - 0.3 * s, 1.0 + 0.3 * s),
+        contrast=rng.uniform(1.0 - 0.2 * s, 1.0 + 0.2 * s),
+        noise_sigma=rng.uniform(5 * s, 20 * s),
+        blur_radius=rng.uniform(0.5 * s, 2.0 * s),
+        apply_blur=rng.random() < 0.3,
+        apply_noise=rng.random() < 0.4,
+        rotation=rng.uniform(-5.0, 5.0),
+    )
+
+
 def apply_augmentations(
     img: Image.Image,
     rng: random.Random,
+    clip_params: ClipAugmentParams | None = None,
+    image_size: int = 224,
     blur_prob: float = 0.3,
     noise_prob: float = 0.4,
     brightness_range: tuple[float, float] = (0.7, 1.3),
@@ -411,44 +462,74 @@ def apply_augmentations(
 ) -> Image.Image:
     """Apply random augmentations to a board image.
 
+    When *clip_params* is provided, base values come from there with
+    small per-frame jitter — giving temporal coherence across a clip.
+    Intensity is also scaled by *image_size* so that small images
+    (e.g. 64x64) aren't destroyed by augmentations tuned for 224x224.
+
     Args:
         img: Input PIL image.
         rng: Random number generator for reproducibility.
-        blur_prob: Probability of applying Gaussian blur.
-        noise_prob: Probability of adding noise.
-        brightness_range: Min/max brightness multiplier.
-        contrast_range: Min/max contrast multiplier.
-        rotation_range: Min/max rotation in degrees.
+        clip_params: Pre-sampled clip-level params (preferred).
+        image_size: Image resolution — augmentations are scaled down for
+            smaller images.
+        blur_prob: Probability of applying Gaussian blur (ignored when
+            *clip_params* is set).
+        noise_prob: Probability of adding noise (ignored when
+            *clip_params* is set).
+        brightness_range: Min/max brightness multiplier (ignored when
+            *clip_params* is set).
+        contrast_range: Min/max contrast multiplier (ignored when
+            *clip_params* is set).
+        rotation_range: Min/max rotation in degrees (ignored when
+            *clip_params* is set).
 
     Returns:
         Augmented PIL image.
     """
+    s = _scale_factor(image_size)
+
+    if clip_params is not None:
+        # Use clip-level base with small per-frame jitter
+        brightness = clip_params.brightness + rng.gauss(0, 0.02)
+        contrast = clip_params.contrast + rng.gauss(0, 0.02)
+        rotation = clip_params.rotation + rng.gauss(0, 0.5)
+        do_blur = clip_params.apply_blur
+        do_noise = clip_params.apply_noise
+        blur_radius = max(0.1, clip_params.blur_radius + rng.gauss(0, 0.1))
+        noise_sigma = max(1.0, clip_params.noise_sigma + rng.gauss(0, 1.0))
+    else:
+        # Legacy: sample fresh per frame, scaled by image size
+        brightness = rng.uniform(1.0 - 0.3 * s, 1.0 + 0.3 * s)
+        contrast = rng.uniform(1.0 - 0.2 * s, 1.0 + 0.2 * s)
+        rotation = rng.uniform(*rotation_range)
+        do_blur = rng.random() < blur_prob
+        do_noise = rng.random() < noise_prob
+        blur_radius = rng.uniform(0.5 * s, 2.0 * s)
+        noise_sigma = rng.uniform(5 * s, 20 * s)
+
     # Random rotation
-    angle = rng.uniform(*rotation_range)
-    img = img.rotate(angle, resample=Image.BILINEAR, fillcolor=(128, 128, 128))
+    img = img.rotate(rotation, resample=Image.BILINEAR, fillcolor=(128, 128, 128))
 
     # Brightness
-    factor = rng.uniform(*brightness_range)
     arr = np.array(img, dtype=np.float32)
-    arr = np.clip(arr * factor, 0, 255).astype(np.uint8)
+    arr = np.clip(arr * brightness, 0, 255).astype(np.uint8)
     img = Image.fromarray(arr)
 
     # Contrast
-    factor = rng.uniform(*contrast_range)
     mean = arr.mean()
     arr = np.array(img, dtype=np.float32)
-    arr = np.clip((arr - mean) * factor + mean, 0, 255).astype(np.uint8)
+    arr = np.clip((arr - mean) * contrast + mean, 0, 255).astype(np.uint8)
     img = Image.fromarray(arr)
 
     # Gaussian blur
-    if rng.random() < blur_prob:
-        radius = rng.uniform(0.5, 2.0)
-        img = img.filter(ImageFilter.GaussianBlur(radius=radius))
+    if do_blur:
+        img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
 
     # Gaussian noise
-    if rng.random() < noise_prob:
+    if do_noise:
         arr = np.array(img, dtype=np.float32)
-        noise = np.random.RandomState(rng.randint(0, 2**31)).normal(0, rng.uniform(5, 20), arr.shape)
+        noise = np.random.RandomState(rng.randint(0, 2**31)).normal(0, noise_sigma, arr.shape)
         arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
         img = Image.fromarray(arr)
 
@@ -460,14 +541,19 @@ def add_occlusion(
     rng: random.Random,
     prob: float = 0.2,
     max_rects: int = 3,
+    image_size: int = 224,
 ) -> Image.Image:
     """Add random rectangular occlusions to simulate hands/objects.
+
+    Rectangle sizes are scaled relative to *image_size* so that
+    small images aren't overwhelmed.
 
     Args:
         img: Input PIL image.
         rng: Random number generator.
         prob: Probability of adding any occlusion.
         max_rects: Maximum number of occlusion rectangles.
+        image_size: Image resolution for scaling rect sizes.
 
     Returns:
         Image with potential occlusions.
@@ -478,11 +564,16 @@ def add_occlusion(
     img = img.copy()
     draw = ImageDraw.Draw(img)
     w, h = img.size
+
+    # Scale max rectangle size: w/3 at 224, w/5 at 64
+    s = _scale_factor(image_size)
+    max_frac = 0.15 + 0.18 * s  # ~0.15 at 64px, ~0.33 at 224px
+    min_frac = 0.05 + 0.05 * s  # ~0.05 at 64px, ~0.10 at 224px
     num_rects = rng.randint(1, max_rects)
 
     for _ in range(num_rects):
-        rect_w = rng.randint(w // 10, w // 3)
-        rect_h = rng.randint(h // 10, h // 3)
+        rect_w = rng.randint(max(1, int(w * min_frac)), max(2, int(w * max_frac)))
+        rect_h = rng.randint(max(1, int(h * min_frac)), max(2, int(h * max_frac)))
         x0 = rng.randint(0, w - rect_w)
         y0 = rng.randint(0, h - rect_h)
         # Skin-like or dark colors for hand simulation
@@ -577,6 +668,7 @@ def generate_clip(
     piece_style = None
     piece_material = None
     piece_cache = None
+    clip_aug_params = None
     if augment:
         board_theme = select_random_theme(rng).with_perturbation(rng)
         piece_style = select_random_piece_style(rng).with_perturbation(rng)
@@ -585,6 +677,8 @@ def generate_clip(
         # Per-clip consistent camera angle for perspective
         elevation = rng.uniform(30.0, 75.0)
         azimuth = rng.uniform(0.0, 360.0)
+        # Per-clip consistent augmentation intensity
+        clip_aug_params = sample_clip_augment_params(rng, image_size)
 
     # Decide whether to use 3D standing-piece rendering for this clip
     use_3d = augment and rng.random() < render_3d_prob
@@ -670,8 +764,8 @@ def generate_clip(
                 rng, mode="isometric",
             )
             if augment:
-                img = apply_augmentations(img, rng)
-                img = add_occlusion(img, rng, prob=occlusion_prob)
+                img = apply_augmentations(img, rng, clip_params=clip_aug_params, image_size=image_size)
+                img = add_occlusion(img, rng, prob=occlusion_prob, image_size=image_size)
         else:
             # 2D: composite pieces flat, then warp everything together
             img = render_board_image(
@@ -684,8 +778,8 @@ def generate_clip(
                 frame_elev = elevation + rng.gauss(0, 1.5)
                 frame_azim = azimuth + rng.gauss(0, 2.0)
                 img = apply_projection(img, frame_elev, frame_azim, rng, mode="isometric")
-                img = apply_augmentations(img, rng)
-                img = add_occlusion(img, rng, prob=occlusion_prob)
+                img = apply_augmentations(img, rng, clip_params=clip_aug_params, image_size=image_size)
+                img = add_occlusion(img, rng, prob=occlusion_prob, image_size=image_size)
 
         # Convert to tensor (C, H, W), normalized [0, 1]
         arr = np.array(img, dtype=np.float32) / 255.0
@@ -744,9 +838,21 @@ def generate_dataset(
     clips: list[dict[str, Any]] = []
 
     out: Path | None = None
+    clip_offset = 0
     if output_dir is not None:
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
+        # Start numbering after existing clips to avoid overwriting
+        existing = list(out.glob("clip_*.pt"))
+        if existing:
+            nums = []
+            for f in existing:
+                try:
+                    nums.append(int(f.stem.split("_")[1]))
+                except (IndexError, ValueError):
+                    pass
+            if nums:
+                clip_offset = max(nums) + 1
 
     for i in range(num_clips):
         game_seed = rng.randint(0, 2**31)
@@ -775,7 +881,11 @@ def generate_dataset(
 
         if out is not None:
             save_dict = {k: v for k, v in clip.items() if isinstance(v, torch.Tensor)}
-            torch.save(save_dict, out / f"clip_{len(clips) - 1:06d}.pt")
+            # Preserve FENs so the validator can replay from the correct position
+            if "fens" in clip:
+                save_dict["fens"] = clip["fens"]
+            clip_num = clip_offset + len(clips) - 1
+            torch.save(save_dict, out / f"clip_{clip_num:06d}.pt")
 
         if on_progress is not None:
             on_progress(len(clips), num_clips)
