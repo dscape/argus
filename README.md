@@ -96,18 +96,64 @@ Shared across domains: `src/argus/chess/` (move vocabulary, state machine, const
 
 ---
 
-## Quick Start: Training
+## Development Setup
 
-Generate synthetic data and train a model. No database or API keys needed.
+### direnv (recommended)
 
-> **Tip:** Start [dev tools](#quick-start-dev-tools) first (`make dev-tools`) to monitor synthetic data generation live in the Synthetic tab at http://localhost:3000/synthetic.
+Auto-activates the Python virtual environment and installs dependencies whenever you `cd` into the project.
+
+```bash
+brew install direnv                              # macOS
+echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc     # or ~/.bashrc for bash
+cd argus/ && direnv allow                        # first time only
+```
+
+After this, every new terminal that enters the project directory will have the venv active automatically — no manual `source .venv/bin/activate` or `make dev` needed.
+
+### Without direnv
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 make dev
+```
 
-# Start Blender render server (run in separate terminal)
-make blender-server
+### Prerequisites
+
+```bash
+brew install cairo                  # SVG rendering (required)
+brew install --cask blender         # 3D synthetic data (optional, 4.0+)
+```
+
+Verify Blender: `blender --version`. See [CONTRIBUTING.md](CONTRIBUTING.md) for Linux instructions.
+
+### Start all services
+
+Bring up PostgreSQL, the dev-tools API, the dev-tools UI, and the Blender render server — all in the background:
+
+```bash
+make up       # start everything
+make down     # stop everything
+```
+
+|  Service    | URL                     |
+|-------------|-------------------------|
+| PostgreSQL  | `localhost:5433`        |
+| API         | http://localhost:8000   |
+| UI          | http://localhost:3000   |
+| Blender     | `localhost:9876`        |
+
+If Blender is not installed, `make up` skips it with a warning — the other services still start.
+
+---
+
+## Quick Start: Training
+
+Generate synthetic data and train a model. No database or API keys needed.
+
+> **Tip:** `make up` starts the dev-tools UI automatically — monitor synthetic data generation live at http://localhost:3000/synthetic.
+
+```bash
+make up
 
 # Generate synthetic training data
 make datagen ARGS="--num-clips 100 --output-dir data/train --image-size 64"
@@ -124,7 +170,7 @@ Curate real training data from YouTube + PGN archives. Requires Docker and API k
 ```bash
 brew install cairo  # macOS — see CONTRIBUTING.md for other platforms
 
-make db-up
+make up
 make pipeline-install
 cp .env.example .env  # Fill in DATABASE_URL, YOUTUBE_API_KEY, ANTHROPIC_API_KEY
 
@@ -138,13 +184,15 @@ make generate-clips    # Convert to .pt training clips
 
 ## Quick Start: Dev Tools
 
-Launch the web-based inspection UI via Docker Compose.
+Launch the web-based inspection UI.
 
 ```bash
-make dev-tools
+make up
 # Backend:  http://localhost:8000
 # Frontend: http://localhost:3000
 ```
+
+For foreground mode (logs streaming in terminal): `make dev-tools` / `make dev-tools-down`.
 
 This starts PostgreSQL, the FastAPI backend, and the Next.js frontend. Stop with `make dev-tools-down`.
 

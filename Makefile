@@ -1,6 +1,7 @@
 .PHONY: install dev test lint typecheck format train eval datagen infer clean \
        db-up db-down pipeline-install import-data crawl extract match download-videos generate-clips pipeline-stats \
-       dev-tools dev-tools-down blender-server blender-server-stop
+       dev-tools dev-tools-down blender-server blender-server-stop \
+       up down
 
 install:
 	pip install -e .
@@ -78,6 +79,47 @@ dev-tools:
 
 dev-tools-down:
 	docker compose --profile dev-tools down
+
+# ── Unified dev environment ─────────────────────────────────
+
+BLENDER_PID_FILE := .blender-server.pid
+BLENDER_LOG_FILE := .blender-server.log
+
+up:
+	@echo "Starting Docker services (postgres, dev-tools-api, dev-tools-ui)..."
+	@docker compose --profile dev-tools up -d --build
+	@echo ""
+	@if command -v $(BLENDER) >/dev/null 2>&1 || [ -x "$(BLENDER)" ]; then \
+		if lsof -ti tcp:$(BLENDER_PORT) >/dev/null 2>&1; then \
+			echo "Blender server already running on port $(BLENDER_PORT)"; \
+		else \
+			echo "Starting Blender render server on port $(BLENDER_PORT)..."; \
+			nohup $(BLENDER) --background --python blender/render_server.py -- \
+				--port $(BLENDER_PORT) --quality training \
+				> $(BLENDER_LOG_FILE) 2>&1 & \
+			echo $$! > $(BLENDER_PID_FILE); \
+		fi \
+	else \
+		echo "Blender not found — skipping render server (install Blender 4.0+ for synthetic data)"; \
+	fi
+	@echo ""
+	@echo "=== All services up ==="
+	@echo "  PostgreSQL:  localhost:$${POSTGRES_PORT:-5433}"
+	@echo "  API:         http://localhost:8000"
+	@echo "  UI:          http://localhost:3000"
+	@echo "  Blender log: $(BLENDER_LOG_FILE)"
+	@echo ""
+	@echo "Stop with: make down"
+
+down:
+	@echo "Stopping Docker services..."
+	@docker compose --profile dev-tools down
+	@if [ -f $(BLENDER_PID_FILE) ]; then \
+		kill $$(cat $(BLENDER_PID_FILE)) 2>/dev/null && echo "Blender server stopped" || true; \
+		rm -f $(BLENDER_PID_FILE); \
+	fi
+	@lsof -ti tcp:$(BLENDER_PORT) | xargs kill 2>/dev/null || true
+	@echo "All services stopped."
 
 # ── Blender render server ───────────────────────────────────
 
