@@ -698,7 +698,7 @@ def place_pieces_from_fen(
 def main():
     args = parse_args()
 
-    with open(args.manifest, "r") as f:
+    with open(args.manifest) as f:
         manifest = json.load(f)
 
     output_dir = Path(args.output_dir)
