@@ -1,19 +1,22 @@
 """Full 2D synthetic data generator for Argus training.
 
-Renders chess board images using python-chess SVG rendering and PIL,
-applies augmentations, and generates temporal clips with ground truth
-move annotations.
+Renders chess board images with realistic textures (wood grain, vinyl mat)
+matching real tournament boards, applies perspective transforms and
+augmentations, and generates temporal clips with ground truth move
+annotations.
 """
 
 from __future__ import annotations
 
 import io
+import math
 import random
 from pathlib import Path
 from typing import Any, Callable
 
 import chess
 import chess.svg
+import cv2
 import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFilter
@@ -21,6 +24,97 @@ from PIL import Image, ImageDraw, ImageFilter
 from argus.chess.constraint_mask import get_legal_mask
 from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
 from argus.data.pgn_sampler import sample_random_game
+from argus.datagen.board_themes import (
+    BoardTheme,
+    render_textured_board,
+    select_random_theme,
+)
+from argus.datagen.piece_styles import (
+    PieceStyle,
+    apply_piece_style,
+    select_random_piece_style,
+)
+
+
+def _render_svg_pieces(
+    board: chess.Board,
+    size: int,
+    flipped: bool,
+) -> Image.Image | None:
+    """Render only the pieces (no board squares) from chess.svg as RGBA.
+
+    Renders the board with pieces on a known background, then renders an
+    empty board with the same background, and diffs them to extract just
+    the piece pixels as an alpha-compositable layer.
+
+    Returns RGBA PIL Image, or None if cairosvg is unavailable.
+    """
+    try:
+        import cairosvg
+    except ImportError:
+        return None
+
+    # Use a distinctive key color for the board squares so we can mask them
+    key = "#FF00FF"
+    svg_with = chess.svg.board(
+        board,
+        size=size,
+        flipped=flipped,
+        colors={"square light": key, "square dark": key},
+    )
+    svg_empty = chess.svg.board(
+        chess.Board(fen=None),
+        size=size,
+        flipped=flipped,
+        colors={"square light": key, "square dark": key},
+    )
+
+    png_with = cairosvg.svg2png(
+        bytestring=svg_with.encode("utf-8"), output_width=size, output_height=size
+    )
+    png_empty = cairosvg.svg2png(
+        bytestring=svg_empty.encode("utf-8"), output_width=size, output_height=size
+    )
+
+    img_with = np.array(Image.open(io.BytesIO(png_with)).convert("RGBA"))
+    img_empty = np.array(Image.open(io.BytesIO(png_empty)).convert("RGBA"))
+
+    # Pixels that differ between the two renders are piece pixels
+    diff = np.any(img_with[:, :, :3] != img_empty[:, :, :3], axis=2)
+
+    # Create RGBA layer: piece pixels are opaque, background is transparent
+    result = img_with.copy()
+    result[~diff, 3] = 0  # make non-piece pixels transparent
+
+    # Remove magenta color spill on anti-aliased piece edges.
+    # Edge pixels are blended with the FF00FF key color by the SVG
+    # rasterizer. Detect them by high magenta component and reduce alpha.
+    r, g, b = result[:, :, 0], result[:, :, 1], result[:, :, 2]
+    # Magenta = high R, low G, high B
+    magenta_score = (
+        r.astype(np.float32) - g.astype(np.float32)
+        + b.astype(np.float32) - g.astype(np.float32)
+    ) / 510.0  # normalize to [0, 1]
+    magenta_mask = (magenta_score > 0.3) & diff
+    # Fade out magenta-contaminated edge pixels
+    result[magenta_mask, 3] = np.clip(
+        result[magenta_mask, 3].astype(np.float32)
+        * (1.0 - magenta_score[magenta_mask]),
+        0, 255,
+    ).astype(np.uint8)
+
+    return Image.fromarray(result, "RGBA")
+
+
+def _crop_svg_margin(img: Image.Image) -> Image.Image:
+    """Crop the margin added by chess.svg.board().
+
+    chess.svg uses a viewBox of 390 = 15 (margin) + 8*45 (squares) + 15.
+    """
+    w, h = img.size
+    margin_x = int(round(15 / 390 * w))
+    margin_y = int(round(15 / 390 * h))
+    return img.crop((margin_x, margin_y, w - margin_x, h - margin_y))
 
 
 def render_board_image(
@@ -28,18 +122,34 @@ def render_board_image(
     size: int = 224,
     flipped: bool = False,
     colors: dict[str, str] | None = None,
+    theme: BoardTheme | None = None,
+    piece_style: PieceStyle | None = None,
+    rng: random.Random | None = None,
 ) -> Image.Image:
-    """Render a chess board position to a PIL Image.
+    """Render a chess board position to a PIL Image with realistic textures.
 
     Args:
         board: Chess board position.
         size: Output image size (square).
         flipped: Whether to flip the board (black perspective).
-        colors: Optional dict with 'light' and 'dark' square colors.
+        colors: Legacy dict with 'light' and 'dark' hex colors.
+            If provided without a theme, creates a flat-fill board.
+        theme: BoardTheme for realistic textured rendering.
+            Takes precedence over colors.
+        piece_style: PieceStyle for realistic 3D piece rendering.
+        rng: Random number generator for texture variation.
 
     Returns:
         PIL Image of the board.
     """
+    if rng is None:
+        rng = random.Random()
+
+    # If theme is provided, use textured rendering
+    if theme is not None:
+        return _render_textured_with_pieces(board, size, flipped, theme, rng, piece_style)
+
+    # Legacy path: flat colors (backward compat)
     default_colors = {"light": "#F0D9B5", "dark": "#B58863"}
     c = colors or default_colors
 
@@ -49,26 +159,69 @@ def render_board_image(
         flipped=flipped,
         colors={"square light": c["light"], "square dark": c["dark"]},
     )
-    # Convert SVG to PIL Image via cairosvg if available, else fallback
     try:
         import cairosvg
 
-        png_data = cairosvg.svg2png(bytestring=svg_text.encode("utf-8"), output_width=size, output_height=size)
+        png_data = cairosvg.svg2png(
+            bytestring=svg_text.encode("utf-8"), output_width=size, output_height=size
+        )
         img = Image.open(io.BytesIO(png_data)).convert("RGB")
     except ImportError:
-        # Fallback: create a simple colored board representation
-        img = _render_simple_board(board, size, flipped, c)
+        img = _render_textured_with_pieces(
+            board, size, flipped,
+            BoardTheme(name="fallback", light=c["light"], dark=c["dark"],
+                       texture_type="vinyl"),
+            rng,
+        )
     return img
 
 
-def _render_simple_board(
+def _render_textured_with_pieces(
     board: chess.Board,
     size: int,
     flipped: bool,
-    colors: dict[str, str],
+    theme: BoardTheme,
+    rng: random.Random,
+    piece_style: PieceStyle | None = None,
 ) -> Image.Image:
-    """Simple fallback board renderer without SVG dependencies."""
-    img = Image.new("RGB", (size, size), "white")
+    """Render textured board and composite SVG pieces on top."""
+    # Render textured board (no pieces)
+    board_arr = render_textured_board(size, theme, flipped, rng)
+    board_img = Image.fromarray(board_arr, "RGB")
+
+    # Try to extract piece layer from SVG rendering
+    # Render at slightly larger size to account for SVG margin, then crop
+    render_size = int(size * 390 / 360)
+    piece_layer = _render_svg_pieces(board, render_size, flipped)
+
+    if piece_layer is not None:
+        # Crop SVG margin and resize to match board
+        piece_layer = _crop_svg_margin(piece_layer)
+        piece_layer = piece_layer.resize((size, size), Image.LANCZOS)
+
+        if piece_style is not None:
+            piece_layer, shadow_layer = apply_piece_style(
+                piece_layer, piece_style, size, rng,
+            )
+            # Shadow composited UNDER pieces
+            board_img.paste(shadow_layer, (0, 0), shadow_layer)
+
+        # Composite pieces onto textured board
+        board_img.paste(piece_layer, (0, 0), piece_layer)
+    else:
+        # Fallback: draw simple piece symbols
+        _draw_piece_symbols(board_img, board, size, flipped)
+
+    return board_img
+
+
+def _draw_piece_symbols(
+    img: Image.Image,
+    board: chess.Board,
+    size: int,
+    flipped: bool,
+) -> None:
+    """Draw piece letter symbols as fallback when SVG rendering unavailable."""
     draw = ImageDraw.Draw(img)
     sq_size = size // 8
 
@@ -83,23 +236,140 @@ def _render_simple_board(
             display_file = file if not flipped else 7 - file
             sq = chess.square(display_file, display_rank)
 
-            x0 = file * sq_size
-            y0 = rank * sq_size
-            is_light = (file + rank) % 2 == 0
-            color = colors["light"] if is_light else colors["dark"]
-            draw.rectangle([x0, y0, x0 + sq_size, y0 + sq_size], fill=color)
-
             piece = board.piece_at(sq)
             if piece is not None:
                 symbol = piece_symbols.get(piece.piece_type, "?")
                 if piece.color == chess.BLACK:
                     symbol = symbol.lower()
                 text_color = "white" if piece.color == chess.BLACK else "black"
+                x0 = file * sq_size
+                y0 = rank * sq_size
                 cx = x0 + sq_size // 2
                 cy = y0 + sq_size // 2
                 draw.text((cx - 4, cy - 6), symbol, fill=text_color)
 
-    return img
+
+# -----------------------------------------------------------------------
+# Camera projection (isometric + perspective)
+# -----------------------------------------------------------------------
+
+# Table surface colors (background behind projected board)
+TABLE_COLORS = [
+    (139, 90, 43),    # brown wood
+    (160, 140, 120),  # light wood
+    (180, 180, 175),  # grey laminate
+    (200, 190, 170),  # beige
+    (120, 100, 80),   # dark wood
+]
+
+
+def apply_projection(
+    img: Image.Image,
+    elevation_deg: float,
+    azimuth_deg: float,
+    rng: random.Random,
+    mode: str = "isometric",
+) -> Image.Image:
+    """Apply camera projection to a top-down board image.
+
+    Supports isometric (parallel) and perspective projection.
+    Isometric is more realistic for tournament overhead cameras
+    and simpler for future 3D piece sprite compositing.
+
+    Args:
+        img: Square board image (top-down view).
+        elevation_deg: Camera elevation above table plane.
+            90 = directly overhead, 30 = steep angle.
+        azimuth_deg: Camera rotation around the board (0-360).
+        rng: Random number generator.
+        mode: "isometric" for parallel projection (no depth-based
+            scaling — far edge same width as near edge) or
+            "perspective" for vanishing-point projection.
+
+    Returns:
+        Projected PIL Image with table-colored background.
+    """
+    w, h = img.size
+    arr = np.array(img)
+
+    elev_rad = math.radians(max(elevation_deg, 10.0))
+    azim_rad = math.radians(azimuth_deg)
+
+    # Vertical compression from viewing angle
+    # At 90 deg (overhead): scale_y = 1.0 (no compression)
+    # At 30 deg: scale_y = sin(30) = 0.5 (board appears half as tall)
+    scale_y = math.sin(elev_rad)
+
+    cos_a = math.cos(azim_rad)
+    sin_a = math.sin(azim_rad)
+    cx, cy = w / 2.0, h / 2.0
+
+    # Margin for output canvas
+    margin = int(w * 0.2)
+    out_w = w + 2 * margin
+    out_h = h + 2 * margin
+
+    # Source corners: TL, TR, BR, BL
+    src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+
+    dst_pts = []
+    for sx, sy in src:
+        dx, dy = sx - cx, sy - cy
+
+        # Rotate into camera-aligned frame
+        rx = dx * cos_a - dy * sin_a
+        ry = dx * sin_a + dy * cos_a
+
+        if mode == "isometric":
+            # Isometric: compress depth axis uniformly (no convergence)
+            ry *= scale_y
+        else:
+            # Perspective: far edge shrinks, near edge stays
+            depth_t = (ry / (h / 2.0) + 1.0) / 2.0  # 0 = near, 1 = far
+            depth_scale = 1.0 - (1.0 - scale_y) * depth_t
+            rx *= depth_scale
+            ry *= scale_y
+
+        # Rotate back to image frame
+        fx = rx * cos_a + ry * sin_a
+        fy = -rx * sin_a + ry * cos_a
+
+        dst_pts.append([fx + cx + margin, fy + cy + margin])
+
+    dst = np.float32(dst_pts)
+
+    M = cv2.getPerspectiveTransform(src, dst)
+
+    bg_color = rng.choice(TABLE_COLORS)
+
+    result = cv2.warpPerspective(
+        arr, M, (out_w, out_h),
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=bg_color,
+    )
+
+    # Center crop back to original dimensions
+    cx_out = out_w // 2
+    cy_out = out_h // 2
+    half = min(w, h) // 2
+    result = result[
+        cy_out - half : cy_out + half,
+        cx_out - half : cx_out + half,
+    ]
+    result = cv2.resize(result, (w, h))
+
+    return Image.fromarray(result)
+
+
+# Keep backward-compatible alias
+def apply_perspective(
+    img: Image.Image,
+    elevation_deg: float,
+    azimuth_deg: float,
+    rng: random.Random,
+) -> Image.Image:
+    """Apply perspective transform. See apply_projection()."""
+    return apply_projection(img, elevation_deg, azimuth_deg, rng, mode="perspective")
 
 
 def apply_augmentations(
@@ -197,6 +467,20 @@ def add_occlusion(
     return img
 
 
+def _sample_illegal_move(board: chess.Board, rng: random.Random) -> str | None:
+    """Sample a random UCI string that is NOT legal in the current position."""
+    legal_set = set(board.legal_moves)
+    for _ in range(50):
+        from_sq = rng.randint(0, 63)
+        to_sq = rng.randint(0, 63)
+        if from_sq == to_sq:
+            continue
+        move = chess.Move(from_sq, to_sq)
+        if move not in legal_set:
+            return move.uci()
+    return None
+
+
 def generate_clip(
     moves: list[str],
     clip_length: int = 16,
@@ -205,6 +489,7 @@ def generate_clip(
     frames_per_move: int = 4,
     augment: bool = True,
     occlusion_prob: float = 0.2,
+    illegal_move_prob: float = 0.2,
     seed: int | None = None,
 ) -> dict[str, Any]:
     """Generate a synthetic training clip from a move sequence.
@@ -220,6 +505,8 @@ def generate_clip(
         frames_per_move: Average number of frames between moves.
         augment: Whether to apply augmentations.
         occlusion_prob: Probability of occlusion per frame.
+        illegal_move_prob: Probability of injecting an illegal move at a
+            move frame instead of playing the next legal move (0.0-1.0).
         seed: Random seed for reproducibility.
 
     Returns:
@@ -253,19 +540,15 @@ def generate_clip(
     frame_count = 0
     next_move_frame = rng.randint(1, frames_per_move)
 
-    # Consistent augmentation params for the clip (board style)
-    board_colors = None
+    # Consistent augmentation params for the clip (board + piece style)
+    board_theme = None
+    piece_style = None
     if augment:
-        light_r = rng.randint(200, 255)
-        light_g = rng.randint(200, 240)
-        light_b = rng.randint(170, 210)
-        dark_r = rng.randint(100, 180)
-        dark_g = rng.randint(80, 140)
-        dark_b = rng.randint(50, 120)
-        board_colors = {
-            "light": f"#{light_r:02x}{light_g:02x}{light_b:02x}",
-            "dark": f"#{dark_r:02x}{dark_g:02x}{dark_b:02x}",
-        }
+        board_theme = select_random_theme(rng).with_perturbation(rng)
+        piece_style = select_random_piece_style(rng).with_perturbation(rng)
+        # Per-clip consistent camera angle for perspective
+        elevation = rng.uniform(30.0, 75.0)
+        azimuth = rng.uniform(0.0, 360.0)
 
     flipped = rng.random() < 0.5 if augment else False
 
@@ -277,25 +560,41 @@ def generate_clip(
         )
 
         if is_move_frame:
-            uci = remaining_moves[move_idx]
-            move = chess.Move.from_uci(uci)
-            if move in board.legal_moves:
-                legal_mask = get_legal_mask(board)
-                board.push(move)
-                if vocab.contains(uci):
-                    move_targets.append(vocab.uci_to_index(uci))
+            inject_illegal = rng.random() < illegal_move_prob
+
+            if inject_illegal:
+                # Inject a random illegal move without advancing the game
+                illegal_uci = _sample_illegal_move(board, rng)
+                legal_masks.append(get_legal_mask(board))
+                if illegal_uci is not None and vocab.contains(illegal_uci):
+                    move_targets.append(vocab.uci_to_index(illegal_uci))
                 else:
                     move_targets.append(NO_MOVE_IDX)
                 detect_targets.append(1.0)
                 move_mask_list.append(True)
-                legal_masks.append(legal_mask)
+                # Don't push to board or advance move_idx — the legal
+                # move is still pending for a future frame.
             else:
-                # Illegal move in sequence, treat as no-move frame
-                legal_masks.append(get_legal_mask(board))
-                move_targets.append(NO_MOVE_IDX)
-                detect_targets.append(0.0)
-                move_mask_list.append(False)
-            move_idx += 1
+                uci = remaining_moves[move_idx]
+                move = chess.Move.from_uci(uci)
+                if move in board.legal_moves:
+                    legal_mask = get_legal_mask(board)
+                    board.push(move)
+                    if vocab.contains(uci):
+                        move_targets.append(vocab.uci_to_index(uci))
+                    else:
+                        move_targets.append(NO_MOVE_IDX)
+                    detect_targets.append(1.0)
+                    move_mask_list.append(True)
+                    legal_masks.append(legal_mask)
+                else:
+                    # Move no longer legal (stale sequence) — skip without
+                    # recording a move so subsequent moves stay in sync.
+                    legal_masks.append(get_legal_mask(board))
+                    move_targets.append(NO_MOVE_IDX)
+                    detect_targets.append(0.0)
+                    move_mask_list.append(False)
+                move_idx += 1
             next_move_frame = frame_count + rng.randint(1, frames_per_move)
         else:
             legal_masks.append(get_legal_mask(board))
@@ -306,8 +605,15 @@ def generate_clip(
         fens.append(board.fen())
 
         # Render frame
-        img = render_board_image(board, size=image_size, flipped=flipped, colors=board_colors)
+        img = render_board_image(
+            board, size=image_size, flipped=flipped,
+            theme=board_theme, piece_style=piece_style, rng=rng,
+        )
         if augment:
+            # Isometric projection with per-frame jitter
+            frame_elev = elevation + rng.gauss(0, 1.5)
+            frame_azim = azimuth + rng.gauss(0, 2.0)
+            img = apply_projection(img, frame_elev, frame_azim, rng, mode="isometric")
             img = apply_augmentations(img, rng)
             img = add_occlusion(img, rng, prob=occlusion_prob)
 
@@ -334,6 +640,7 @@ def generate_dataset(
     frames_per_move: int = 4,
     augment: bool = True,
     occlusion_prob: float = 0.2,
+    illegal_move_prob: float = 0.2,
     min_moves: int = 10,
     max_moves: int = 80,
     output_dir: str | Path | None = None,
@@ -349,6 +656,8 @@ def generate_dataset(
         frames_per_move: Average frames between moves.
         augment: Whether to apply augmentations.
         occlusion_prob: Occlusion probability per frame.
+        illegal_move_prob: Probability of injecting an illegal move at a
+            move frame (0.0-1.0).
         min_moves: Minimum game length.
         max_moves: Maximum game length.
         output_dir: If set, save clips to disk incrementally.
@@ -385,6 +694,7 @@ def generate_dataset(
             frames_per_move=frames_per_move,
             augment=augment,
             occlusion_prob=occlusion_prob,
+            illegal_move_prob=illegal_move_prob,
             seed=game_seed + i,
         )
         clips.append(clip)
