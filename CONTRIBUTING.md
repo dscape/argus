@@ -59,24 +59,38 @@ Verify: `blender --version` should show 4.0 or later. You can also set the `BLEN
 
 ```bash
 git clone <repo-url> && cd argus
-python3 -m venv .venv
-source .venv/bin/activate
-make dev  # installs src/argus + dev dependencies (pytest, ruff, mypy)
+
+# Option 1: direnv (recommended) — auto-activates venv + installs deps on cd
+brew install direnv
+echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc  # or ~/.bashrc
+direnv allow  # first time only
+
+# Option 2: manual
+python3 -m venv .venv && source .venv/bin/activate
+make dev
+```
+
+Start all services (PostgreSQL, dev-tools API, dev-tools UI, Blender) in the background:
+
+```bash
+make up       # start everything
+make down     # stop everything
 ```
 
 ### Pipeline
 
 ```bash
 make pipeline-install   # installs pipeline/ dependencies (psycopg, yt-dlp, etc.)
-make db-up              # starts PostgreSQL via docker-compose
 cp .env.example .env    # fill in DATABASE_URL, YOUTUBE_API_KEY, ANTHROPIC_API_KEY
 ```
+
+PostgreSQL is already running via `make up`.
 
 ### Data Generation
 
 No extra setup beyond `make dev`. Cairo must be installed system-wide (see Prerequisites).
 
-For 3D data, install Blender 4.0+ (see Prerequisites). The STL piece models are included in `blender/models/staunton/`. Set `BLENDER_PATH` if Blender is not on your PATH.
+For 3D data, install Blender 4.0+ (see Prerequisites). The STL piece models are included in `blender/models/staunton/`. Set `BLENDER_PATH` if Blender is not on your PATH. `make up` starts the Blender render server automatically (skips with a warning if Blender is not installed).
 
 ### Training
 
@@ -90,11 +104,11 @@ pip install -e ".[cuda,dev]"
 
 ### Dev Tools
 
-```bash
-# Option 1: Docker (recommended)
-make dev-tools  # starts PostgreSQL + FastAPI + Next.js
+Already running via `make up`. For foreground mode with streaming logs: `make dev-tools`.
 
-# Option 2: Manual (for dev-tools development)
+For manual dev-tools development:
+
+```bash
 # Terminal 1:
 cd dev-tools/api && python -m uvicorn main:app --reload --port 8000
 # Terminal 2:
