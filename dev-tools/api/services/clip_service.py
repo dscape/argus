@@ -117,7 +117,14 @@ def inspect(session_id: str) -> dict:
 
         # Replay validation
         if moves and vocab:
-            board = chess.Board()
+            # Use the stored starting FEN (frame 0, before any moves)
+            # so we replay from the correct mid-game position instead
+            # of the standard starting position.
+            fens = clip.get("fens")
+            if fens and len(fens) > 0:
+                board = chess.Board(fens[0])
+            else:
+                board = chess.Board()
             replay_valid = True
             for i, m in enumerate(moves):
                 try:

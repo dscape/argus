@@ -39,7 +39,11 @@ from argus.datagen.piece_renderer import (
     PieceMaterial,
     select_random_material,
 )
-from argus.datagen.synth2d import add_occlusion, apply_augmentations
+from argus.datagen.synth2d import (
+    add_occlusion,
+    apply_augmentations,
+    sample_clip_augment_params,
+)
 
 # ---------------------------------------------------------------------------
 # Blender executable discovery
@@ -329,6 +333,7 @@ def generate_clip(
     elevation = rng.uniform(30.0, 75.0) if augment else 55.0
     azimuth = rng.uniform(0.0, 360.0) if augment else 0.0
     flipped = rng.random() < 0.5 if augment else False
+    clip_aug_params = sample_clip_augment_params(rng, image_size) if augment else None
 
     # Per-clip illegal move decision: 20% of clips get exactly one
     # illegal move injected at a randomly chosen move frame.
@@ -423,8 +428,8 @@ def generate_clip(
     frames_list: list[torch.Tensor] = []
     for i, img in enumerate(images):
         if augment:
-            img = apply_augmentations(img, rng)
-            img = add_occlusion(img, rng, prob=occlusion_prob)
+            img = apply_augmentations(img, rng, clip_params=clip_aug_params, image_size=image_size)
+            img = add_occlusion(img, rng, prob=occlusion_prob, image_size=image_size)
 
         arr = np.array(img, dtype=np.float32) / 255.0
         tensor = torch.from_numpy(arr).permute(2, 0, 1)
@@ -467,9 +472,21 @@ def generate_dataset(
     clips: list[dict[str, Any]] = []
 
     out: Path | None = None
+    clip_offset = 0
     if output_dir is not None:
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
+        # Start numbering after existing clips to avoid overwriting
+        existing = list(out.glob("clip_*.pt"))
+        if existing:
+            nums = []
+            for f in existing:
+                try:
+                    nums.append(int(f.stem.split("_")[1]))
+                except (IndexError, ValueError):
+                    pass
+            if nums:
+                clip_offset = max(nums) + 1
 
     for i in range(num_clips):
         game_seed = rng.randint(0, 2**31)
@@ -500,7 +517,11 @@ def generate_dataset(
             save_dict = {
                 k: v for k, v in clip.items() if isinstance(v, torch.Tensor)
             }
-            torch.save(save_dict, out / f"clip_{len(clips) - 1:06d}.pt")
+            # Preserve FENs so the validator can replay from the correct position
+            if "fens" in clip:
+                save_dict["fens"] = clip["fens"]
+            clip_num = clip_offset + len(clips) - 1
+            torch.save(save_dict, out / f"clip_{clip_num:06d}.pt")
 
         if on_progress is not None:
             on_progress(len(clips), num_clips)
