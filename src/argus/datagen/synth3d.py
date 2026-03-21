@@ -134,11 +134,14 @@ def _material_to_dict(mat: PieceMaterial) -> dict:
 
 def _theme_to_dict(theme) -> dict:
     """Convert BoardTheme to manifest dict."""
-    return {
+    d = {
         "light": theme.light,
         "dark": theme.dark,
         "texture_type": theme.texture_type,
     }
+    if theme.border_color is not None:
+        d["border_color"] = theme.border_color
+    return d
 
 
 # ---------------------------------------------------------------------------
