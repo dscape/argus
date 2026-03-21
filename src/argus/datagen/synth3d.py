@@ -289,7 +289,7 @@ def generate_clip(
     frames_per_move: int = 4,
     augment: bool = True,
     occlusion_prob: float = 0.2,
-    illegal_move_prob: float = 0.2,
+    illegal_clip_prob: float = 0.2,
     seed: int | None = None,
 ) -> dict[str, Any]:
     """Generate a synthetic training clip using Blender 3D rendering.
@@ -328,6 +328,13 @@ def generate_clip(
     azimuth = rng.uniform(0.0, 360.0) if augment else 0.0
     flipped = rng.random() < 0.5 if augment else False
 
+    # Per-clip illegal move decision: 20% of clips get exactly one
+    # illegal move injected at a randomly chosen move frame.
+    clip_has_illegal = rng.random() < illegal_clip_prob
+    expected_moves = max(clip_length // max(frames_per_move, 1) - 1, 1)
+    illegal_at_move_occurrence = rng.randint(0, expected_moves - 1)
+    move_occurrence_count = 0
+
     # First pass: advance game state, collect FENs and camera angles
     frame_data: list[dict] = []
 
@@ -339,7 +346,11 @@ def generate_clip(
         )
 
         if is_move_frame:
-            inject_illegal = rng.random() < illegal_move_prob
+            inject_illegal = (
+                clip_has_illegal
+                and move_occurrence_count == illegal_at_move_occurrence
+            )
+            move_occurrence_count += 1
 
             if inject_illegal:
                 illegal_uci = _sample_illegal_move(board, rng)
@@ -438,7 +449,7 @@ def generate_dataset(
     frames_per_move: int = 4,
     augment: bool = True,
     occlusion_prob: float = 0.2,
-    illegal_move_prob: float = 0.2,
+    illegal_clip_prob: float = 0.2,
     min_moves: int = 10,
     max_moves: int = 80,
     output_dir: str | Path | None = None,
@@ -477,7 +488,7 @@ def generate_dataset(
             frames_per_move=frames_per_move,
             augment=augment,
             occlusion_prob=occlusion_prob,
-            illegal_move_prob=illegal_move_prob,
+            illegal_clip_prob=illegal_clip_prob,
             seed=game_seed + i,
         )
         clips.append(clip)

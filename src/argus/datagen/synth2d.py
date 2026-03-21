@@ -517,7 +517,7 @@ def generate_clip(
     frames_per_move: int = 4,
     augment: bool = True,
     occlusion_prob: float = 0.2,
-    illegal_move_prob: float = 0.2,
+    illegal_clip_prob: float = 0.2,
     render_3d_prob: float = 1.0,
     seed: int | None = None,
 ) -> dict[str, Any]:
@@ -534,8 +534,9 @@ def generate_clip(
         frames_per_move: Average number of frames between moves.
         augment: Whether to apply augmentations.
         occlusion_prob: Probability of occlusion per frame.
-        illegal_move_prob: Probability of injecting an illegal move at a
-            move frame instead of playing the next legal move (0.0-1.0).
+        illegal_clip_prob: Probability that this clip contains exactly
+            one illegal move (0.2 = 20% of clips have one illegal move,
+            80% have none).
         render_3d_prob: Probability of using 3D standing-piece rendering
             (1.0 = always 3D, 0.0 = always 2D flat composite).
         seed: Random seed for reproducibility.
@@ -590,6 +591,15 @@ def generate_clip(
 
     flipped = rng.random() < 0.5 if augment else False
 
+    # Per-clip illegal move decision: 20% of clips get exactly one
+    # illegal move injected at a randomly chosen move frame.
+    clip_has_illegal = rng.random() < illegal_clip_prob
+    # Pick which move occurrence (0-indexed) will be the illegal one.
+    # Use expected_moves - 1 as max to avoid overshooting.
+    expected_moves = max(clip_length // max(frames_per_move, 1) - 1, 1)
+    illegal_at_move_occurrence = rng.randint(0, expected_moves - 1)
+    move_occurrence_count = 0
+
     while frame_count < clip_length:
         is_move_frame = (
             frame_count == next_move_frame
@@ -598,7 +608,11 @@ def generate_clip(
         )
 
         if is_move_frame:
-            inject_illegal = rng.random() < illegal_move_prob
+            inject_illegal = (
+                clip_has_illegal
+                and move_occurrence_count == illegal_at_move_occurrence
+            )
+            move_occurrence_count += 1
 
             if inject_illegal:
                 # Inject a random illegal move without advancing the game
@@ -696,7 +710,7 @@ def generate_dataset(
     frames_per_move: int = 4,
     augment: bool = True,
     occlusion_prob: float = 0.2,
-    illegal_move_prob: float = 0.2,
+    illegal_clip_prob: float = 0.2,
     render_3d_prob: float = 1.0,
     min_moves: int = 10,
     max_moves: int = 80,
@@ -713,8 +727,8 @@ def generate_dataset(
         frames_per_move: Average frames between moves.
         augment: Whether to apply augmentations.
         occlusion_prob: Occlusion probability per frame.
-        illegal_move_prob: Probability of injecting an illegal move at a
-            move frame (0.0-1.0).
+        illegal_clip_prob: Probability that a clip contains exactly
+            one illegal move (0.2 = 20% of clips, 80% clean).
         render_3d_prob: Probability of using 3D standing-piece rendering
             per clip (1.0 = always 3D, 0.0 = always 2D).
         min_moves: Minimum game length.
@@ -753,7 +767,7 @@ def generate_dataset(
             frames_per_move=frames_per_move,
             augment=augment,
             occlusion_prob=occlusion_prob,
-            illegal_move_prob=illegal_move_prob,
+            illegal_clip_prob=illegal_clip_prob,
             render_3d_prob=render_3d_prob,
             seed=game_seed + i,
         )
