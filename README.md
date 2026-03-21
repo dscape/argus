@@ -321,7 +321,7 @@ make datagen ARGS="--type 3d --num-clips 200 --output-dir data/3d"
 
 **2D generation** (`synth2d.py`): Renders chess positions via `chess.svg` + CairoSVG. Creates temporal clips with ground-truth annotations. Fast enough for rapid iteration.
 
-**3D generation** (`scene_builder.py`, `camera.py`, `lighting.py`, `humans.py`): Blender-based scene composition with camera motion, lighting variation, and occlusion simulation. Higher fidelity, much slower.
+**3D generation** (`synth3d.py` + `blender/render_chess.py`): Renders realistic chess positions using Staunton STL piece models and Blender's EEVEE engine. Calls Blender headlessly per clip, with randomized board themes, piece materials, lighting, and camera angles. Requires Blender 4.0+. Higher fidelity, much slower.
 
 Both output `.pt` files in the same format as the real pipeline clips.
 
@@ -945,6 +945,7 @@ argus/
 │   │   └── pgn_sampler.py                      #   Game sampling from PGN files
 │   ├── datagen/                                # Data Gen: synthetic data generation
 │   │   ├── synth2d.py                          #   2D sprite compositing
+│   │   ├── synth3d.py                          #   3D Blender-based rendering
 │   │   ├── scene_builder.py                    #   Blender scene composition
 │   │   ├── camera.py                           #   Camera placement/motion
 │   │   ├── lighting.py                         #   Lighting variation
@@ -1038,7 +1039,9 @@ argus/
 │       ├── test_pgn_aligner.py                 #     Stage 6: clip generation
 │       ├── test_overlay_reader.py              #     Stage 6: overlay
 │       └── test_overlay_move_detector.py       #     Stage 6: overlay
-├── blender/                                    # Data Gen: 3D assets
+├── blender/                                    # Data Gen: 3D Blender rendering
+│   ├── render_chess.py                         #   Blender Python render script (EEVEE)
+│   └── models/staunton/                        #   Staunton STL piece models
 ├── docker-compose.yaml                         # PostgreSQL + dev-tools (profiles)
 ├── Makefile                                    # All build/run targets
 ├── pyproject.toml                              # ML package dependencies

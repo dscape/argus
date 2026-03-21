@@ -6,10 +6,13 @@ import logging
 import sys
 from pathlib import Path
 
-import torch
 from tqdm import tqdm
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 logger = logging.getLogger(__name__)
 
 
@@ -46,14 +49,26 @@ def main() -> None:
         pbar.close()
         logger.info(f"Saved {len(clips)} clips to {output_dir}")
     elif args.type == "3d":
-        from argus.datagen.renderer import generate_clip_annotations, save_annotations
-        from argus.datagen.scene_builder import SceneConfig
-        logger.info(f"Generating {args.num_clips} 3D scene annotations...")
-        for i in range(args.num_clips):
-            config = SceneConfig(seed=args.seed + i)
-            annotation = generate_clip_annotations(config, num_frames=500, fps=5.0, seed=args.seed + i)
-            save_annotations(annotation, output_dir)
-        logger.info(f"Saved {args.num_clips} annotations to {output_dir}")
+        from argus.datagen.synth3d import generate_dataset
+        logger.info(f"Generating {args.num_clips} 3D Blender clips...")
+
+        pbar = tqdm(total=args.num_clips, desc="Generating 3D clips", unit="clip")
+
+        def on_progress(completed: int, total: int) -> None:
+            pbar.n = completed
+            pbar.refresh()
+
+        clips = generate_dataset(
+            num_clips=args.num_clips,
+            clip_length=args.clip_length,
+            image_size=args.image_size,
+            frames_per_move=args.frames_per_move,
+            output_dir=str(output_dir),
+            seed=args.seed,
+            on_progress=on_progress,
+        )
+        pbar.close()
+        logger.info(f"Saved {len(clips)} 3D clips to {output_dir}")
 
 
 if __name__ == "__main__":

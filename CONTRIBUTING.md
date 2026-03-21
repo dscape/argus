@@ -8,6 +8,7 @@
 | Node.js | 18+ | Dev tools web UI |
 | Docker | Latest | PostgreSQL + dev tools |
 | Cairo | Latest | SVG rendering for synthetic data |
+| Blender | 4.0+ | 3D synthetic data rendering (optional) |
 | ffmpeg | Latest | Frame extraction from videos |
 
 ### Install Cairo
@@ -22,6 +23,20 @@ sudo apt-get install libcairo2-dev
 # Fedora
 sudo dnf install cairo-devel
 ```
+
+### Install Blender (optional, for 3D data generation)
+
+```bash
+# macOS
+brew install --cask blender
+
+# Ubuntu / Debian
+sudo snap install blender --classic
+
+# Or download from https://www.blender.org/download/
+```
+
+Verify: `blender --version` should show 4.0 or later. You can also set the `BLENDER_PATH` environment variable to point to a custom Blender install.
 
 ---
 
@@ -59,7 +74,9 @@ cp .env.example .env    # fill in DATABASE_URL, YOUTUBE_API_KEY, ANTHROPIC_API_K
 
 ### Data Generation
 
-No extra setup beyond `make dev`. Cairo must be installed system-wide (see Prerequisites). For 3D data, install Blender 4.0+.
+No extra setup beyond `make dev`. Cairo must be installed system-wide (see Prerequisites).
+
+For 3D data, install Blender 4.0+ (see Prerequisites). The STL piece models are included in `blender/models/staunton/`. Set `BLENDER_PATH` if Blender is not on your PATH.
 
 ### Training
 

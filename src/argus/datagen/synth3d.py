@@ -21,8 +21,9 @@ import random
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import chess
 import numpy as np
@@ -38,8 +39,7 @@ from argus.datagen.piece_renderer import (
     PieceMaterial,
     select_random_material,
 )
-from argus.datagen.synth2d import apply_augmentations, add_occlusion
-
+from argus.datagen.synth2d import add_occlusion, apply_augmentations
 
 # ---------------------------------------------------------------------------
 # Blender executable discovery
@@ -319,8 +319,10 @@ def generate_clip(
     next_move_frame = rng.randint(1, frames_per_move)
 
     # Per-clip consistent style
-    board_theme = select_random_theme(rng).with_perturbation(rng) if augment else select_random_theme(rng)
-    piece_material = select_random_material(rng).with_perturbation(rng) if augment else select_random_material(rng)
+    theme_base = select_random_theme(rng)
+    board_theme = theme_base.with_perturbation(rng) if augment else theme_base
+    mat_base = select_random_material(rng)
+    piece_material = mat_base.with_perturbation(rng) if augment else mat_base
     piece_set = _select_piece_set(rng)
     lighting = randomize_lighting(LightingConfig(), seed=rng.randint(0, 2**31))
 
@@ -430,7 +432,8 @@ def generate_clip(
 
     # Pad if Blender returned fewer frames than expected
     while len(frames_list) < clip_length:
-        frames_list.append(frames_list[-1] if frames_list else torch.zeros(3, image_size, image_size))
+        fallback = frames_list[-1] if frames_list else torch.zeros(3, image_size, image_size)
+        frames_list.append(fallback)
 
     return {
         "frames": torch.stack(frames_list[:clip_length]),
