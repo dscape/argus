@@ -58,7 +58,7 @@ def main(cfg: DictConfig) -> None:
             val_ds = ArgusDataset(val_dir, clip_length=clip_length)
     else:
         # Generate synthetic data on-the-fly
-        from argus.datagen.synth2d import generate_dataset
+        from argus.datagen.synth import generate_dataset
         num_train_clips = cfg.data.get("num_train_clips", 1000)
         num_val_clips = cfg.data.get("num_val_clips", 100)
         total_clips = num_train_clips + num_val_clips

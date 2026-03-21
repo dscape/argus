@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 
 from argus.data.collate import argus_collate_fn
 from argus.data.dataset import ArgusInMemoryDataset
-from argus.datagen.synth2d import generate_dataset
+from argus.datagen.synth import generate_dataset
 from argus.eval.evaluator import Evaluator
 from argus.model.argus_model import ArgusModel
 

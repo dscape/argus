@@ -64,7 +64,7 @@ graph LR
     end
 
     subgraph "Data Generation"
-        SYN[Synthetic 2D / 3D] --> CLIPS[".pt clips"]
+        SYN[Synthetic 3D Blender] --> CLIPS[".pt clips"]
         G --> CLIPS
     end
 
@@ -87,7 +87,7 @@ The codebase is organized into 5 independent domains. Pick the one you're workin
 | Domain | Folder | Purpose | Dependencies |
 |--------|--------|---------|-------------|
 | **Data Pipeline** | `pipeline/` | Curate training data: crawl YouTube, extract metadata, match games, generate clips | PostgreSQL, YouTube API key |
-| **Data Generation** | `src/argus/datagen/`, `blender/` | Generate synthetic training clips (2D sprites or 3D Blender) | Cairo (2D), Blender 4.0+ (3D) |
+| **Data Generation** | `src/argus/datagen/`, `blender/` | Generate synthetic training clips (3D Blender rendering) | Blender 4.0+ |
 | **Training** | `src/argus/model/`, `src/argus/training/`, `scripts/train.py` | Train the Argus model in 3 phases | PyTorch, GPU, Hydra |
 | **Inference** | `src/argus/inference/`, `scripts/infer.py` | Run a trained model on video files to produce PGN | PyTorch, trained checkpoint |
 | **Dev Tools** | `dev-tools/` | Web UI for monitoring synthetic data generation and debugging the video overlay pipeline | Docker |
@@ -106,8 +106,10 @@ Generate synthetic data and train a model. No database or API keys needed.
 python3 -m venv .venv && source .venv/bin/activate
 make dev
 
-# Generate synthetic training data (2D sprites)
-# (progress visible live in dev tools → Synthetic tab)
+# Start Blender render server (run in separate terminal)
+make blender-server
+
+# Generate synthetic training data
 make datagen ARGS="--num-clips 100 --output-dir data/train --image-size 64"
 make datagen ARGS="--num-clips 20 --output-dir data/val --image-size 64"
 
@@ -303,27 +305,28 @@ python -m pipeline.cli overlay-test --image screenshot.png --output annotated.pn
 
 > **Domain: Data Generation** — `src/argus/datagen/`, `blender/`
 
-Synthetic training data generation. This is separate from the real data pipeline — it doesn't need a database or API keys, just Cairo (for 2D) or Blender (for 3D).
+Synthetic training data generation using Blender 3D rendering. Requires Blender 4.0+.
 
 Uses plain argparse (not Hydra). Entry point: `scripts/generate_data.py`.
 
 ```bash
-# 2D sprite-based data (fast, Phase 1)
+# Start the Blender render server (run in a separate terminal)
+make blender-server
+
+# Generate data
 make datagen ARGS="--num-clips 5000 --output-dir data/train"
 make datagen ARGS="--num-clips 500 --output-dir data/val"
 
 # Smaller for local development
 make datagen ARGS="--num-clips 100 --output-dir data/dev --image-size 64"
 
-# 3D Blender-rendered data (Phase 2+, requires Blender 4.0+)
-make datagen ARGS="--type 3d --num-clips 200 --output-dir data/3d"
+# High quality rendering (slower, for visualization)
+make datagen ARGS="--num-clips 10 --quality high"
 ```
 
-**2D generation** (`synth2d.py`): Renders chess positions via `chess.svg` + CairoSVG. Creates temporal clips with ground-truth annotations. Fast enough for rapid iteration.
+Renders realistic chess positions using Staunton STL piece models and Blender's EEVEE engine (`synth.py` + `blender/render_chess.py`). Randomized board themes, piece materials, lighting, and camera angles. The persistent Blender server (`make blender-server`) eliminates startup overhead; without it, a subprocess is spawned per clip (slower).
 
-**3D generation** (`synth3d.py` + `blender/render_chess.py`): Renders realistic chess positions using Staunton STL piece models and Blender's EEVEE engine. Calls Blender headlessly per clip, with randomized board themes, piece materials, lighting, and camera angles. Requires Blender 4.0+. Higher fidelity, much slower.
-
-Both output `.pt` files in the same format as the real pipeline clips.
+Outputs `.pt` files in the same format as the real pipeline clips.
 
 ---
 
@@ -465,7 +468,7 @@ The dev-tools services are thin REST wrappers — they directly import from `pip
 
 | Dev Tool | Area | Modules Wrapped | CLI Equivalent |
 |----------|------|-----------------|----------------|
-| **Synthetic Monitor** | Synthetic | `argus.datagen.synth2d`, filesystem scanner | `datagen` |
+| **Synthetic Monitor** | Synthetic | `argus.datagen.synth`, filesystem scanner | `datagen` |
 | **Clip Inspector** | Synthetic | `argus.chess.move_vocabulary`, PyTorch tensors | `inspect-clip` |
 | **Overlay Tester** | Video | `pipeline.overlay.scanner`, `overlay_reader` | `overlay-test` |
 | **Calibration Editor** | Video | `pipeline.overlay.calibration` | `overlay-calibrate` |
@@ -492,7 +495,7 @@ graph LR
     end
 
     subgraph "Pipeline Modules"
-        S0["synth2d, filesystem"]
+        S0["synth, filesystem"]
         S2["move_vocabulary, clip tensors"]
         S1["scanner, overlay_reader"]
         S3["calibration YAML"]
@@ -944,8 +947,8 @@ argus/
 │   │   ├── collate.py                          #   Variable-length batching
 │   │   └── pgn_sampler.py                      #   Game sampling from PGN files
 │   ├── datagen/                                # Data Gen: synthetic data generation
-│   │   ├── synth2d.py                          #   2D sprite compositing
-│   │   ├── synth3d.py                          #   3D Blender-based rendering
+│   │   ├── synth.py                             #   Blender 3D rendering pipeline
+│   │   ├── blender_server.py                    #   TCP client for render server
 │   │   ├── scene_builder.py                    #   Blender scene composition
 │   │   ├── camera.py                           #   Camera placement/motion
 │   │   ├── lighting.py                         #   Lighting variation
@@ -1059,7 +1062,7 @@ argus/
 
 **Mamba-2 over transformers for temporal modeling.** Linear-time complexity in sequence length handles full tournaments (14K+ frames) without quadratic attention costs. The SSM hidden state acts as compressed game memory.
 
-**Synthetic data first.** 2D sprite compositing enables rapid iteration on model architecture before investing in expensive Blender renders. The curriculum progressively increases difficulty (resolution, occlusion, board count).
+**Synthetic data first.** 3D Blender rendering with a persistent render server enables fast, realistic data generation. The curriculum progressively increases difficulty (resolution, occlusion, board count).
 
 **Dual clip generation paths.** OTB videos use OpenCV board detection + frame differencing. Overlay videos use pixel-level FEN reading + FEN comparison. Both produce identical `.pt` output format, so the training pipeline doesn't distinguish between them.
 
