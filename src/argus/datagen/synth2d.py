@@ -29,6 +29,12 @@ from argus.datagen.board_themes import (
     render_textured_board,
     select_random_theme,
 )
+from argus.datagen.piece_renderer import (
+    PieceMaterial,
+    PieceRenderCache,
+    render_pieces_layer,
+    select_random_material,
+)
 from argus.datagen.piece_styles import (
     PieceStyle,
     apply_piece_style,
@@ -124,6 +130,8 @@ def render_board_image(
     colors: dict[str, str] | None = None,
     theme: BoardTheme | None = None,
     piece_style: PieceStyle | None = None,
+    piece_material: PieceMaterial | None = None,
+    piece_cache: PieceRenderCache | None = None,
     rng: random.Random | None = None,
 ) -> Image.Image:
     """Render a chess board position to a PIL Image with realistic textures.
@@ -136,7 +144,10 @@ def render_board_image(
             If provided without a theme, creates a flat-fill board.
         theme: BoardTheme for realistic textured rendering.
             Takes precedence over colors.
-        piece_style: PieceStyle for realistic 3D piece rendering.
+        piece_style: PieceStyle for 2D piece post-processing (legacy).
+        piece_material: PieceMaterial for 3D piece rendering.
+            Takes precedence over piece_style.
+        piece_cache: PieceRenderCache for caching rendered sprites.
         rng: Random number generator for texture variation.
 
     Returns:
@@ -147,7 +158,12 @@ def render_board_image(
 
     # If theme is provided, use textured rendering
     if theme is not None:
-        return _render_textured_with_pieces(board, size, flipped, theme, rng, piece_style)
+        return _render_textured_with_pieces(
+            board, size, flipped, theme, rng,
+            piece_style=piece_style,
+            piece_material=piece_material,
+            piece_cache=piece_cache,
+        )
 
     # Legacy path: flat colors (backward compat)
     default_colors = {"light": "#F0D9B5", "dark": "#B58863"}
@@ -183,34 +199,46 @@ def _render_textured_with_pieces(
     theme: BoardTheme,
     rng: random.Random,
     piece_style: PieceStyle | None = None,
+    piece_material: PieceMaterial | None = None,
+    piece_cache: PieceRenderCache | None = None,
 ) -> Image.Image:
-    """Render textured board and composite SVG pieces on top."""
+    """Render textured board and composite pieces on top."""
     # Render textured board (no pieces)
     board_arr = render_textured_board(size, theme, flipped, rng)
     board_img = Image.fromarray(board_arr, "RGB")
 
-    # Try to extract piece layer from SVG rendering
-    # Render at slightly larger size to account for SVG margin, then crop
-    render_size = int(size * 390 / 360)
-    piece_layer = _render_svg_pieces(board, render_size, flipped)
-
-    if piece_layer is not None:
-        # Crop SVG margin and resize to match board
-        piece_layer = _crop_svg_margin(piece_layer)
-        piece_layer = piece_layer.resize((size, size), Image.LANCZOS)
-
+    if piece_material is not None:
+        # 3D rendered pieces from geometry
+        piece_layer = render_pieces_layer(
+            board, size, flipped, piece_material,
+            cache=piece_cache, rng=rng,
+        )
+        # Generate shadow from piece alpha
         if piece_style is not None:
-            piece_layer, shadow_layer = apply_piece_style(
+            _, shadow_layer = apply_piece_style(
                 piece_layer, piece_style, size, rng,
+                skip_3d_effects=True,
             )
-            # Shadow composited UNDER pieces
             board_img.paste(shadow_layer, (0, 0), shadow_layer)
-
-        # Composite pieces onto textured board
         board_img.paste(piece_layer, (0, 0), piece_layer)
     else:
-        # Fallback: draw simple piece symbols
-        _draw_piece_symbols(board_img, board, size, flipped)
+        # Legacy SVG path
+        render_size = int(size * 390 / 360)
+        piece_layer = _render_svg_pieces(board, render_size, flipped)
+
+        if piece_layer is not None:
+            piece_layer = _crop_svg_margin(piece_layer)
+            piece_layer = piece_layer.resize((size, size), Image.LANCZOS)
+
+            if piece_style is not None:
+                piece_layer, shadow_layer = apply_piece_style(
+                    piece_layer, piece_style, size, rng,
+                )
+                board_img.paste(shadow_layer, (0, 0), shadow_layer)
+
+            board_img.paste(piece_layer, (0, 0), piece_layer)
+        else:
+            _draw_piece_symbols(board_img, board, size, flipped)
 
     return board_img
 
@@ -490,6 +518,7 @@ def generate_clip(
     augment: bool = True,
     occlusion_prob: float = 0.2,
     illegal_move_prob: float = 0.2,
+    render_3d_prob: float = 1.0,
     seed: int | None = None,
 ) -> dict[str, Any]:
     """Generate a synthetic training clip from a move sequence.
@@ -507,6 +536,8 @@ def generate_clip(
         occlusion_prob: Probability of occlusion per frame.
         illegal_move_prob: Probability of injecting an illegal move at a
             move frame instead of playing the next legal move (0.0-1.0).
+        render_3d_prob: Probability of using 3D standing-piece rendering
+            (1.0 = always 3D, 0.0 = always 2D flat composite).
         seed: Random seed for reproducibility.
 
     Returns:
@@ -543,12 +574,19 @@ def generate_clip(
     # Consistent augmentation params for the clip (board + piece style)
     board_theme = None
     piece_style = None
+    piece_material = None
+    piece_cache = None
     if augment:
         board_theme = select_random_theme(rng).with_perturbation(rng)
         piece_style = select_random_piece_style(rng).with_perturbation(rng)
+        piece_material = select_random_material(rng).with_perturbation(rng)
+        piece_cache = PieceRenderCache()
         # Per-clip consistent camera angle for perspective
         elevation = rng.uniform(30.0, 75.0)
         azimuth = rng.uniform(0.0, 360.0)
+
+    # Decide whether to use 3D standing-piece rendering for this clip
+    use_3d = augment and rng.random() < render_3d_prob
 
     flipped = rng.random() < 0.5 if augment else False
 
@@ -605,17 +643,35 @@ def generate_clip(
         fens.append(board.fen())
 
         # Render frame
-        img = render_board_image(
-            board, size=image_size, flipped=flipped,
-            theme=board_theme, piece_style=piece_style, rng=rng,
-        )
-        if augment:
-            # Isometric projection with per-frame jitter
+        if use_3d:
+            # 3D: warp board first, then composite standing pieces
+            from argus.datagen.synth3d import render_3d_scene
+
             frame_elev = elevation + rng.gauss(0, 1.5)
             frame_azim = azimuth + rng.gauss(0, 2.0)
-            img = apply_projection(img, frame_elev, frame_azim, rng, mode="isometric")
-            img = apply_augmentations(img, rng)
-            img = add_occlusion(img, rng, prob=occlusion_prob)
+            img = render_3d_scene(
+                board, image_size, flipped,
+                frame_elev, frame_azim,
+                board_theme, piece_material, piece_cache,
+                rng, mode="isometric",
+            )
+            if augment:
+                img = apply_augmentations(img, rng)
+                img = add_occlusion(img, rng, prob=occlusion_prob)
+        else:
+            # 2D: composite pieces flat, then warp everything together
+            img = render_board_image(
+                board, size=image_size, flipped=flipped,
+                theme=board_theme, piece_style=piece_style,
+                piece_material=piece_material, piece_cache=piece_cache,
+                rng=rng,
+            )
+            if augment:
+                frame_elev = elevation + rng.gauss(0, 1.5)
+                frame_azim = azimuth + rng.gauss(0, 2.0)
+                img = apply_projection(img, frame_elev, frame_azim, rng, mode="isometric")
+                img = apply_augmentations(img, rng)
+                img = add_occlusion(img, rng, prob=occlusion_prob)
 
         # Convert to tensor (C, H, W), normalized [0, 1]
         arr = np.array(img, dtype=np.float32) / 255.0
@@ -641,6 +697,7 @@ def generate_dataset(
     augment: bool = True,
     occlusion_prob: float = 0.2,
     illegal_move_prob: float = 0.2,
+    render_3d_prob: float = 1.0,
     min_moves: int = 10,
     max_moves: int = 80,
     output_dir: str | Path | None = None,
@@ -658,6 +715,8 @@ def generate_dataset(
         occlusion_prob: Occlusion probability per frame.
         illegal_move_prob: Probability of injecting an illegal move at a
             move frame (0.0-1.0).
+        render_3d_prob: Probability of using 3D standing-piece rendering
+            per clip (1.0 = always 3D, 0.0 = always 2D).
         min_moves: Minimum game length.
         max_moves: Maximum game length.
         output_dir: If set, save clips to disk incrementally.
@@ -695,6 +754,7 @@ def generate_dataset(
             augment=augment,
             occlusion_prob=occlusion_prob,
             illegal_move_prob=illegal_move_prob,
+            render_3d_prob=render_3d_prob,
             seed=game_seed + i,
         )
         clips.append(clip)
