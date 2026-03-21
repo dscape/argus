@@ -23,14 +23,16 @@ import mathutils
 # Blender args parsing (everything after --)
 # ---------------------------------------------------------------------------
 
+
 def parse_args():
     argv = sys.argv
     if "--" in argv:
-        argv = argv[argv.index("--") + 1:]
+        argv = argv[argv.index("--") + 1 :]
     else:
         argv = []
 
     import argparse
+
     p = argparse.ArgumentParser()
     p.add_argument("--manifest", required=True)
     p.add_argument("--output-dir", required=True)
@@ -41,6 +43,7 @@ def parse_args():
 # ---------------------------------------------------------------------------
 # Scene cleanup
 # ---------------------------------------------------------------------------
+
 
 def clear_scene():
     """Remove all objects, materials, and meshes from the scene."""
@@ -56,6 +59,7 @@ def clear_scene():
 # Material creation
 # ---------------------------------------------------------------------------
 
+
 def hex_to_rgba(hex_color: str) -> tuple:
     """Convert hex color to RGBA for Blender's Principled BSDF Base Color."""
     h = hex_color.lstrip("#")
@@ -68,7 +72,18 @@ def rgb_to_rgba(r: int, g: int, b: int) -> tuple:
     return (r / 255.0, g / 255.0, b / 255.0, 1.0)
 
 
-def create_piece_material(name: str, color: list, mat_type: str) -> bpy.types.Material:
+def _set_bsdf_input(bsdf, name, value):
+    """Safely set a Principled BSDF input, ignoring if not present."""
+    if name in bsdf.inputs:
+        try:
+            bsdf.inputs[name].default_value = value
+        except Exception:
+            pass
+
+
+def create_piece_material(
+    name: str, color: list, mat_type: str
+) -> bpy.types.Material:
     """Create a Principled BSDF material for a chess piece."""
     mat = bpy.data.materials.new(name=name)
     mat.use_nodes = True
@@ -83,25 +98,47 @@ def create_piece_material(name: str, color: list, mat_type: str) -> bpy.types.Ma
     bsdf.inputs["Base Color"].default_value = rgb_to_rgba(*color)
 
     if mat_type == "plastic":
-        bsdf.inputs["Roughness"].default_value = 0.35
+        bsdf.inputs["Roughness"].default_value = 0.30
         bsdf.inputs["Metallic"].default_value = 0.0
-        bsdf.inputs["IOR"].default_value = 1.46
+        _set_bsdf_input(bsdf, "IOR", 1.46)
+        # Clearcoat for glossy plastic shine
+        _set_bsdf_input(bsdf, "Coat Weight", 0.3)  # Blender 4.x
+        _set_bsdf_input(bsdf, "Coat Roughness", 0.15)
+        _set_bsdf_input(bsdf, "Clearcoat", 0.3)  # Blender 3.x
+        _set_bsdf_input(bsdf, "Clearcoat Roughness", 0.15)
+
     elif mat_type == "wood":
-        bsdf.inputs["Roughness"].default_value = 0.50
+        bsdf.inputs["Roughness"].default_value = 0.45
         bsdf.inputs["Metallic"].default_value = 0.0
-        bsdf.inputs["IOR"].default_value = 1.5
-        # Add subtle subsurface for wood warmth
-        bsdf.inputs["Subsurface Weight"].default_value = 0.05
+        _set_bsdf_input(bsdf, "IOR", 1.5)
+        # Subsurface for wood warmth/translucency
+        _set_bsdf_input(bsdf, "Subsurface Weight", 0.08)  # Blender 4.x
+        _set_bsdf_input(bsdf, "Subsurface", 0.08)  # Blender 3.x
+
+        # Bump from noise texture for wood grain feel
+        tex_coord = nodes.new("ShaderNodeTexCoord")
+        noise = nodes.new("ShaderNodeTexNoise")
+        bump = nodes.new("ShaderNodeBump")
+        noise.inputs["Scale"].default_value = 20.0
+        noise.inputs["Detail"].default_value = 6.0
+        bump.inputs["Strength"].default_value = 0.05
+        links.new(tex_coord.outputs["Object"], noise.inputs["Vector"])
+        links.new(noise.outputs["Fac"], bump.inputs["Height"])
+        links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
     elif mat_type == "metal":
-        bsdf.inputs["Roughness"].default_value = 0.15
-        bsdf.inputs["Metallic"].default_value = 0.9
-        bsdf.inputs["IOR"].default_value = 2.5
+        bsdf.inputs["Roughness"].default_value = 0.12
+        bsdf.inputs["Metallic"].default_value = 0.95
+        _set_bsdf_input(bsdf, "IOR", 2.5)
+        _set_bsdf_input(bsdf, "Anisotropic", 0.3)
 
     return mat
 
 
-def create_board_material(name: str, hex_color: str, texture_type: str) -> bpy.types.Material:
-    """Create a material for a board square."""
+def create_board_material(
+    name: str, hex_color: str, texture_type: str
+) -> bpy.types.Material:
+    """Create a material for a board square with bump and texture."""
     mat = bpy.data.materials.new(name=name)
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
@@ -114,42 +151,69 @@ def create_board_material(name: str, hex_color: str, texture_type: str) -> bpy.t
 
     bsdf.inputs["Base Color"].default_value = hex_to_rgba(hex_color)
 
+    # Common: subtle noise bump for surface micro-texture
+    tex_coord = nodes.new("ShaderNodeTexCoord")
+    noise = nodes.new("ShaderNodeTexNoise")
+    bump = nodes.new("ShaderNodeBump")
+    links.new(tex_coord.outputs["Object"], noise.inputs["Vector"])
+    links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
     if texture_type == "vinyl":
-        bsdf.inputs["Roughness"].default_value = 0.65
+        bsdf.inputs["Roughness"].default_value = 0.60
         bsdf.inputs["Metallic"].default_value = 0.0
+        noise.inputs["Scale"].default_value = 50.0
+        noise.inputs["Detail"].default_value = 4.0
+        bump.inputs["Strength"].default_value = 0.02
+
     elif texture_type == "wood":
-        bsdf.inputs["Roughness"].default_value = 0.45
+        bsdf.inputs["Roughness"].default_value = 0.40
         bsdf.inputs["Metallic"].default_value = 0.0
-        # Add noise texture for wood grain
-        tex_coord = nodes.new("ShaderNodeTexCoord")
+
+        # Wood grain color modulation
         mapping = nodes.new("ShaderNodeMapping")
-        noise = nodes.new("ShaderNodeTexNoise")
+        wood_noise = nodes.new("ShaderNodeTexNoise")
         color_ramp = nodes.new("ShaderNodeValToRGB")
         mix = nodes.new("ShaderNodeMixRGB")
 
-        noise.inputs["Scale"].default_value = 15.0
-        noise.inputs["Detail"].default_value = 8.0
-        noise.inputs["Distortion"].default_value = 2.0
-        mapping.inputs["Scale"].default_value = (1.0, 8.0, 1.0)
+        wood_noise.inputs["Scale"].default_value = 12.0
+        wood_noise.inputs["Detail"].default_value = 10.0
+        wood_noise.inputs["Distortion"].default_value = 3.0
+        mapping.inputs["Scale"].default_value = (1.0, 10.0, 1.0)
 
         links.new(tex_coord.outputs["Object"], mapping.inputs["Vector"])
-        links.new(mapping.outputs["Vector"], noise.inputs["Vector"])
-        links.new(noise.outputs["Fac"], color_ramp.inputs["Fac"])
+        links.new(mapping.outputs["Vector"], wood_noise.inputs["Vector"])
+        links.new(wood_noise.outputs["Fac"], color_ramp.inputs["Fac"])
 
         mix.blend_type = "MULTIPLY"
-        mix.inputs["Fac"].default_value = 0.15
+        mix.inputs["Fac"].default_value = 0.20
         mix.inputs[1].default_value = hex_to_rgba(hex_color)
         links.new(color_ramp.outputs["Color"], mix.inputs[2])
         links.new(mix.outputs["Color"], bsdf.inputs["Base Color"])
-    else:  # plastic
-        bsdf.inputs["Roughness"].default_value = 0.30
+
+        # Wood bump: stronger than vinyl
+        noise.inputs["Scale"].default_value = 25.0
+        noise.inputs["Detail"].default_value = 6.0
+        bump.inputs["Strength"].default_value = 0.04
+
+        # Clearcoat for lacquered wood boards
+        _set_bsdf_input(bsdf, "Coat Weight", 0.2)
+        _set_bsdf_input(bsdf, "Coat Roughness", 0.2)
+        _set_bsdf_input(bsdf, "Clearcoat", 0.2)
+        _set_bsdf_input(bsdf, "Clearcoat Roughness", 0.2)
+
+    else:  # plastic (DGT electronic boards)
+        bsdf.inputs["Roughness"].default_value = 0.25
         bsdf.inputs["Metallic"].default_value = 0.0
+        noise.inputs["Scale"].default_value = 80.0
+        noise.inputs["Detail"].default_value = 3.0
+        bump.inputs["Strength"].default_value = 0.01
 
     return mat
 
 
 def create_table_material() -> bpy.types.Material:
-    """Create a wooden table surface material."""
+    """Create a wooden table surface material with grain texture."""
     mat = bpy.data.materials.new(name="table_surface")
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
@@ -164,6 +228,17 @@ def create_table_material() -> bpy.types.Material:
     bsdf.inputs["Roughness"].default_value = 0.55
     bsdf.inputs["Metallic"].default_value = 0.0
 
+    # Add wood grain texture to table
+    tex_coord = nodes.new("ShaderNodeTexCoord")
+    noise = nodes.new("ShaderNodeTexNoise")
+    bump = nodes.new("ShaderNodeBump")
+    noise.inputs["Scale"].default_value = 8.0
+    noise.inputs["Detail"].default_value = 6.0
+    bump.inputs["Strength"].default_value = 0.03
+    links.new(tex_coord.outputs["Object"], noise.inputs["Vector"])
+    links.new(noise.outputs["Fac"], bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
     return mat
 
 
@@ -172,13 +247,13 @@ def create_table_material() -> bpy.types.Material:
 # ---------------------------------------------------------------------------
 
 PIECE_NAMES = ["Pawn", "Rook", "Knight", "Bishop", "Queen", "King"]
-FEN_MAP = {"p": "Pawn", "r": "Rook", "n": "Knight", "b": "Bishop", "q": "Queen", "k": "King"}
-
-# Relative heights for proper Staunton proportions
-# These will be scaled to match the board
-PIECE_HEIGHTS = {
-    "Pawn": 0.55, "Rook": 0.65, "Knight": 0.70,
-    "Bishop": 0.80, "Queen": 0.90, "King": 1.0,
+FEN_MAP = {
+    "p": "Pawn",
+    "r": "Rook",
+    "n": "Knight",
+    "b": "Bishop",
+    "q": "Queen",
+    "k": "King",
 }
 
 
@@ -186,7 +261,7 @@ def load_piece_models(models_dir: str, board_size: float) -> dict:
     """Import STL piece models, scale to board, and return templates.
 
     The STL models from clarkerubber/Staunton-Pieces have their height
-    along the Y axis. We rotate -90° around X to stand them upright (Z-up).
+    along the Y axis. We rotate -90 deg around X to stand them upright (Z-up).
     All pieces are scaled uniformly relative to the King's height so that
     the built-in Staunton proportions are preserved.
     """
@@ -247,26 +322,36 @@ def load_piece_models(models_dir: str, board_size: float) -> dict:
     return templates
 
 
+# Board elevation: board sits slightly above table
+BOARD_ELEVATION = 0.003  # 3mm
+
+
 def create_board(board_size: float, theme: dict) -> list:
-    """Create 8x8 chess board from individual square planes."""
+    """Create 8x8 chess board with rim/frame and table surface."""
     sq_size = board_size / 8.0
+    gap_fraction = 0.005  # 0.5% gap between squares
+    sq_render_size = sq_size * (1.0 - gap_fraction)
     squares = []
 
     light_mat = create_board_material(
-        "board_light", theme["light"], theme.get("texture_type", "vinyl"),
+        "board_light",
+        theme["light"],
+        theme.get("texture_type", "vinyl"),
     )
     dark_mat = create_board_material(
-        "board_dark", theme["dark"], theme.get("texture_type", "vinyl"),
+        "board_dark",
+        theme["dark"],
+        theme.get("texture_type", "vinyl"),
     )
 
     for rank in range(8):
         for file in range(8):
             bpy.ops.mesh.primitive_plane_add(
-                size=sq_size,
+                size=sq_render_size,
                 location=(
                     (file - 3.5) * sq_size,
                     (rank - 3.5) * sq_size,
-                    0.0,
+                    BOARD_ELEVATION,
                 ),
             )
             sq = bpy.context.active_object
@@ -276,8 +361,65 @@ def create_board(board_size: float, theme: dict) -> list:
             sq.data.materials.append(light_mat if is_light else dark_mat)
             squares.append(sq)
 
+    # Board base plane (visible through square gaps and under rim)
+    bpy.ops.mesh.primitive_plane_add(
+        size=board_size * 1.15,
+        location=(0, 0, BOARD_ELEVATION - 0.001),
+    )
+    base = bpy.context.active_object
+    base.name = "board_base"
+    base_color = theme.get("border_color", theme["dark"])
+    base_mat = create_board_material(
+        "board_base_mat",
+        base_color,
+        theme.get("texture_type", "wood"),
+    )
+    base.data.materials.append(base_mat)
+
+    # Board rim / border frame (4 bars around the playing area)
+    rim_width = board_size * 0.06
+    rim_height = 0.005  # 5mm raised rim
+    rim_color = theme.get("border_color", theme["dark"])
+    rim_mat = create_board_material(
+        "rim_mat",
+        rim_color,
+        theme.get("texture_type", "wood"),
+    )
+
+    half_board = board_size / 2.0
+    rim_specs = [
+        (
+            "rim_top",
+            (0, half_board + rim_width / 2, BOARD_ELEVATION + rim_height / 2),
+            (board_size + 2 * rim_width, rim_width, rim_height),
+        ),
+        (
+            "rim_bottom",
+            (0, -(half_board + rim_width / 2), BOARD_ELEVATION + rim_height / 2),
+            (board_size + 2 * rim_width, rim_width, rim_height),
+        ),
+        (
+            "rim_left",
+            (-(half_board + rim_width / 2), 0, BOARD_ELEVATION + rim_height / 2),
+            (rim_width, board_size, rim_height),
+        ),
+        (
+            "rim_right",
+            ((half_board + rim_width / 2), 0, BOARD_ELEVATION + rim_height / 2),
+            (rim_width, board_size, rim_height),
+        ),
+    ]
+
+    for rim_name, pos, scale in rim_specs:
+        bpy.ops.mesh.primitive_cube_add(size=1.0, location=pos)
+        rim_obj = bpy.context.active_object
+        rim_obj.name = rim_name
+        rim_obj.scale = scale
+        bpy.ops.object.transform_apply(scale=True)
+        rim_obj.data.materials.append(rim_mat)
+
     # Table surface (larger plane underneath)
-    bpy.ops.mesh.primitive_plane_add(size=board_size * 3.0, location=(0, 0, -0.002))
+    bpy.ops.mesh.primitive_plane_add(size=board_size * 3.0, location=(0, 0, 0))
     table = bpy.context.active_object
     table.name = "table_surface"
     table.data.materials.append(create_table_material())
@@ -286,7 +428,7 @@ def create_board(board_size: float, theme: dict) -> list:
 
 
 def setup_lighting(lighting_config: dict):
-    """Set up overhead lighting for the scene."""
+    """Set up 3-point lighting for the scene."""
     color_temp = lighting_config.get("color_temperature", 5200)
     intensity = lighting_config.get("overhead_intensity", 1.0)
 
@@ -294,58 +436,109 @@ def setup_lighting(lighting_config: dict):
     temp = color_temp / 100.0
     if temp <= 66:
         r = 1.0
-        g = max(0.0, min(1.0, (0.39 * (temp ** 0.5) - 0.63) / 2.5))
+        g = max(0.0, min(1.0, (0.39 * (temp**0.5) - 0.63) / 2.5))
     else:
         r = max(0.0, min(1.0, 1.29 * ((temp - 60) ** -0.133)))
         g = max(0.0, min(1.0, 1.13 * ((temp - 60) ** -0.0755)))
-    b = 1.0 if temp >= 66 else (
-        0.0 if temp <= 19 else max(0.0, min(1.0, (0.54 * ((temp - 10) ** 0.5) - 1.2) / 3.0))
+    b = (
+        1.0
+        if temp >= 66
+        else (
+            0.0
+            if temp <= 19
+            else max(
+                0.0, min(1.0, (0.54 * ((temp - 10) ** 0.5) - 1.2) / 3.0)
+            )
+        )
     )
 
-    # Sun light for consistent, uniform illumination
-    bpy.ops.object.light_add(type="SUN", location=(0.0, 0.0, 3.0))
+    # Key light: SUN for uniform directional illumination
+    # SUN lights use rotation for direction, not position
+    bpy.ops.object.light_add(type="SUN")
     sun = bpy.context.active_object
     sun.name = "sun_light"
-    sun.data.energy = 3.0 * intensity
+    sun.data.energy = 5.0 * intensity
     sun.data.color = (r, g, b)
-    sun.data.angle = math.radians(15)  # soft shadows
-    # Angle: coming from upper-front-left
-    sun.rotation_euler = (math.radians(45), math.radians(15), math.radians(-30))
+    sun.data.angle = math.radians(12)  # shadow softness
+    # Coming from upper-front-left
+    sun.rotation_euler = (
+        math.radians(55),
+        math.radians(10),
+        math.radians(-25),
+    )
 
-    # Fill area light from the other side
-    bpy.ops.object.light_add(type="AREA", location=(-1.0, -1.5, 1.5))
+    # Fill light: softer, from opposite side
+    bpy.ops.object.light_add(type="AREA", location=(-0.8, -1.2, 1.2))
     fill = bpy.context.active_object
     fill.name = "fill_light"
-    fill.data.energy = 100 * intensity
-    fill.data.size = 2.5
+    fill.data.energy = 30 * intensity
+    fill.data.size = 2.0
     fill.data.color = (r, g, b)
-    direction = mathutils.Vector((0, 0, 0)) - mathutils.Vector((-1.0, -1.5, 1.5))
+    direction = mathutils.Vector((0, 0, 0)) - mathutils.Vector(
+        (-0.8, -1.2, 1.2)
+    )
     fill.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
 
-    # Ambient / world lighting
+    # Rim/backlight: for depth separation
+    bpy.ops.object.light_add(type="AREA", location=(0.6, 1.0, 1.0))
+    rim = bpy.context.active_object
+    rim.name = "rim_light"
+    rim.data.energy = 15 * intensity
+    rim.data.size = 1.0
+    rim.data.color = (1.0, 1.0, 1.0)  # neutral white rim
+    direction = mathutils.Vector((0, 0, 0)) - mathutils.Vector((0.6, 1.0, 1.0))
+    rim.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+
+    # Environment: procedural gradient sky for ambient reflections
     world = bpy.data.worlds.get("World") or bpy.data.worlds.new("World")
     bpy.context.scene.world = world
     world.use_nodes = True
-    bg = world.node_tree.nodes.get("Background")
-    if bg:
-        bg.inputs["Color"].default_value = (0.05, 0.05, 0.06, 1.0)
-        bg.inputs["Strength"].default_value = 1.0
+    wt = world.node_tree
+    wt.nodes.clear()
+
+    bg = wt.nodes.new("ShaderNodeBackground")
+    w_output = wt.nodes.new("ShaderNodeOutputWorld")
+    wt.links.new(bg.outputs["Background"], w_output.inputs["Surface"])
+
+    # Gradient: dark floor -> mid-gray walls -> warm ceiling
+    tex_coord = wt.nodes.new("ShaderNodeTexCoord")
+    gradient = wt.nodes.new("ShaderNodeTexGradient")
+    color_ramp = wt.nodes.new("ShaderNodeValToRGB")
+    mapping = wt.nodes.new("ShaderNodeMapping")
+
+    wt.links.new(tex_coord.outputs["Generated"], mapping.inputs["Vector"])
+    mapping.inputs["Rotation"].default_value = (math.radians(90), 0, 0)
+    wt.links.new(mapping.outputs["Vector"], gradient.inputs["Vector"])
+    wt.links.new(gradient.outputs["Fac"], color_ramp.inputs["Fac"])
+
+    elements = color_ramp.color_ramp.elements
+    elements[0].position = 0.0
+    elements[0].color = (0.03, 0.03, 0.04, 1.0)  # dark floor
+    elements[1].position = 0.5
+    elements[1].color = (0.08, 0.08, 0.09, 1.0)  # walls
+    e2 = color_ramp.color_ramp.elements.new(0.85)
+    e2.color = (0.12, 0.11, 0.10, 1.0)  # warm ceiling
+
+    wt.links.new(color_ramp.outputs["Color"], bg.inputs["Color"])
+    bg.inputs["Strength"].default_value = 1.5
 
 
 def setup_camera(elevation_deg: float, azimuth_deg: float, board_size: float):
-    """Position camera to look at the board from given angle."""
+    """Position camera to look at the board center from given angle."""
     elev_rad = math.radians(max(elevation_deg, 15.0))
     azim_rad = math.radians(azimuth_deg)
 
-    # Distance from board center — adjusted for 35mm lens
-    distance = board_size * 2.0
+    # Camera distance — closer with longer lens for less distortion
+    distance = board_size * 1.4
 
     # Camera position in spherical coordinates
     x = distance * math.cos(elev_rad) * math.sin(azim_rad)
     y = -distance * math.cos(elev_rad) * math.cos(azim_rad)
     z = distance * math.sin(elev_rad)
 
-    cam_data = bpy.data.cameras.get("Camera") or bpy.data.cameras.new("Camera")
+    cam_data = bpy.data.cameras.get("Camera") or bpy.data.cameras.new(
+        "Camera"
+    )
     cam_obj = bpy.data.objects.get("Camera")
     if cam_obj is None:
         cam_obj = bpy.data.objects.new("Camera", cam_data)
@@ -353,25 +546,32 @@ def setup_camera(elevation_deg: float, azimuth_deg: float, board_size: float):
 
     cam_obj.location = (x, y, z)
 
-    # Point camera at board center using explicit Euler rotation
-    # Camera X rotation = 90° - elevation (0° = looking straight down, 90° = horizontal)
-    # Camera Z rotation = azimuth
-    cam_obj.rotation_euler = (elev_rad, 0, azim_rad)
+    # Point camera at board center using direction vector
+    target = mathutils.Vector((0, 0, BOARD_ELEVATION))
+    direction = target - cam_obj.location
+    cam_obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
 
-    cam_data.lens = 35
+    cam_data.lens = 50
+    cam_data.sensor_width = 36.0
     cam_data.clip_start = 0.01
     cam_data.clip_end = 100
 
     bpy.context.scene.camera = cam_obj
-    print(f"  Camera at ({x:.2f}, {y:.2f}, {z:.2f}), elev={elevation_deg:.0f}, azim={azimuth_deg:.0f}")
+    print(
+        f"  Camera at ({x:.2f}, {y:.2f}, {z:.2f}), "
+        f"elev={elevation_deg:.0f}, azim={azimuth_deg:.0f}"
+    )
 
 
 def setup_render(resolution: int):
-    """Configure EEVEE render settings."""
+    """Configure EEVEE render settings with proper color management."""
     scene = bpy.context.scene
 
     # EEVEE engine name varies by Blender version
-    if "BLENDER_EEVEE_NEXT" in bpy.types.RenderSettings.bl_rna.properties["engine"].enum_items:
+    if (
+        "BLENDER_EEVEE_NEXT"
+        in bpy.types.RenderSettings.bl_rna.properties["engine"].enum_items
+    ):
         scene.render.engine = "BLENDER_EEVEE_NEXT"
     else:
         scene.render.engine = "BLENDER_EEVEE"
@@ -383,21 +583,35 @@ def setup_render(resolution: int):
     scene.render.image_settings.color_mode = "RGB"
     scene.render.film_transparent = False
 
-    # Use Standard color management (Filmic makes things too dark)
-    scene.view_settings.view_transform = "Standard"
+    # Color management: prefer AgX (Blender 4+), then Filmic, then Standard
+    for transform in ("AgX", "Filmic", "Standard"):
+        try:
+            scene.view_settings.view_transform = transform
+            break
+        except Exception:
+            continue
     scene.view_settings.look = "None"
+    scene.view_settings.exposure = 0.0
+    scene.view_settings.gamma = 1.0
 
-    # EEVEE settings (attributes vary by version, set safely)
+    # EEVEE quality settings (attributes vary by version)
     eevee = scene.eevee
     for attr, val in [
-        ("taa_render_samples", 48),
+        ("taa_render_samples", 64),
         ("use_gtao", True),
+        ("gtao_distance", 0.2),
         ("use_bloom", False),
         ("use_ssr", True),
+        ("ssr_quality", 0.5),
         ("use_shadow_high_bitdepth", True),
+        ("shadow_cube_size", "512"),
+        ("shadow_cascade_size", "1024"),
     ]:
         if hasattr(eevee, attr):
-            setattr(eevee, attr, val)
+            try:
+                setattr(eevee, attr, val)
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -444,23 +658,31 @@ def place_pieces_from_fen(
                     new_obj.data = template.data.copy()
                     bpy.context.scene.collection.objects.link(new_obj)
 
-                    # Position on the board
+                    # Position on the board (raised by board elevation)
                     x = (file_idx - 3.5) * sq_size
                     y = (rank_idx - 3.5) * sq_size
-                    new_obj.location = (x, y, 0.0)
+                    new_obj.location = (x, y, BOARD_ELEVATION)
 
                     # Rotate knight to face sideways
                     if piece_name == "Knight":
-                        facing = math.radians(90) if is_white else math.radians(-90)
+                        facing = (
+                            math.radians(90)
+                            if is_white
+                            else math.radians(-90)
+                        )
                         new_obj.rotation_euler = (0, 0, facing)
 
                     # Assign material
                     new_obj.data.materials.clear()
-                    new_obj.data.materials.append(white_mat if is_white else black_mat)
+                    new_obj.data.materials.append(
+                        white_mat if is_white else black_mat
+                    )
 
                     new_obj.hide_set(False)
                     new_obj.hide_render = False
-                    new_obj.name = f"piece_{piece_name}_{file_idx}_{rank_idx}"
+                    new_obj.name = (
+                        f"piece_{piece_name}_{file_idx}_{rank_idx}"
+                    )
 
                     existing_pieces.append(new_obj)
 
@@ -507,10 +729,14 @@ def main():
     # Create piece materials
     mat_info = manifest["material"]
     white_mat = create_piece_material(
-        "piece_white", mat_info["white_color"], mat_info["type"],
+        "piece_white",
+        mat_info["white_color"],
+        mat_info["type"],
     )
     black_mat = create_piece_material(
-        "piece_black", mat_info["black_color"], mat_info["type"],
+        "piece_black",
+        mat_info["black_color"],
+        mat_info["type"],
     )
 
     # Lighting
@@ -527,7 +753,12 @@ def main():
 
         # Place pieces for this position
         place_pieces_from_fen(
-            fen, templates, white_mat, black_mat, board_size, placed_pieces,
+            fen,
+            templates,
+            white_mat,
+            black_mat,
+            board_size,
+            placed_pieces,
         )
 
         # Set camera
