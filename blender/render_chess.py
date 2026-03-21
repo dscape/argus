@@ -37,6 +37,14 @@ def parse_args():
     p.add_argument("--manifest", required=True)
     p.add_argument("--output-dir", required=True)
     p.add_argument("--resolution", type=int, default=448)
+    p.add_argument(
+        "--quality",
+        choices=["training", "high"],
+        default="high",
+        help="Render quality preset. 'training' is faster for dataset "
+        "generation (16 TAA samples, no SSR/GTAO). 'high' keeps "
+        "current settings (64 TAA, SSR, GTAO).",
+    )
     return p.parse_args(argv)
 
 
@@ -563,8 +571,40 @@ def setup_camera(elevation_deg: float, azimuth_deg: float, board_size: float):
     )
 
 
-def setup_render(resolution: int):
-    """Configure EEVEE render settings with proper color management."""
+_QUALITY_PRESETS = {
+    "training": {
+        "taa_render_samples": 16,
+        "use_gtao": False,
+        "gtao_distance": 0.2,
+        "use_bloom": False,
+        "use_ssr": False,
+        "ssr_quality": 0.25,
+        "use_shadow_high_bitdepth": False,
+        "shadow_cube_size": "256",
+        "shadow_cascade_size": "512",
+    },
+    "high": {
+        "taa_render_samples": 64,
+        "use_gtao": True,
+        "gtao_distance": 0.2,
+        "use_bloom": False,
+        "use_ssr": True,
+        "ssr_quality": 0.5,
+        "use_shadow_high_bitdepth": True,
+        "shadow_cube_size": "512",
+        "shadow_cascade_size": "1024",
+    },
+}
+
+
+def setup_render(resolution: int, quality: str = "high"):
+    """Configure EEVEE render settings with proper color management.
+
+    Args:
+        resolution: Output image resolution (square).
+        quality: Quality preset - 'training' for fast dataset generation
+            (16 TAA samples, no SSR/GTAO), 'high' for full quality.
+    """
     scene = bpy.context.scene
 
     # EEVEE engine name varies by Blender version
@@ -595,18 +635,9 @@ def setup_render(resolution: int):
     scene.view_settings.gamma = 1.0
 
     # EEVEE quality settings (attributes vary by version)
+    preset = _QUALITY_PRESETS.get(quality, _QUALITY_PRESETS["high"])
     eevee = scene.eevee
-    for attr, val in [
-        ("taa_render_samples", 64),
-        ("use_gtao", True),
-        ("gtao_distance", 0.2),
-        ("use_bloom", False),
-        ("use_ssr", True),
-        ("ssr_quality", 0.5),
-        ("use_shadow_high_bitdepth", True),
-        ("shadow_cube_size", "512"),
-        ("shadow_cascade_size", "1024"),
-    ]:
+    for attr, val in preset.items():
         if hasattr(eevee, attr):
             try:
                 setattr(eevee, attr, val)
@@ -713,7 +744,7 @@ def main():
 
     # --- Scene setup (done once per clip) ---
     clear_scene()
-    setup_render(resolution)
+    setup_render(resolution, quality=args.quality)
 
     # Board
     board_size = 1.0  # 1 meter board

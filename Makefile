@@ -1,6 +1,6 @@
 .PHONY: install dev test lint typecheck format train eval datagen infer clean \
        db-up db-down pipeline-install import-data crawl extract match download-videos generate-clips pipeline-stats \
-       dev-tools dev-tools-down
+       dev-tools dev-tools-down blender-server blender-server-stop
 
 install:
 	pip install -e .
@@ -78,3 +78,15 @@ dev-tools:
 
 dev-tools-down:
 	docker compose --profile dev-tools down
+
+# ── Blender render server ───────────────────────────────────
+
+BLENDER ?= $(shell which blender 2>/dev/null || echo "/Applications/Blender.app/Contents/MacOS/Blender")
+BLENDER_PORT ?= 9876
+
+blender-server:
+	$(BLENDER) --background --python blender/render_server.py -- \
+		--port $(BLENDER_PORT) --quality training $(ARGS)
+
+blender-server-stop:
+	@lsof -ti tcp:$(BLENDER_PORT) | xargs kill 2>/dev/null && echo "Blender server stopped" || echo "No server running on port $(BLENDER_PORT)"
