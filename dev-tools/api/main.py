@@ -7,7 +7,7 @@ for the developer tools web UI.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import calibration, clips, overlay, synthetic, video
+from api.routers import calibration, clips, crawl, overlay, synthetic, video
 
 app = FastAPI(title="Argus API", version="0.1.0")
 
@@ -23,6 +23,7 @@ app.include_router(calibration.router, prefix="/api/calibration", tags=["calibra
 app.include_router(clips.router, prefix="/api/clips", tags=["clips"])
 app.include_router(video.router, prefix="/api/video", tags=["video"])
 app.include_router(synthetic.router, prefix="/api/synthetic", tags=["synthetic"])
+app.include_router(crawl.router, prefix="/api/crawl", tags=["crawl"])
 
 
 @app.get("/api/health")

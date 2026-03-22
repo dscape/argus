@@ -13,6 +13,12 @@ const tools = [
     description: "Browse generated tensor clips and view aggregated stats.",
   },
   {
+    href: "/crawl",
+    title: "Crawl",
+    description:
+      "Manage YouTube channels, crawl video feeds, inspect title scores, and curate training candidates.",
+  },
+  {
     href: "/overlay-tester",
     title: "Overlay Tester",
     description:
