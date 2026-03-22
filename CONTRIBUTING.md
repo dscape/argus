@@ -59,8 +59,9 @@ Verify Blender: `blender --version` should show 4.0 or later. You can also set t
 
 ```bash
 git clone <repo-url> && cd argus
+cp .env.example .env    # fill in HF_TOKEN, API keys, etc.
 
-# Option 1: direnv (recommended) — auto-activates venv + installs deps on cd
+# Option 1: direnv (recommended) — auto-activates venv + loads .env on cd
 brew install direnv
 echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc  # or ~/.bashrc
 direnv allow  # first time only
@@ -81,7 +82,6 @@ make down     # stop everything
 
 ```bash
 make pipeline-install   # installs pipeline/ dependencies (psycopg, yt-dlp, etc.)
-cp .env.example .env    # fill in DATABASE_URL, YOUTUBE_API_KEY, ANTHROPIC_API_KEY
 ```
 
 PostgreSQL is already running via `make up`.
