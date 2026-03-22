@@ -7,6 +7,10 @@ import type {
   VideoMoveDetectionResponse,
   SyntheticScanResponse,
   SyntheticStatsResponse,
+  CrawlChannel,
+  CrawlChannelDetail,
+  CrawlVideosResponse,
+  QuotaStatus,
 } from "./types";
 
 // ── Overlay ─────────────────────────────────────────────────
@@ -137,6 +141,132 @@ export async function detectVideoMoves(
 
 export async function deleteVideoSession(sessionId: string): Promise<void> {
   await fetch(`/api/video/${sessionId}`, { method: "DELETE" });
+}
+
+// ── Crawl ───────────────────────────────────────────────────
+
+export async function listCrawlChannels(): Promise<CrawlChannel[]> {
+  const res = await fetch("/api/crawl/channels");
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function addCrawlChannel(handle: string): Promise<CrawlChannel> {
+  const res = await fetch("/api/crawl/channels", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ handle }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function toggleCrawlChannel(
+  channelId: string,
+  enabled: boolean
+): Promise<CrawlChannel> {
+  const res = await fetch(
+    `/api/crawl/channels/${encodeURIComponent(channelId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getCrawlChannelDetail(
+  channelId: string
+): Promise<CrawlChannelDetail> {
+  const res = await fetch(
+    `/api/crawl/channels/${encodeURIComponent(channelId)}`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function crawlChannel(
+  channelId: string
+): Promise<{ channel_id: string; new_videos: number }> {
+  const res = await fetch(
+    `/api/crawl/channels/${encodeURIComponent(channelId)}/crawl`,
+    { method: "POST" }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function crawlAllChannels(): Promise<{
+  channels_crawled: number;
+  total_new_videos: number;
+}> {
+  const res = await fetch("/api/crawl/crawl-all", { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listCrawlVideos(params: {
+  channel_id?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<CrawlVideosResponse> {
+  const qs = new URLSearchParams();
+  if (params.channel_id) qs.set("channel_id", params.channel_id);
+  if (params.status) qs.set("status", params.status);
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params.offset !== undefined) qs.set("offset", String(params.offset));
+  const res = await fetch(`/api/crawl/videos?${qs}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateVideoStatus(
+  videoId: string,
+  status: string | null
+): Promise<void> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/status`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    }
+  );
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function batchUpdateVideoStatus(
+  videoIds: string[],
+  status: string
+): Promise<{ updated: number }> {
+  const res = await fetch("/api/crawl/videos/batch-status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ video_ids: videoIds, status }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getQuotaStatus(): Promise<QuotaStatus> {
+  const res = await fetch("/api/crawl/quota");
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function classifyTitles(
+  videoIds: string[]
+): Promise<{ prompt: string }> {
+  const res = await fetch("/api/crawl/classify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ video_ids: videoIds }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 // ── Synthetic ────────────────────────────────────────────────

@@ -9,6 +9,7 @@ export const metadata: Metadata = {
 
 const navItems = [
   { href: "/synthetic", label: "Synthetic" },
+  { href: "/crawl", label: "Crawl" },
   { href: "/overlay-tester", label: "Overlay Tester" },
   { href: "/calibration", label: "Calibration" },
   { href: "/video-annotator", label: "Video Annotator" },

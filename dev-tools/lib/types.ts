@@ -110,6 +110,47 @@ export interface VideoMoveDetectionResponse {
   segments: GameSegmentResponse[];
 }
 
+// Crawl
+export interface CrawlChannel {
+  channel_id: string;
+  channel_handle: string | null;
+  channel_name: string;
+  tier: number;
+  uploads_playlist_id: string | null;
+  last_crawled_at: string | null;
+  enabled: boolean;
+  notes: string | null;
+  video_count: number;
+}
+
+export interface CrawlChannelDetail extends CrawlChannel {
+  status_counts: Record<string, number>;
+}
+
+export interface CrawlVideo {
+  video_id: string;
+  channel_id: string;
+  channel_handle: string | null;
+  title: string;
+  description: string | null;
+  published_at: string | null;
+  screening_status: string | null;
+  screening_confidence: number | null;
+  title_score: number;
+  title_is_candidate: boolean;
+}
+
+export interface CrawlVideosResponse {
+  videos: CrawlVideo[];
+  total: number;
+}
+
+export interface QuotaStatus {
+  daily_usage: number;
+  remaining: number;
+  daily_limit: number;
+}
+
 // Synthetic data monitoring
 export interface SyntheticClipFile {
   filename: string;
