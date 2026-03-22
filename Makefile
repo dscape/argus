@@ -3,36 +3,41 @@
        dev-tools dev-tools-down blender-server blender-server-stop \
        up down
 
+# ── Use venv Python/pip so targets work without activation ──
+
+PYTHON := .venv/bin/python3
+PIP := .venv/bin/pip
+
 install:
-	pip install -e .
+	$(PIP) install -e .
 
 dev:
-	pip install -e ".[dev]"
+	$(PIP) install -e ".[dev]"
 
 test:
-	pytest tests/ -v
+	$(PYTHON) -m pytest tests/ -v
 
 lint:
-	ruff check src/ tests/ scripts/
+	$(PYTHON) -m ruff check src/ tests/ scripts/
 
 typecheck:
-	mypy src/argus/
+	$(PYTHON) -m mypy src/argus/
 
 format:
-	ruff format src/ tests/ scripts/
-	ruff check --fix src/ tests/ scripts/
+	$(PYTHON) -m ruff format src/ tests/ scripts/
+	$(PYTHON) -m ruff check --fix src/ tests/ scripts/
 
 train:
-	python3 scripts/train.py $(ARGS)
+	$(PYTHON) scripts/train.py $(ARGS)
 
 eval:
-	python3 scripts/evaluate.py $(ARGS)
+	$(PYTHON) scripts/evaluate.py $(ARGS)
 
 datagen:
-	python3 scripts/generate_data.py $(ARGS)
+	$(PYTHON) scripts/generate_data.py $(ARGS)
 
 infer:
-	python3 scripts/infer.py $(ARGS)
+	$(PYTHON) scripts/infer.py $(ARGS)
 
 clean:
 	rm -rf build/ dist/ *.egg-info .pytest_cache .mypy_cache __pycache__
@@ -47,30 +52,30 @@ db-down:
 	docker compose down
 
 pipeline-install:
-	pip install -r pipeline/requirements.txt
+	$(PIP) install -r pipeline/requirements.txt
 
 import-data:
-	python3 -m pipeline.cli import-players
-	python3 -m pipeline.cli import-pgns $(ARGS)
-	python3 -m pipeline.cli seed-channels
+	$(PYTHON) -m pipeline.cli import-players
+	$(PYTHON) -m pipeline.cli import-pgns $(ARGS)
+	$(PYTHON) -m pipeline.cli seed-channels
 
 crawl:
-	python3 -m pipeline.cli crawl $(ARGS)
+	$(PYTHON) -m pipeline.cli crawl $(ARGS)
 
 extract:
-	python3 -m pipeline.cli extract $(ARGS)
+	$(PYTHON) -m pipeline.cli extract $(ARGS)
 
 match:
-	python3 -m pipeline.cli match $(ARGS)
+	$(PYTHON) -m pipeline.cli match $(ARGS)
 
 download-videos:
-	python3 -m pipeline.cli download $(ARGS)
+	$(PYTHON) -m pipeline.cli download $(ARGS)
 
 generate-clips:
-	python3 -m pipeline.cli generate-clips $(ARGS)
+	$(PYTHON) -m pipeline.cli generate-clips $(ARGS)
 
 pipeline-stats:
-	python3 -m pipeline.cli stats
+	$(PYTHON) -m pipeline.cli stats
 
 # ── Dev tools targets ────────────────────────────────────────
 
