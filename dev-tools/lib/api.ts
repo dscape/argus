@@ -11,6 +11,8 @@ import type {
   CrawlChannelDetail,
   CrawlVideosResponse,
   QuotaStatus,
+  InspectResult,
+  InspectJobStatus,
 } from "./types";
 
 // ── Overlay ─────────────────────────────────────────────────
@@ -207,6 +209,16 @@ export async function crawlAllChannels(): Promise<{
   return res.json();
 }
 
+export async function getVideoCounts(
+  channelId?: string
+): Promise<Record<string, number>> {
+  const qs = new URLSearchParams();
+  if (channelId) qs.set("channel_id", channelId);
+  const res = await fetch(`/api/crawl/videos/counts?${qs}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function listCrawlVideos(params: {
   channel_id?: string;
   status?: string;
@@ -251,11 +263,74 @@ export async function batchUpdateVideoStatus(
   return res.json();
 }
 
+export async function screenVideos(params?: {
+  channel_id?: string;
+  limit?: number;
+}): Promise<{ screened: number; candidates: number; rejected: number }> {
+  const res = await fetch("/api/crawl/screen", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params ?? {}),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function getQuotaStatus(): Promise<QuotaStatus> {
   const res = await fetch("/api/crawl/quota");
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+export async function autoClassifyTitles(params?: {
+  channel_id?: string;
+  limit?: number;
+}): Promise<{ classified: number; candidates: number; rejected: number }> {
+  const res = await fetch("/api/crawl/auto-classify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params ?? {}),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── Inspection ──────────────────────────────────────────────
+
+export async function inspectVideo(
+  videoId: string
+): Promise<InspectResult> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/inspect`,
+    { method: "POST" }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function batchInspectVideos(
+  videoIds: string[]
+): Promise<{ job_id: string }> {
+  const res = await fetch("/api/crawl/videos/batch-inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ video_ids: videoIds }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getInspectJobStatus(
+  jobId: string
+): Promise<InspectJobStatus> {
+  const res = await fetch(
+    `/api/crawl/videos/inspect-job/${encodeURIComponent(jobId)}`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── AI Classification ───────────────────────────────────────
 
 export async function classifyTitles(
   videoIds: string[]

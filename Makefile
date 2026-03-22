@@ -1,5 +1,5 @@
 .PHONY: install dev test lint typecheck format train eval datagen infer clean \
-       db-up db-down pipeline-install seed-channels crawl screen download generate-clips pipeline-stats \
+       db-up db-down pipeline-install seed-channels crawl screen inspect download generate-clips pipeline-stats \
        dev-tools dev-tools-down blender-server blender-server-stop \
        up down
 
@@ -62,6 +62,9 @@ crawl:
 
 screen:
 	$(PYTHON) -m pipeline.cli screen $(ARGS)
+
+inspect:
+	$(PYTHON) -m pipeline.cli inspect $(ARGS)
 
 download:
 	$(PYTHON) -m pipeline.cli download $(ARGS)

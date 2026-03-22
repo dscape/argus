@@ -135,6 +135,118 @@ def cmd_generate_clips(args):
     print(f"\nGenerated {total_clips} clip(s) total")
 
 
+def cmd_inspect(args):
+    """Inspect videos by extracting frames and detecting overlay + OTB."""
+    from pipeline.db.connection import get_conn
+    from pipeline.screen.dual_region_detector import (
+        screen_video,
+        overlay_bbox_to_json,
+    )
+
+    # Build query for target videos
+    if args.video_id:
+        # Single video
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT video_id, channel_handle, title FROM youtube_videos WHERE video_id = %s",
+                    (args.video_id,),
+                )
+                videos = cur.fetchall()
+    else:
+        # Batch by filters
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                query = """
+                    SELECT video_id, channel_handle, title
+                    FROM youtube_videos
+                    WHERE 1=1
+                """
+                params: list = []
+
+                status_filter = args.status or "candidate"
+                if status_filter == "unscreened":
+                    query += " AND screening_status IS NULL"
+                else:
+                    query += " AND screening_status = %s"
+                    params.append(status_filter)
+
+                if args.channel:
+                    query += " AND channel_handle = %s"
+                    params.append(args.channel)
+
+                query += " ORDER BY published_at DESC"
+
+                if args.limit:
+                    query += " LIMIT %s"
+                    params.append(args.limit)
+
+                cur.execute(query, params)
+                videos = cur.fetchall()
+
+    if not videos:
+        print("No videos found matching criteria.")
+        return
+
+    print(f"Inspecting {len(videos)} video(s)...\n")
+
+    approved_count = 0
+    rejected_count = 0
+    failed_count = 0
+
+    for video_id, channel_handle, title in videos:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        short_title = title[:60] + "..." if len(title) > 60 else title
+        print(f"  {video_id}  {short_title}")
+
+        try:
+            result = screen_video(url)
+
+            status = "approved" if result.approved else "rejected"
+            bbox_json = overlay_bbox_to_json(result.overlay_bbox)
+
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE youtube_videos
+                        SET screening_status = %s,
+                            screening_confidence = %s,
+                            overlay_bbox = %s,
+                            has_otb_footage = %s,
+                            layout_type = COALESCE(%s, layout_type),
+                            updated_at = now()
+                        WHERE video_id = %s
+                        """,
+                        (
+                            status,
+                            result.otb_confidence,
+                            bbox_json,
+                            result.has_otb,
+                            "overlay" if result.has_overlay else (
+                                "otb_only" if result.has_otb else None
+                            ),
+                            video_id,
+                        ),
+                    )
+                    conn.commit()
+
+            overlay_str = f"overlay={result.overlay_score:.2f}" if result.has_overlay else "no overlay"
+            otb_str = f"otb={result.otb_confidence:.2f}" if result.has_otb else "no otb"
+            print(f"    -> {status.upper()} ({overlay_str}, {otb_str})")
+
+            if result.approved:
+                approved_count += 1
+            else:
+                rejected_count += 1
+
+        except Exception as e:
+            failed_count += 1
+            print(f"    -> FAILED: {e}")
+
+    print(f"\nDone: {approved_count} approved, {rejected_count} rejected, {failed_count} failed")
+
+
 def cmd_overlay_test(args):
     """Test overlay detection + reading on a single image."""
     from pipeline.overlay.diagnostics import test_image
@@ -280,6 +392,13 @@ def main():
     p.add_argument("--channel", type=str, default=None, help="Screen specific channel handle")
     p.add_argument("--limit", type=int, default=None, help="Max videos to screen")
 
+    # inspect
+    p = subparsers.add_parser("inspect", help="Inspect videos for overlay + OTB via frame extraction")
+    p.add_argument("--video-id", type=str, default=None, help="Inspect a single video by ID")
+    p.add_argument("--channel", type=str, default=None, help="Filter by channel handle")
+    p.add_argument("--status", type=str, default=None, help="Filter by status (default: candidate)")
+    p.add_argument("--limit", type=int, default=None, help="Max videos to inspect")
+
     # download
     p = subparsers.add_parser("download", help="Download approved videos")
     p.add_argument("--limit", type=int, default=None, help="Max videos to download")
@@ -340,6 +459,7 @@ def main():
         "resolve-channels": cmd_resolve_channels,
         "crawl": cmd_crawl,
         "screen": cmd_screen,
+        "inspect": cmd_inspect,
         "download": cmd_download,
         "calibrate": cmd_calibrate,
         "generate-clips": cmd_generate_clips,

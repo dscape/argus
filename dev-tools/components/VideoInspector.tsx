@@ -1,14 +1,19 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   listCrawlVideos,
   updateVideoStatus,
   batchUpdateVideoStatus,
+  getVideoCounts,
+  screenVideos,
+  inspectVideo,
+  batchInspectVideos,
+  getInspectJobStatus,
 } from "@/lib/api";
-import type { CrawlChannel, CrawlVideo } from "@/lib/types";
+import type { CrawlChannel, CrawlVideo, InspectResult, InspectJobStatus } from "@/lib/types";
 
 interface VideoInspectorProps {
   channels: CrawlChannel[];
@@ -44,6 +49,60 @@ function scoreColor(score: number): string {
   return "bg-muted-foreground/30";
 }
 
+function InspectResultPanel({
+  result,
+  onCollapse,
+}: {
+  result: InspectResult;
+  onCollapse: () => void;
+}) {
+  return (
+    <div className="space-y-2 mt-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Badge className={result.has_overlay ? "bg-green-600 text-white text-xs" : "bg-red-500 text-white text-xs"}>
+          Overlay: {result.has_overlay ? "Yes" : "No"}
+          {result.has_overlay && ` (${result.overlay_score.toFixed(2)})`}
+        </Badge>
+        <Badge className={result.has_otb ? "bg-green-600 text-white text-xs" : "bg-red-500 text-white text-xs"}>
+          OTB: {result.has_otb ? "Yes" : "No"}
+          {result.has_otb && ` (${result.otb_confidence.toFixed(2)})`}
+        </Badge>
+        <Badge className={result.approved ? "bg-green-600 text-white text-xs" : "bg-red-500 text-white text-xs"}>
+          {result.approved ? "Approved" : "Rejected"}
+        </Badge>
+        <button
+          onClick={onCollapse}
+          className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+        >
+          collapse
+        </button>
+      </div>
+      {result.frames.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {result.frames.map((frame, i) => (
+            <div key={i} className="flex-shrink-0 space-y-1">
+              <img
+                src={`data:image/jpeg;base64,${frame.image_base64}`}
+                alt={`Frame ${frame.label}`}
+                className="h-24 rounded border"
+              />
+              <div className="text-[10px] text-center text-muted-foreground">
+                {frame.label}
+                {frame.overlay_found && (
+                  <span className="ml-1 text-green-600">OVR</span>
+                )}
+                {frame.otb_found && (
+                  <span className="ml-1 text-green-600">OTB</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function VideoInspector({
   channels,
   initialChannelId,
@@ -59,21 +118,35 @@ export default function VideoInspector({
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
+  const [screening, setScreening] = useState(false);
+  const [screenResult, setScreenResult] = useState<string | null>(null);
+  const [inspecting, setInspecting] = useState<Set<string>>(new Set());
+  const [inspectResults, setInspectResults] = useState<Map<string, InspectResult>>(new Map());
+  const [expandedInspect, setExpandedInspect] = useState<Set<string>>(new Set());
+  const [batchJob, setBatchJob] = useState<{ id: string; total: number; completed: number } | null>(null);
 
   useEffect(() => {
     if (initialChannelId) setChannelId(initialChannelId);
   }, [initialChannelId]);
 
-  const loadVideos = useCallback(async () => {
-    if (!channelId) {
-      setVideos([]);
-      setTotal(0);
-      return;
+  const loadCounts = useCallback(async () => {
+    try {
+      setStatusCounts(await getVideoCounts(channelId ?? undefined));
+    } catch {
+      // best-effort
     }
+  }, [channelId]);
+
+  useEffect(() => {
+    loadCounts();
+  }, [loadCounts]);
+
+  const loadVideos = useCallback(async () => {
     setLoading(true);
     try {
       const data = await listCrawlVideos({
-        channel_id: channelId,
+        channel_id: channelId ?? undefined,
         status: statusFilter ?? undefined,
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
@@ -110,6 +183,7 @@ export default function VideoInspector({
             : v
         )
       );
+      loadCounts();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to update status");
     }
@@ -127,9 +201,99 @@ export default function VideoInspector({
         )
       );
       setSelected(new Set());
+      loadCounts();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Batch update failed");
     }
+  };
+
+  const handleScreen = async () => {
+    setScreening(true);
+    setScreenResult(null);
+    try {
+      const result = await screenVideos({
+        channel_id: channelId ?? undefined,
+      });
+      setScreenResult(
+        `Screened ${result.screened}: ${result.candidates} candidates, ${result.rejected} rejected`
+      );
+      loadVideos();
+      loadCounts();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Screening failed");
+    } finally {
+      setScreening(false);
+    }
+  };
+
+  const handleInspect = async (videoId: string) => {
+    setInspecting((prev) => new Set(prev).add(videoId));
+    setError(null);
+    try {
+      const result = await inspectVideo(videoId);
+      setInspectResults((prev) => new Map(prev).set(videoId, result));
+      setExpandedInspect((prev) => new Set(prev).add(videoId));
+      // Update local video status
+      setVideos((prev) =>
+        prev.map((v) =>
+          v.video_id === videoId
+            ? { ...v, screening_status: result.status }
+            : v
+        )
+      );
+      loadCounts();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Inspection failed");
+    } finally {
+      setInspecting((prev) => {
+        const next = new Set(prev);
+        next.delete(videoId);
+        return next;
+      });
+    }
+  };
+
+  const handleBatchInspect = async () => {
+    if (selected.size === 0) return;
+    setError(null);
+    try {
+      const { job_id } = await batchInspectVideos(Array.from(selected));
+      setBatchJob({ id: job_id, total: selected.size, completed: 0 });
+      setSelected(new Set());
+      // Start polling
+      const poll = setInterval(async () => {
+        try {
+          const status = await getInspectJobStatus(job_id);
+          setBatchJob({ id: job_id, total: status.total, completed: status.completed });
+          if (status.status === "done") {
+            clearInterval(poll);
+            setBatchJob(null);
+            setScreenResult(
+              `Inspected ${status.total}: ${status.approved} approved, ${status.rejected} rejected${
+                status.failed ? `, ${status.failed} failed` : ""
+              }`
+            );
+            loadVideos();
+            loadCounts();
+          }
+        } catch {
+          clearInterval(poll);
+          setBatchJob(null);
+          setError("Failed to poll inspection job");
+        }
+      }, 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Batch inspection failed");
+    }
+  };
+
+  const toggleInspectExpand = (videoId: string) => {
+    setExpandedInspect((prev) => {
+      const next = new Set(prev);
+      if (next.has(videoId)) next.delete(videoId);
+      else next.add(videoId);
+      return next;
+    });
   };
 
   const toggleSelect = (videoId: string) => {
@@ -168,7 +332,7 @@ export default function VideoInspector({
           onChange={(e) => setChannelId(e.target.value || null)}
           className="rounded-md border bg-background px-3 py-2 text-sm min-w-[200px]"
         >
-          <option value="">Select a channel...</option>
+          <option value="">All Channels</option>
           {channels.map((ch) => (
             <option key={ch.channel_id} value={ch.channel_id}>
               {ch.channel_name} ({ch.video_count})
@@ -188,9 +352,24 @@ export default function VideoInspector({
               }`}
             >
               {f.label}
+              {statusCounts[f.value ?? "all"] !== undefined && (
+                <span className="ml-1 opacity-60">
+                  ({statusCounts[f.value ?? "all"]})
+                </span>
+              )}
             </button>
           ))}
         </div>
+
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 text-xs"
+          onClick={handleScreen}
+          disabled={screening || (statusCounts.unscreened ?? 0) === 0}
+        >
+          {screening ? "Screening..." : "Screen Unscreened"}
+        </Button>
 
         <div className="flex items-center gap-1 ml-auto">
           <button
@@ -225,12 +404,29 @@ export default function VideoInspector({
         </div>
       )}
 
+      {screenResult && (
+        <div className="rounded-md bg-primary/10 border border-primary/20 p-3 text-sm">
+          {screenResult}
+          <button onClick={() => setScreenResult(null)} className="ml-2 underline text-xs">
+            dismiss
+          </button>
+        </div>
+      )}
+
       {/* Batch actions */}
       {selected.size > 0 && (
         <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50 border text-sm">
           <span className="text-muted-foreground">
             {selected.size} selected
           </span>
+          <Button
+            size="sm"
+            className="h-7 text-xs bg-blue-600 hover:bg-blue-700"
+            onClick={handleBatchInspect}
+            disabled={!!batchJob}
+          >
+            Inspect
+          </Button>
           <Button
             size="sm"
             className="h-7 text-xs bg-green-600 hover:bg-green-700"
@@ -257,11 +453,25 @@ export default function VideoInspector({
         </div>
       )}
 
-      {!channelId ? (
-        <div className="text-sm text-muted-foreground py-8 text-center">
-          Select a channel to browse videos.
+      {/* Batch inspection progress */}
+      {batchJob && (
+        <div className="rounded-md bg-blue-500/10 border border-blue-500/20 p-3 text-sm">
+          <div className="flex items-center gap-2">
+            <div className="h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            <span>
+              Inspecting {batchJob.completed}/{batchJob.total} videos...
+            </span>
+          </div>
+          <div className="mt-2 h-1.5 bg-muted rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 transition-all duration-300"
+              style={{ width: `${(batchJob.completed / batchJob.total) * 100}%` }}
+            />
+          </div>
         </div>
-      ) : loading ? (
+      )}
+
+      {loading ? (
         <div className="text-sm text-muted-foreground py-8 text-center">
           Loading videos...
         </div>
@@ -292,8 +502,8 @@ export default function VideoInspector({
             </thead>
             <tbody>
               {videos.map((v) => (
+                <Fragment key={v.video_id}>
                 <tr
-                  key={v.video_id}
                   className={`border-b last:border-b-0 hover:bg-muted/30 ${
                     selected.has(v.video_id) ? "bg-primary/5" : ""
                   }`}
@@ -334,6 +544,23 @@ export default function VideoInspector({
                   </td>
                   <td className="px-3 py-2 text-right">
                     <div className="flex items-center justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 text-xs text-blue-600 hover:text-blue-700"
+                        onClick={() => handleInspect(v.video_id)}
+                        disabled={inspecting.has(v.video_id)}
+                      >
+                        {inspecting.has(v.video_id) ? (
+                          <span className="flex items-center gap-1">
+                            <span className="h-3 w-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                          </span>
+                        ) : inspectResults.has(v.video_id) ? (
+                          "Re-inspect"
+                        ) : (
+                          "Inspect"
+                        )}
+                      </Button>
                       {v.screening_status !== "approved" && (
                         <Button
                           size="sm"
@@ -361,6 +588,18 @@ export default function VideoInspector({
                     </div>
                   </td>
                 </tr>
+                {/* Inline inspection results */}
+                {expandedInspect.has(v.video_id) && inspectResults.has(v.video_id) && (
+                  <tr className="bg-muted/30">
+                    <td colSpan={6} className="px-3 py-3">
+                      <InspectResultPanel
+                        result={inspectResults.get(v.video_id)!}
+                        onCollapse={() => toggleInspectExpand(v.video_id)}
+                      />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -412,6 +651,23 @@ export default function VideoInspector({
                   </div>
                 </div>
                 <div className="flex gap-1">
+                  <Button
+                    size="sm"
+                    className="h-7 text-xs flex-1 bg-blue-600 hover:bg-blue-700"
+                    onClick={() => handleInspect(v.video_id)}
+                    disabled={inspecting.has(v.video_id)}
+                  >
+                    {inspecting.has(v.video_id) ? (
+                      <span className="flex items-center gap-1">
+                        <span className="h-3 w-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Inspecting
+                      </span>
+                    ) : inspectResults.has(v.video_id) ? (
+                      "Re-inspect"
+                    ) : (
+                      "Inspect"
+                    )}
+                  </Button>
                   {v.screening_status !== "approved" && (
                     <Button
                       size="sm"
@@ -436,6 +692,13 @@ export default function VideoInspector({
                     </Button>
                   )}
                 </div>
+                {/* Inline inspection results */}
+                {expandedInspect.has(v.video_id) && inspectResults.has(v.video_id) && (
+                  <InspectResultPanel
+                    result={inspectResults.get(v.video_id)!}
+                    onCollapse={() => toggleInspectExpand(v.video_id)}
+                  />
+                )}
               </div>
             </div>
           ))}

@@ -151,6 +151,52 @@ export interface QuotaStatus {
   daily_limit: number;
 }
 
+// Video frame inspection
+export interface InspectFrame {
+  label: string;
+  overlay_found: boolean;
+  overlay_score: number;
+  overlay_bbox: number[] | null;
+  otb_found: boolean;
+  otb_confidence: number;
+  image_base64: string;
+}
+
+export interface InspectResult {
+  video_id: string;
+  title: string;
+  has_overlay: boolean;
+  has_otb: boolean;
+  overlay_score: number;
+  otb_confidence: number;
+  approved: boolean;
+  status: string;
+  frames: InspectFrame[];
+}
+
+export interface InspectJobResult {
+  video_id: string;
+  approved: boolean;
+  has_overlay?: boolean;
+  has_otb?: boolean;
+  overlay_score?: number;
+  otb_confidence?: number;
+  status?: string;
+  error?: string;
+}
+
+export interface InspectJobStatus {
+  job_id: string;
+  status: "running" | "done";
+  total: number;
+  completed: number;
+  approved: number;
+  rejected: number;
+  failed: number;
+  current_video: string | null;
+  results: InspectJobResult[];
+}
+
 // Synthetic data monitoring
 export interface SyntheticClipFile {
   filename: string;
