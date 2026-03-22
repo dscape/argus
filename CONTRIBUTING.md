@@ -2,41 +2,41 @@
 
 ## Prerequisites
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Python | 3.10+ | ML code and pipeline |
-| Node.js | 18+ | Dev tools web UI |
-| Docker | Latest | PostgreSQL + dev tools |
-| Cairo | Latest | SVG rendering for synthetic data |
-| Blender | 4.0+ | 3D synthetic data rendering (optional) |
-| ffmpeg | Latest | Frame extraction from videos |
+| Tool | Version | Purpose | Install (macOS) |
+|------|---------|---------|-----------------|
+| Python | 3.10+ | ML code and pipeline | `brew install python@3.10` |
+| Node.js | 18+ | Dev tools web UI | `brew install node` |
+| Docker | Latest | PostgreSQL + dev tools | `brew install --cask docker` |
+| Cairo | Latest | SVG rendering for synthetic data | `brew install cairo` |
+| Blender | 4.0+ | 3D synthetic data rendering | `brew install --cask blender` |
+| ffmpeg | Latest | Frame extraction from videos | `brew install ffmpeg` |
 
-### Install Cairo
+<details>
+<summary>Linux install instructions</summary>
 
+**Cairo:**
 ```bash
-# macOS
-brew install cairo
-
 # Ubuntu / Debian
 sudo apt-get install libcairo2-dev
-
 # Fedora
 sudo dnf install cairo-devel
 ```
 
-### Install Blender (optional, for 3D data generation)
-
+**Blender:**
 ```bash
-# macOS
-brew install --cask blender
-
 # Ubuntu / Debian
 sudo snap install blender --classic
-
 # Or download from https://www.blender.org/download/
 ```
 
-Verify: `blender --version` should show 4.0 or later. You can also set the `BLENDER_PATH` environment variable to point to a custom Blender install.
+**ffmpeg:**
+```bash
+# Ubuntu / Debian
+sudo apt-get install ffmpeg
+```
+</details>
+
+Verify Blender: `blender --version` should show 4.0 or later. You can also set the `BLENDER_PATH` environment variable to point to a custom Blender install.
 
 ---
 
