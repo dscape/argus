@@ -14,7 +14,6 @@ Argus reconstructs PGN game records from tournament video by framing move recogn
 - [Quick Start: Data Pipeline](#quick-start-data-pipeline)
 - [Quick Start: Dev Tools](#quick-start-dev-tools)
 - [Data Pipeline](#data-pipeline)
-- [Overlay Pipeline](#overlay-pipeline)
 - [Data Generation](#data-generation)
 - [Training](#training)
 - [Inference](#inference)
@@ -55,17 +54,16 @@ graph LR
 ```mermaid
 graph LR
     subgraph "Data Pipeline"
-        A[YouTube Channels] --> B[Crawl & Extract]
-        C[FIDE Players + PGN Archives] --> D[Import]
-        B --> E[Match Games to Videos]
-        D --> E
-        E --> F[Download Videos]
-        F --> G[Generate Training Clips]
+        A[YouTube Channels] --> B[Crawl]
+        B --> C[Screen — title filter + frame sampling]
+        C --> D[Download Videos]
+        D --> E[Calibrate Overlay Layout]
+        E --> F[Generate Training Clips]
     end
 
     subgraph "Data Generation"
         SYN[Synthetic 3D Blender] --> CLIPS[".pt clips"]
-        G --> CLIPS
+        F --> CLIPS
     end
 
     subgraph "Training"
@@ -86,7 +84,7 @@ The codebase is organized into 5 independent domains. Pick the one you're workin
 
 | Domain | Folder | Purpose | Dependencies |
 |--------|--------|---------|-------------|
-| **Data Pipeline** | `pipeline/` | Curate training data: crawl YouTube, extract metadata, match games, generate clips | PostgreSQL, YouTube API key |
+| **Data Pipeline** | `pipeline/` | Curate training data: crawl YouTube, screen videos, generate overlay clips | PostgreSQL, YouTube API key |
 | **Data Generation** | `src/argus/datagen/`, `blender/` | Generate synthetic training clips (3D Blender rendering) | Blender 4.0+ |
 | **Training** | `src/argus/model/`, `src/argus/training/`, `scripts/train.py` | Train the Argus model in 3 phases | PyTorch, GPU, Hydra |
 | **Inference** | `src/argus/inference/`, `scripts/infer.py` | Run a trained model on video files to produce PGN | PyTorch, trained checkpoint |
@@ -159,21 +157,20 @@ make train ARGS="data.data_dir=data training.wandb.enabled=false"
 
 ## Quick Start: Data Pipeline
 
-Curate real training data from YouTube + PGN archives. Requires Docker and API keys.
+Curate real training data from YouTube overlay videos. Requires Docker and a YouTube API key.
 
 ```bash
 brew install cairo  # macOS — see CONTRIBUTING.md for other platforms
 
 make up
 make pipeline-install
-cp .env.example .env  # Fill in DATABASE_URL, YOUTUBE_API_KEY, ANTHROPIC_API_KEY
+cp .env.example .env  # Fill in DATABASE_URL, YOUTUBE_API_KEY
 
-make import-data       # Load FIDE players + PGN games + seed channels
+make seed-channels     # Load YouTube channels from channels.yaml
 make crawl             # Fetch video metadata from YouTube
-make extract           # Parse titles/descriptions for player names, events
-make match             # Score game-video pairs
-make download-videos   # Fetch matched videos
-make generate-clips    # Convert to .pt training clips
+make screen            # Title filter + frame sampling for overlay/OTB detection
+make download          # Fetch approved videos via yt-dlp
+make generate-clips    # Overlay FEN reading + move detection → .pt training clips
 ```
 
 ## Quick Start: Dev Tools
@@ -196,15 +193,13 @@ This starts PostgreSQL, the FastAPI backend, and the Next.js frontend. Stop with
 
 > **Domain: Pipeline** — `pipeline/`
 
-The pipeline sources real tournament games from PGN archives and matches them to YouTube chess commentary videos, producing annotated training clips with frame-level move alignment.
+The pipeline sources real chess games from YouTube commentary videos that include a rendered 2D board overlay (lichess, chess.com streams). It screens videos for overlay presence, reads board state directly from overlay pixels, detects moves via FEN comparison, and produces annotated training clips with frame-level move alignment.
 
 ### Pipeline Flow
 
 ```mermaid
 graph TD
-    subgraph "1. Import"
-        P[players.zip] -->|player_importer| DB_P[fide_players + player_aliases]
-        G[pgns.zip] -->|pgn_importer| DB_G["games (~3.3M)"]
+    subgraph "1. Seed"
         CH[channels.yaml] -->|channel_seeder| DB_CH["crawl_channels (~40)"]
     end
 
@@ -214,102 +209,61 @@ graph TD
         YT -->|raw JSON| DB_R[youtube_api_raw]
     end
 
-    subgraph "3. Extract"
-        DB_V -->|title_parser + description_parser| META[Extracted metadata]
-        META -->|player_normalizer| FIDE[FIDE ID resolution]
-        META -.->|claude_extractor| CLAUDE[Claude fallback for hard titles]
+    subgraph "3. Screen"
+        DB_V -->|title_filter| TF[Title keyword filter]
+        TF -->|dual_region_detector| DRD["Frame sampling: overlay + OTB detection"]
+        DRD --> DB_S["youtube_videos (screening_status, overlay_bbox, has_otb_footage)"]
     end
 
-    subgraph "4. Match"
-        FIDE --> MATCH[game_matcher]
-        DB_G --> MATCH
-        MATCH -->|scoring: 6 signals| DB_L[game_video_links]
+    subgraph "4. Download"
+        DB_S -->|video_downloader / yt-dlp| VID["data/videos/"]
     end
 
-    subgraph "5. Download"
-        DB_L -->|video_downloader / yt-dlp| VID["data/videos/"]
+    subgraph "5. Calibrate"
+        VID --> CAL["Per-channel overlay/camera crop regions"]
     end
 
     subgraph "6. Generate Clips"
-        VID --> OTB{Video Type?}
-        OTB -->|OTB camera| CLIP_OTB["Board detect > Warp > Move detect > PGN align"]
-        OTB -->|2D overlay| CLIP_OVR["FEN read > Move detect > Align"]
-        CLIP_OTB --> PT[.pt training clips]
-        CLIP_OVR --> PT
+        CAL --> READ["OverlayReader: frame to FEN"]
+        READ --> MOVE["OverlayMoveDetector: FEN diffs to legal moves"]
+        MOVE --> CLIP["OverlayClipGenerator: camera frames + moves to .pt"]
+        CLIP --> PT[.pt training clips]
     end
 ```
-
-### Data Files
-
-Download and place in `data/chess/` before running import:
-
-- **`data/chess/players.zip`** — FIDE player records (JSON). Source: [FIDE ratings](https://ratings.fide.com/download_lists.phtml).
-- **`data/chess/pgns.zip`** — PGN game archives (~3.3M games). Source: [TWIC](https://theweekinchess.com/twic).
 
 ### Pipeline Stages
 
 | # | Stage | Command | What it does |
 |---|-------|---------|-------------|
-| 1 | Import | `make import-data` | Load FIDE players (+ aliases), PGN games, YouTube channels into PostgreSQL |
+| 1 | Seed | `make seed-channels` | Load YouTube channels from `configs/pipeline/channels.yaml` into PostgreSQL |
 | 2 | Crawl | `make crawl` | Fetch video metadata from ~40 YouTube channels via playlistItems API |
-| 3 | Extract | `make extract` | Parse player names, events, rounds from titles/descriptions. Regex first, Claude API fallback for low-confidence titles (`--claude`) |
-| 4 | Match | `make match` | Score game-video pairs using 6 weighted signals, store above-threshold matches |
-| 5 | Download | `make download-videos` | Fetch matched videos via yt-dlp to `data/videos/{channel}/` |
-| 6 | Clips | `make generate-clips` | Convert videos into `.pt` training clips with frame-level move alignment |
+| 3 | Screen | `make screen` | Title keyword filter + frame sampling to detect 2D overlay and OTB camera footage |
+| 4 | Download | `make download` | Fetch approved videos via yt-dlp to `data/videos/{channel}/` |
+| 5 | Calibrate | `python -m pipeline.cli calibrate` | Set per-channel overlay/camera crop regions |
+| 6 | Clips | `make generate-clips` | Overlay FEN reading + move detection, produces `.pt` training clips with move synchronization (broadcast delay compensation) |
 
-### How Matching Works
+### How Screening Works
 
-Videos are matched to games using six weighted signals:
+Videos are screened in two passes:
 
-| Signal | Weight | Method |
-|--------|--------|--------|
-| Player match | 35% | FIDE ID comparison (exact via TWIC headers, fuzzy via pg_trgm aliases) |
-| Event similarity | 20% | pg_trgm trigram similarity on event names |
-| Date proximity | 15% | Published date vs game date (same day = 1.0, decays over 30 days) |
-| PGN verification | 15% | First 15 moves compared in UCI notation |
-| Round match | 10% | Normalized round number comparison |
-| Result match | 5% | Game result agreement (1-0, 0-1, 1/2-1/2) |
+1. **Title filter** — keyword matching against the video title to identify chess commentary content
+2. **Dual-region detection** — frame sampling to detect both:
+   - **2D overlay** — rendered board overlay (lichess, chess.com streams) via pixel regularity analysis
+   - **OTB footage** — over-the-board camera footage
 
-**Testing matching independently:** You can test each scoring signal in isolation:
+Screening results are stored on `youtube_videos` as `screening_status`, `screening_confidence`, `overlay_bbox`, and `has_otb_footage`.
 
-```bash
-pytest tests/pipeline/test_scoring.py -v        # All 6 scoring signals
-pytest tests/pipeline/test_pgn_verifier.py -v   # PGN move comparison
-pytest tests/pipeline/test_pgn_aligner.py -v    # Move alignment
-```
+### How Overlay Clip Generation Works
 
-There is currently no single-video match command — `make match` processes all unmatched videos against the game database. To test matching on specific videos, call `match_video_to_games()` from `pipeline/match/game_matcher.py` directly in a script.
+For videos with a 2D board overlay:
 
-### How OTB Clip Generation Works
-
-For over-the-board camera videos:
-
-1. **Board detection** — OpenCV contour/Hough line detection locates the chess board
-2. **Perspective warp** — Board region warped to canonical 512x512 view
-3. **Move detection** — Frame differencing finds motion peaks at piece moves
-4. **PGN alignment** — Detected moves aligned to the known PGN move sequence
+1. **Calibration** — per-channel layout config defines overlay crop, camera crop, reference resolution, board flip, and board theme
+2. **FEN reading** — `OverlayReader` template-matches each of the 64 squares against piece libraries per theme to produce a FEN string
+3. **Move detection** — `OverlayMoveDetector` compares FENs across frames with a stability window, using python-chess to find the legal move transforming old FEN to new FEN. Detects game resets.
+4. **Move synchronization** — broadcast delay compensation aligns overlay moves to camera footage timestamps
 5. **Clip output** — `.pt` file with `frames` (T, 3, 224, 224), `move_targets`, `detect_targets`, `legal_masks`, `move_mask`
 
----
-
-## Overlay Pipeline
-
-> **Domain: Pipeline** — `pipeline/overlay/` (Stage 6 alternative path)
-
-A parallel clip generation path for videos that include a rendered 2D board overlay (lichess, chess.com streams). Instead of OpenCV board detection on camera footage, it reads the board state directly from the overlay pixels.
-
-### Overlay Flow
-
-```mermaid
-graph LR
-    V[Video with 2D overlay] --> S["Scanner: detect overlay region"]
-    S --> C["Calibration: overlay bbox + camera bbox"]
-    C --> R["OverlayReader: frame to FEN"]
-    R --> M["OverlayMoveDetector: FEN diffs to legal moves"]
-    M --> CG["OverlayClipGenerator: camera frames + moves to .pt"]
-```
-
-### Components
+### Overlay Components
 
 | Module | What it does |
 |--------|-------------|
@@ -317,29 +271,8 @@ graph LR
 | `overlay_reader.py` | Template-matches each of the 64 squares against piece libraries per theme. Returns FEN. Supports `lichess_default`, `chess_com_green`, `chess_com_brown`. |
 | `overlay_move_detector.py` | Compares FENs across frames with a stability window. Uses python-chess to find the legal move transforming old FEN to new FEN. Detects game resets. |
 | `calibration.py` | Stores per-channel layout configs: overlay crop, camera crop, reference resolution, board flip, board theme. Persisted in `configs/pipeline/overlay_layouts.yaml`. |
-| `overlay_clip_generator.py` | Combines camera crops with overlay-detected moves to produce `.pt` files in the same format as OTB clips. |
+| `overlay_clip_generator.py` | Combines camera crops with overlay-detected moves to produce `.pt` files. Includes broadcast delay compensation for move synchronization. |
 | `diagnostics.py` | `test_image()`, `test_reader()`, `inspect_clip()` — inspection and debugging tools. |
-
-### Overlay CLI
-
-```bash
-# Screen crawled videos for overlay presence
-python -m pipeline.cli overlay-scan --channel @STLChessClub --limit 50
-
-# Set calibration for a channel
-python -m pipeline.cli overlay-calibrate \
-  --channel @STLChessClub \
-  --overlay 1280,50,600,600 \
-  --camera 50,100,800,600 \
-  --resolution 1920x1080 \
-  --theme lichess_default
-
-# Generate clips from an overlay video
-python -m pipeline.cli overlay-generate --video path/to/video.mp4 --channel @STLChessClub
-
-# Test detection + reading on a screenshot
-python -m pipeline.cli overlay-test --image screenshot.png --output annotated.png
-```
 
 ---
 
@@ -513,8 +446,8 @@ The dev-tools services are thin REST wrappers — they directly import from `pip
 | **Synthetic Monitor** | Synthetic | `argus.datagen.synth`, filesystem scanner | `datagen` |
 | **Clip Inspector** | Synthetic | `argus.chess.move_vocabulary`, PyTorch tensors | `inspect-clip` |
 | **Overlay Tester** | Video | `pipeline.overlay.scanner`, `overlay_reader` | `overlay-test` |
-| **Calibration Editor** | Video | `pipeline.overlay.calibration` | `overlay-calibrate` |
-| **Video Annotator** | Video | `pipeline.overlay.overlay_reader`, `overlay_move_detector` | `overlay-test`, `overlay-generate` |
+| **Calibration Editor** | Video | `pipeline.overlay.calibration` | `calibrate` |
+| **Video Annotator** | Video | `pipeline.overlay.overlay_reader`, `overlay_move_detector` | `overlay-test`, `generate-clips` |
 
 ### Dev Tools Architecture
 
@@ -688,7 +621,7 @@ The FastAPI backend at `localhost:8000` exposes these endpoints. The Next.js fro
 | **Batch inference** | Working (single-board) | `make infer ARGS="--video file.mp4 --checkpoint model.pt --output-dir pgns/"` |
 | **Model format** | PyTorch `.pt` checkpoints | Saved by trainer, loaded by inference pipeline |
 | **Database** | Dev-only PostgreSQL via docker-compose | `make db-up` — no production DB exists |
-| **Pipeline** | Runs locally on developer machines | `make crawl`, `make match`, etc. |
+| **Pipeline** | Runs locally on developer machines | `make crawl`, `make screen`, etc. |
 | **Dev Tools** | Local Docker Compose | `make dev-tools` |
 
 The pipeline and database are **developer-local only**. There is no production deployment, no hosted database, and no CI/CD pipeline for any component.
@@ -756,30 +689,20 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 | Command | Makefile | Description | Key Options |
 |---------|----------|-------------|-------------|
 | `db-init` | `make db-up` (includes schema) | Apply database schema | |
-| `import-players` | `make import-data` | Load `data/chess/players.zip` | |
-| `import-pgns` | `make import-data` | Load `data/chess/pgns.zip` | `--limit N` |
-| `seed-channels` | `make import-data` | Load `configs/pipeline/channels.yaml` | |
+| `seed-channels` | `make seed-channels` | Load `configs/pipeline/channels.yaml` | |
 | `resolve-channels` | — | Resolve @handles to YouTube channel IDs | |
 | `crawl` | `make crawl` | Crawl YouTube channels | `--channel @Handle`, `--refresh` |
-| `extract` | `make extract` | Extract metadata from titles | `--claude` (enable Claude API fallback) |
-| `match` | `make match` | Match games to videos | `--min-confidence 60.0` |
-| `download` | `make download-videos` | Download matched videos | `--min-confidence 70.0`, `--limit N` |
-| `generate-clips` | `make generate-clips` | Generate OTB training clips | `--min-confidence 70.0`, `--limit N` |
-
-### Pipeline Domain — Overlay
-
-| Command | Description | Key Options |
-|---------|-------------|-------------|
-| `overlay-scan` | Screen videos for 2D overlay presence | `--channel @Handle`, `--limit N` |
-| `overlay-calibrate` | Set layout calibration for a channel | `--channel` (required), `--overlay x,y,w,h`, `--camera x,y,w,h`, `--resolution WxH`, `--flipped`, `--theme` |
-| `overlay-generate` | Generate clips from overlay videos | `--video PATH` (required), `--channel` (required) |
-| `overlay-test` | Test overlay detection on a screenshot | `--image PATH` (required), `--overlay x,y,w,h`, `--flipped`, `--theme`, `--output PATH` |
-| `overlay-test-reader` | Test reader on a specific region | `--image PATH`, `--overlay x,y,w,h` (both required), `--flipped`, `--theme` |
+| `screen` | `make screen` | Screen videos for overlay + OTB | `--channel @Handle`, `--limit N` |
+| `download` | `make download` | Download approved videos | `--limit N` |
+| `calibrate` | — | Set overlay layout calibration for a channel | `--channel` (required), `--overlay x,y,w,h`, `--camera x,y,w,h`, `--resolution WxH`, `--flipped`, `--theme` |
+| `generate-clips` | `make generate-clips` | Generate .pt training clips | `--limit N` |
 
 ### Pipeline Domain — Inspection
 
 | Command | Description | Key Options |
 |---------|-------------|-------------|
+| `overlay-test` | Test overlay detection on a screenshot | `--image PATH` (required), `--overlay x,y,w,h`, `--flipped`, `--theme`, `--output PATH` |
+| `overlay-test-reader` | Test reader on a specific region | `--image PATH`, `--overlay x,y,w,h` (both required), `--flipped`, `--theme` |
 | `inspect-clip` | Inspect a `.pt` training clip | `--file PATH` (required), `--save-frames`, `--output-dir DIR` |
 | `stats` | Print pipeline statistics (row counts per table) | |
 
@@ -844,7 +767,6 @@ Copy `.env.example` to `.env` and fill in:
 |----------|-------------|-------------|
 | `DATABASE_URL` | Pipeline | PostgreSQL connection string |
 | `YOUTUBE_API_KEY` | Crawl | YouTube Data API v3 key |
-| `ANTHROPIC_API_KEY` | Extract (optional) | Claude API for hard-to-parse titles |
 
 ### Channel Tiers
 
@@ -864,41 +786,13 @@ The pipeline crawls YouTube channels organized into 5 tiers in `configs/pipeline
 
 > **Domain: Pipeline** — used only by the data pipeline, not by training or inference.
 
-PostgreSQL 16 with `pg_trgm` extension for fuzzy text matching. Start with `make db-up`.
+PostgreSQL 16. Start with `make db-up`.
 
 ```mermaid
 erDiagram
-    fide_players ||--o{ player_aliases : "has"
-    fide_players ||--o{ games : "plays in (white)"
-    fide_players ||--o{ games : "plays in (black)"
-    games ||--o{ game_video_links : "matched to"
-    youtube_videos ||--o{ game_video_links : "matched to"
-    youtube_videos ||--o{ video_chapters : "has"
-    video_chapters ||--o{ game_video_links : "matched via"
-    game_video_links ||--o{ training_clips : "produces"
     crawl_channels ||--o{ youtube_videos : "crawled from"
+    youtube_videos ||--o{ training_clips : "produces"
 
-    fide_players {
-        int fide_id PK
-        text name
-        varchar federation
-        varchar title
-        int standard_rating
-    }
-    player_aliases {
-        serial id PK
-        text alias
-        int fide_id FK
-        varchar source
-    }
-    games {
-        serial id PK
-        int white_fide_id FK
-        int black_fide_id FK
-        text event
-        date date
-        text pgn_moves
-    }
     crawl_channels {
         text channel_id PK
         text channel_handle
@@ -909,28 +803,17 @@ erDiagram
         text video_id PK
         text channel_id FK
         text title
-        int white_fide_id
-        int black_fide_id
-        text extracted_event
+        text description
         varchar layout_type
-    }
-    video_chapters {
-        serial id PK
-        text video_id FK
-        int timestamp_seconds
-        text chapter_title
-    }
-    game_video_links {
-        serial id PK
-        int game_id FK
-        text video_id FK
-        float match_confidence
-        jsonb match_signals
+        varchar screening_status
+        float screening_confidence
+        text overlay_bbox
+        boolean has_otb_footage
     }
     training_clips {
         serial id PK
-        int game_id FK
         text video_id FK
+        int game_index
         text file_path
         int num_frames
         float alignment_quality
@@ -947,12 +830,6 @@ erDiagram
         int quota_cost
     }
 ```
-
-### Key Indexes
-
-- `pg_trgm` GIN indexes on `fide_players.name`, `player_aliases.alias`, `games.event`, `youtube_videos.extracted_event` — powers fuzzy matching
-- Composite index on `games(white_fide_id, black_fide_id, date)` — fast candidate queries during matching
-- `game_video_links(match_confidence DESC)` — efficient threshold filtering
 
 ---
 
@@ -1011,36 +888,23 @@ argus/
 ├── pipeline/                                   # Pipeline: data curation
 │   ├── cli.py                                  #   Unified CLI entry point
 │   ├── db/                                     #   Database
-│   │   ├── schema.sql                          #     Full DDL (11 tables, pg_trgm)
+│   │   ├── schema.sql                          #     Full DDL
+│   │   ├── migrate_001_remove_fide.sql         #     Migration: remove FIDE tables
 │   │   └── connection.py                       #     psycopg3 pool from DATABASE_URL
-│   ├── importers/                              #   Stage 1: data import
-│   │   ├── player_importer.py                  #     players.zip to fide_players + aliases
-│   │   ├── pgn_importer.py                     #     pgns.zip to games (~3.3M rows)
+│   ├── setup/                                  #   Channel seeding
 │   │   └── channel_seeder.py                   #     channels.yaml to crawl_channels
 │   ├── crawl/                                  #   Stage 2: YouTube crawling
 │   │   ├── youtube_client.py                   #     API v3 wrapper + backoff
 │   │   ├── quota_tracker.py                    #     Halt at 500 units remaining
 │   │   ├── channel_resolver.py                 #     @Handle to channel_id
 │   │   └── crawl_videos.py                     #     Paginate + store raw + parsed
-│   ├── extract/                                #   Stage 3: metadata extraction
-│   │   ├── title_parser.py                     #     Regex: "X vs Y | Event Round N"
-│   │   ├── description_parser.py               #     Chapters + PGN extraction
-│   │   ├── player_normalizer.py                #     pg_trgm fuzzy to FIDE IDs
-│   │   ├── claude_extractor.py                 #     Claude API fallback
-│   │   └── extract_metadata.py                 #     Orchestrator
-│   ├── match/                                  #   Stage 4: game-video matching
-│   │   ├── scoring.py                          #     6-signal weighted confidence
-│   │   ├── pgn_verifier.py                     #     First 15+ move comparison
-│   │   ├── game_matcher.py                     #     Query candidates, score, rank
-│   │   └── match_pipeline.py                   #     Orchestrator
-│   ├── download/                               #   Stage 5: video download
+│   ├── screen/                                 #   Stage 3: video screening
+│   │   ├── title_filter.py                     #     Keyword filter on video titles
+│   │   ├── dual_region_detector.py             #     Frame sampling: overlay + OTB detection
+│   │   └── screen_pipeline.py                  #     Orchestrator
+│   ├── download/                               #   Stage 4: video download
 │   │   └── video_downloader.py                 #     yt-dlp with rate limiting
-│   ├── clips/                                  #   Stage 6: OTB clip generation
-│   │   ├── board_detector.py                   #     OpenCV board detection + warp
-│   │   ├── move_detector.py                    #     Frame differencing + peaks
-│   │   ├── pgn_aligner.py                      #     Align moves to PGN
-│   │   └── clip_generator.py                   #     Video + PGN to .pt clips
-│   └── overlay/                                #   Stage 6: overlay clip generation
+│   └── overlay/                                #   Stage 5-6: overlay clip generation
 │       ├── scanner.py                          #     Detect 2D board overlays
 │       ├── overlay_reader.py                   #     Template match to FEN
 │       ├── overlay_move_detector.py            #     FEN diffs to legal moves
@@ -1076,14 +940,8 @@ argus/
 │   ├── test_chess_state_machine.py             #   Shared: chess core
 │   ├── test_constraint_mask.py                 #   Shared: chess core
 │   └── pipeline/                               #   Pipeline domain
-│       ├── test_title_parser.py                #     Stage 3: extraction
-│       ├── test_description_parser.py          #     Stage 3: extraction
-│       ├── test_player_aliases.py              #     Stage 3: extraction
-│       ├── test_scoring.py                     #     Stage 4: matching
-│       ├── test_pgn_verifier.py                #     Stage 4: matching
-│       ├── test_pgn_aligner.py                 #     Stage 6: clip generation
-│       ├── test_overlay_reader.py              #     Stage 6: overlay
-│       └── test_overlay_move_detector.py       #     Stage 6: overlay
+│       ├── test_overlay_reader.py              #     Overlay FEN reading
+│       └── test_overlay_move_detector.py       #     Overlay move detection
 ├── blender/                                    # Data Gen: 3D Blender rendering
 │   ├── render_chess.py                         #   Blender Python render script (EEVEE)
 │   └── models/staunton/                        #   Staunton STL piece models
@@ -1106,9 +964,9 @@ argus/
 
 **Synthetic data first.** 3D Blender rendering with a persistent render server enables fast, realistic data generation. The curriculum progressively increases difficulty (resolution, occlusion, board count).
 
-**Dual clip generation paths.** OTB videos use OpenCV board detection + frame differencing. Overlay videos use pixel-level FEN reading + FEN comparison. Both produce identical `.pt` output format, so the training pipeline doesn't distinguish between them.
+**Overlay-first real data pipeline.** Instead of matching PGN archives to YouTube videos (which requires FIDE player resolution, fuzzy matching across 3.3M games, and fragile metadata extraction), the pipeline reads board state directly from 2D overlay pixels. This eliminates the need for external game databases entirely — the ground truth comes from the video itself.
 
-**Crawl-then-match over per-game search.** The pipeline crawls ~40 YouTube channels once (~940 API quota units) and builds a local index, then matches all ~3.3M games against it locally. This avoids the prohibitive cost of one YouTube search per game (100 units each).
+**Screen-then-download over download-then-filter.** Videos are screened for overlay/OTB presence before downloading, using title keyword filtering and lightweight frame sampling. This avoids downloading terabytes of non-chess or non-overlay content.
 
 **Pipeline separated from ML code.** `pipeline/` has disjoint dependencies (psycopg, google-api-python-client, yt-dlp) from `src/argus/` (torch, transformers). The pipeline imports `argus.chess` only where needed (PGN verification).
 

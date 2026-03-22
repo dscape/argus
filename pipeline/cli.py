@@ -15,21 +15,9 @@ def cmd_db_init(args):
     init_schema()
 
 
-def cmd_import_players(args):
-    """Import players from players.zip."""
-    from pipeline.importers.player_importer import import_players
-    import_players()
-
-
-def cmd_import_pgns(args):
-    """Import PGN games from pgns.zip."""
-    from pipeline.importers.pgn_importer import import_pgns
-    import_pgns(limit=args.limit)
-
-
 def cmd_seed_channels(args):
     """Seed channel config from YAML."""
-    from pipeline.importers.channel_seeder import seed_channels
+    from pipeline.setup.channel_seeder import seed_channels
     seed_channels()
 
 
@@ -45,43 +33,19 @@ def cmd_crawl(args):
     crawl_all(channel_handle=args.channel, refresh=args.refresh)
 
 
-def cmd_extract(args):
-    """Extract metadata from video titles and descriptions."""
-    from pipeline.extract.extract_metadata import extract_all
-    extract_all(use_claude=args.claude)
-
-
-def cmd_match(args):
-    """Match games to videos."""
-    from pipeline.match.match_pipeline import match_all
-    match_all(min_confidence=args.min_confidence)
+def cmd_screen(args):
+    """Screen crawled videos for overlay + OTB suitability."""
+    from pipeline.screen.screen_pipeline import screen_all
+    screen_all(channel_handle=args.channel, limit=args.limit)
 
 
 def cmd_download(args):
-    """Download matched videos."""
-    from pipeline.download.video_downloader import download_matched_videos
-    download_matched_videos(
-        min_confidence=args.min_confidence,
-        limit=args.limit,
-    )
+    """Download approved videos."""
+    from pipeline.download.video_downloader import download_approved_videos
+    download_approved_videos(limit=args.limit)
 
 
-def cmd_generate_clips(args):
-    """Generate training clips from downloaded videos."""
-    from pipeline.clips.clip_generator import generate_all_clips
-    generate_all_clips(
-        min_confidence=args.min_confidence,
-        limit=args.limit,
-    )
-
-
-def cmd_overlay_scan(args):
-    """Screen crawled videos for overlay presence."""
-    from pipeline.overlay.scanner import scan_crawled_videos
-    scan_crawled_videos(channel_handle=args.channel, limit=args.limit)
-
-
-def cmd_overlay_calibrate(args):
+def cmd_calibrate(args):
     """Set layout calibration for a channel."""
     from pipeline.overlay.calibration import LayoutCalibration, set_calibration
 
@@ -99,12 +63,15 @@ def cmd_overlay_calibrate(args):
     else:
         ref = (1920, 1080)
 
+    delay = args.delay if args.delay is not None else 2.0
+
     cal = LayoutCalibration(
         overlay=overlay,
         camera=camera,
         ref_resolution=ref,
         board_flipped=args.flipped,
         board_theme=args.theme or "lichess_default",
+        move_delay_seconds=delay,
     )
 
     set_calibration(args.channel, cal)
@@ -112,25 +79,60 @@ def cmd_overlay_calibrate(args):
     print(f"  Overlay: {overlay}")
     print(f"  Camera:  {camera}")
     print(f"  Ref resolution: {ref}")
+    print(f"  Move delay: {delay}s")
 
 
-def cmd_overlay_generate(args):
-    """Generate training clips from overlay videos."""
+def cmd_generate_clips(args):
+    """Generate training clips from approved overlay videos."""
+    from pipeline.download.video_downloader import get_video_path
     from pipeline.overlay.overlay_clip_generator import generate_from_video
+    from pipeline.db.connection import get_conn
 
-    if args.video:
-        results = generate_from_video(
-            args.video,
-            channel_handle=args.channel,
-        )
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            query = """
+                SELECT video_id, channel_handle
+                FROM youtube_videos
+                WHERE screening_status = 'approved'
+                ORDER BY published_at DESC
+            """
+            params: list = []
+
+            if args.channel:
+                query = query.replace(
+                    "ORDER BY",
+                    "AND channel_handle = %s ORDER BY",
+                )
+                params.append(args.channel)
+
+            if args.limit:
+                query += " LIMIT %s"
+                params.append(args.limit)
+
+            cur.execute(query, params)
+            videos = cur.fetchall()
+
+    if not videos:
+        print("No approved videos found.")
+        return
+
+    total_clips = 0
+    for video_id, channel_handle in videos:
+        video_path = get_video_path(video_id, channel_handle)
+        if video_path is None:
+            print(f"  Skipping {video_id}: not downloaded")
+            continue
+
+        results = generate_from_video(video_path, channel_handle=channel_handle)
         if results:
-            print(f"Generated {len(results)} clip(s):")
+            total_clips += len(results)
             for r in results:
-                print(f"  {r['filepath']} ({r['num_moves']} moves, {r['num_frames']} frames)")
-        else:
-            print("No clips generated.")
-    else:
-        print("--video is required. Provide a local file path or YouTube URL.")
+                print(
+                    f"  {r['filepath']} "
+                    f"({r['num_moves']} moves, {r['num_frames']} frames)"
+                )
+
+    print(f"\nGenerated {total_clips} clip(s) total")
 
 
 def cmd_overlay_test(args):
@@ -191,9 +193,8 @@ def cmd_stats(args):
             stats = {}
 
             for table in [
-                "fide_players", "player_aliases", "games",
-                "crawl_channels", "youtube_videos", "video_chapters",
-                "game_video_links", "training_clips", "api_quota_log",
+                "crawl_channels", "youtube_videos",
+                "training_clips", "api_quota_log",
             ]:
                 try:
                     cur.execute(f"SELECT COUNT(*) FROM {table}")
@@ -202,7 +203,7 @@ def cmd_stats(args):
                     stats[table] = "N/A"
                     conn.rollback()
 
-            # Additional stats
+            # Resolved channels
             try:
                 cur.execute(
                     "SELECT COUNT(*) FROM crawl_channels WHERE channel_id NOT LIKE 'UNRESOLVED:%%'"
@@ -212,37 +213,37 @@ def cmd_stats(args):
                 stats["resolved_channels"] = "N/A"
                 conn.rollback()
 
-            try:
-                cur.execute(
-                    "SELECT COUNT(*) FROM game_video_links WHERE match_confidence >= 80"
-                )
-                stats["high_conf_matches"] = cur.fetchone()[0]
-            except Exception:
-                stats["high_conf_matches"] = "N/A"
-                conn.rollback()
+            # Screening stats
+            for status in ["candidate", "approved", "rejected"]:
+                try:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM youtube_videos WHERE screening_status = %s",
+                        (status,),
+                    )
+                    stats[f"screening_{status}"] = cur.fetchone()[0]
+                except Exception:
+                    stats[f"screening_{status}"] = "N/A"
+                    conn.rollback()
 
             try:
                 cur.execute(
-                    "SELECT COUNT(*) FROM youtube_videos WHERE white_fide_id IS NOT NULL"
+                    "SELECT COUNT(*) FROM youtube_videos WHERE screening_status IS NULL"
                 )
-                stats["videos_with_fide"] = cur.fetchone()[0]
+                stats["unscreened"] = cur.fetchone()[0]
             except Exception:
-                stats["videos_with_fide"] = "N/A"
+                stats["unscreened"] = "N/A"
                 conn.rollback()
 
     print("\n" + "=" * 50)
     print("  ARGUS PIPELINE STATISTICS")
     print("=" * 50)
-    print(f"  FIDE players:           {stats['fide_players']}")
-    print(f"  Player aliases:         {stats['player_aliases']}")
-    print(f"  Games (PGN):            {stats['games']}")
     print(f"  Crawl channels:         {stats['crawl_channels']}")
     print(f"    Resolved:             {stats['resolved_channels']}")
     print(f"  YouTube videos:         {stats['youtube_videos']}")
-    print(f"    With FIDE IDs:        {stats['videos_with_fide']}")
-    print(f"  Video chapters:         {stats['video_chapters']}")
-    print(f"  Game-video links:       {stats['game_video_links']}")
-    print(f"    High confidence:      {stats['high_conf_matches']}")
+    print(f"    Unscreened:           {stats['unscreened']}")
+    print(f"    Candidates:           {stats['screening_candidate']}")
+    print(f"    Approved:             {stats['screening_approved']}")
+    print(f"    Rejected:             {stats['screening_rejected']}")
     print(f"  Training clips:         {stats['training_clips']}")
     print(f"  API quota log entries:  {stats['api_quota_log']}")
     print("=" * 50)
@@ -251,7 +252,7 @@ def cmd_stats(args):
 def main():
     parser = argparse.ArgumentParser(
         prog="pipeline",
-        description="Argus data pipeline: YouTube crawl, extraction, matching, clips",
+        description="Argus data pipeline: crawl, screen, download, generate clips",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true",
@@ -262,13 +263,6 @@ def main():
 
     # db-init
     subparsers.add_parser("db-init", help="Apply database schema")
-
-    # import-players
-    subparsers.add_parser("import-players", help="Import players from players.zip")
-
-    # import-pgns
-    p = subparsers.add_parser("import-pgns", help="Import PGN games")
-    p.add_argument("--limit", type=int, default=None, help="Max games to import")
 
     # seed-channels
     subparsers.add_parser("seed-channels", help="Seed channels from YAML config")
@@ -281,43 +275,29 @@ def main():
     p.add_argument("--channel", type=str, default=None, help="Crawl specific channel handle")
     p.add_argument("--refresh", action="store_true", help="Only fetch new videos")
 
-    # extract
-    p = subparsers.add_parser("extract", help="Extract metadata from titles")
-    p.add_argument("--claude", action="store_true", help="Use Claude API for low-confidence titles")
-
-    # match
-    p = subparsers.add_parser("match", help="Match games to videos")
-    p.add_argument("--min-confidence", type=float, default=60.0, help="Minimum confidence threshold")
+    # screen
+    p = subparsers.add_parser("screen", help="Screen videos for overlay + OTB suitability")
+    p.add_argument("--channel", type=str, default=None, help="Screen specific channel handle")
+    p.add_argument("--limit", type=int, default=None, help="Max videos to screen")
 
     # download
-    p = subparsers.add_parser("download", help="Download matched videos")
-    p.add_argument("--min-confidence", type=float, default=70.0, help="Minimum confidence threshold")
+    p = subparsers.add_parser("download", help="Download approved videos")
     p.add_argument("--limit", type=int, default=None, help="Max videos to download")
 
-    # generate-clips
-    p = subparsers.add_parser("generate-clips", help="Generate training clips")
-    p.add_argument("--min-confidence", type=float, default=70.0, help="Minimum match confidence")
-    p.add_argument("--limit", type=int, default=None, help="Max clips to generate")
-
-    # overlay-scan
-    p = subparsers.add_parser("overlay-scan", help="Screen videos for 2D overlay presence")
-    p.add_argument("--channel", type=str, default=None, help="Scan specific channel handle")
-    p.add_argument("--limit", type=int, default=None, help="Max videos to scan")
-
-    # overlay-calibrate
-    p = subparsers.add_parser("overlay-calibrate", help="Set overlay layout calibration")
+    # calibrate
+    p = subparsers.add_parser("calibrate", help="Set overlay layout calibration")
     p.add_argument("--channel", type=str, required=True, help="Channel handle (e.g. @STLChessClub)")
     p.add_argument("--overlay", type=str, required=True, help="Overlay bbox: x,y,w,h")
     p.add_argument("--camera", type=str, required=True, help="Camera bbox: x,y,w,h")
     p.add_argument("--resolution", type=str, default=None, help="Reference resolution: WxH (default: 1920x1080)")
     p.add_argument("--flipped", action="store_true", help="Board is flipped (Black at bottom)")
     p.add_argument("--theme", type=str, default=None, help="Board theme (lichess_default, chess_com_green)")
+    p.add_argument("--delay", type=float, default=None, help="Move delay in seconds (default: 2.0)")
 
-    # overlay-generate
-    p = subparsers.add_parser("overlay-generate", help="Generate clips from overlay videos")
-    p.add_argument("--video", type=str, default=None, help="Video file path or YouTube URL")
-    p.add_argument("--channel", type=str, required=True, help="Channel handle for calibration lookup")
-    p.add_argument("--limit", type=int, default=None, help="Max clips to generate")
+    # generate-clips
+    p = subparsers.add_parser("generate-clips", help="Generate training clips from approved videos")
+    p.add_argument("--channel", type=str, default=None, help="Generate for specific channel")
+    p.add_argument("--limit", type=int, default=None, help="Max videos to process")
 
     # overlay-test
     p = subparsers.add_parser("overlay-test", help="Test overlay pipeline on a screenshot")
@@ -356,18 +336,13 @@ def main():
     # Dispatch
     commands = {
         "db-init": cmd_db_init,
-        "import-players": cmd_import_players,
-        "import-pgns": cmd_import_pgns,
         "seed-channels": cmd_seed_channels,
         "resolve-channels": cmd_resolve_channels,
         "crawl": cmd_crawl,
-        "extract": cmd_extract,
-        "match": cmd_match,
+        "screen": cmd_screen,
         "download": cmd_download,
+        "calibrate": cmd_calibrate,
         "generate-clips": cmd_generate_clips,
-        "overlay-scan": cmd_overlay_scan,
-        "overlay-calibrate": cmd_overlay_calibrate,
-        "overlay-generate": cmd_overlay_generate,
         "overlay-test": cmd_overlay_test,
         "overlay-test-reader": cmd_overlay_test_reader,
         "inspect-clip": cmd_inspect_clip,

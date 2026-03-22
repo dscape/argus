@@ -26,6 +26,7 @@ class LayoutCalibration:
     ref_resolution: tuple[int, int]  # width, height
     board_flipped: bool = False
     board_theme: str = "lichess_default"
+    move_delay_seconds: float = 2.0  # Broadcast delay: OTB move happens before overlay updates
 
     def scale_to_resolution(self, width: int, height: int) -> "LayoutCalibration":
         """Return a new calibration scaled to a different resolution."""
@@ -47,6 +48,7 @@ class LayoutCalibration:
             ref_resolution=(width, height),
             board_flipped=self.board_flipped,
             board_theme=self.board_theme,
+            move_delay_seconds=self.move_delay_seconds,
         )
 
 
@@ -86,6 +88,7 @@ def get_calibration(
         ref_resolution=tuple(entry.get("ref_resolution", [1920, 1080])),
         board_flipped=entry.get("board_flipped", False),
         board_theme=entry.get("board_theme", "lichess_default"),
+        move_delay_seconds=entry.get("move_delay_seconds", 2.0),
     )
 
 
@@ -105,6 +108,7 @@ def set_calibration(
         "ref_resolution": list(calibration.ref_resolution),
         "board_flipped": calibration.board_flipped,
         "board_theme": calibration.board_theme,
+        "move_delay_seconds": calibration.move_delay_seconds,
     }
 
     save_config(data, config_path)
@@ -122,5 +126,6 @@ def list_calibrations(config_path: str = CONFIG_PATH) -> dict[str, LayoutCalibra
             ref_resolution=tuple(entry.get("ref_resolution", [1920, 1080])),
             board_flipped=entry.get("board_flipped", False),
             board_theme=entry.get("board_theme", "lichess_default"),
+            move_delay_seconds=entry.get("move_delay_seconds", 2.0),
         )
     return result

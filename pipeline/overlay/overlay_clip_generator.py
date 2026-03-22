@@ -157,6 +157,8 @@ class OverlayClipGenerator:
                 frame_indices=frame_indices,
                 segment=segment,
                 fps=fps,
+                frame_skip=frame_skip,
+                move_delay_seconds=cal.move_delay_seconds,
             )
 
             if clip_data is None:
@@ -189,6 +191,8 @@ class OverlayClipGenerator:
         frame_indices: list[int],
         segment: GameSegment,
         fps: float,
+        frame_skip: int = 1,
+        move_delay_seconds: float = 0.0,
     ) -> dict | None:
         """Build a training clip dict compatible with ArgusDataset.
 
@@ -197,6 +201,10 @@ class OverlayClipGenerator:
             frame_indices: Frame index for each crop.
             segment: Detected game segment with moves.
             fps: Video FPS.
+            frame_skip: Frames skipped between samples (for delay calculation).
+            move_delay_seconds: Broadcast delay — shift move timestamps backward
+                by this many seconds to align with the OTB camera moment the
+                move was actually played (overlay updates after OTB).
 
         Returns:
             Dict with frames, move_targets, detect_targets, legal_masks, move_mask.
@@ -238,7 +246,9 @@ class OverlayClipGenerator:
                 "num_moves": segment.num_moves,
             }
 
-        no_move_idx = VOCAB.NO_MOVE_IDX
+        from argus.chess.move_vocabulary import NO_MOVE_IDX
+
+        no_move_idx = NO_MOVE_IDX
         vocab_size = VOCAB.size
 
         move_targets = torch.full((num_frames,), no_move_idx, dtype=torch.long)
@@ -246,10 +256,14 @@ class OverlayClipGenerator:
         legal_masks = torch.zeros(num_frames, vocab_size, dtype=torch.bool)
         move_mask = torch.ones(num_frames, dtype=torch.float32)
 
-        # Build a map from frame index to move
+        # Build a map from frame index to move.
+        # Apply move delay: shift overlay-detected move timestamps backward
+        # so they align with when the move was actually played OTB.
+        delay_frames = int(move_delay_seconds * fps / frame_skip) if move_delay_seconds > 0 else 0
         move_frame_map = {}
         for m in segment.moves:
-            move_frame_map[m.frame_idx] = m
+            adjusted_idx = max(m.frame_idx - delay_frames, segment.start_frame)
+            move_frame_map[adjusted_idx] = m
 
         # Replay the game to generate legal masks
         board = chess.Board()
@@ -263,7 +277,7 @@ class OverlayClipGenerator:
             if frame_idx in move_frame_map:
                 m = move_frame_map[frame_idx]
                 uci = m.move_uci
-                idx = VOCAB.move_to_index.get(uci)
+                idx = VOCAB.uci_to_index(uci) if VOCAB.contains(uci) else None
                 if idx is not None:
                     move_targets[i] = idx
                     detect_targets[i] = 1.0

@@ -26,7 +26,7 @@ channels:
     notes: "Classic and contemporary game analysis."
 
   - name: "John Bartholomew Chess"
-    handle: "@JohnBartholomew"
+    handle: "@JohnBartholomewChess"
     tier: 1
     notes: "Large archive of game analysis."
 
@@ -47,7 +47,7 @@ channels:
     notes: "Olympiad, Candidates, World Blitz/Rapid. Multi-board with chapters."
 
   - name: "FIDE Chess"
-    handle: "@fidechess"
+    handle: "@FIDEchess"
     channel_id: "UC9B47GnzCRFHTT1BIBWvStQ"
     tier: 2
     notes: "World Championship, Grand Prix, World Cup, Olympiad. Authoritative."
@@ -68,9 +68,8 @@ channels:
     notes: "Wijk aan Zee. Masters + Challengers. Streams per round."
 
   - name: "Norway Chess"
-    handle: null
+    handle: "@NorwayChess"
     tier: 2
-    notes: "RESOLVE MANUALLY. Search 'Norway Chess Official' on YouTube. Handle has changed."
 
   - name: "Grand Chess Tour"
     handle: "@GrandChessTour"
@@ -78,7 +77,7 @@ channels:
     notes: "GCT circuit events not covered by STLCC."
 
   - name: "Freestyle Chess / Meltwater Champions Chess Tour"
-    handle: "@FreestyleChessGP"
+    handle: "@FreestyleChess"
     tier: 2
     notes: "Fischer Random circuit. Growing archive from 2024."
 
@@ -99,19 +98,18 @@ channels:
     notes: "French. Kevin Bordi. Covers major elite events."
 
   - name: "Crestbook / Sergei Shipov"
-    handle: null
+    handle: "@crestbook"
     tier: 3
-    notes: "RESOLVE MANUALLY. Search 'Crestbook шахматы Шипов'. Russian. Major commentator."
+    notes: "Russian. Major commentator."
 
   - name: "Chess Fight Night"
-    handle: "@ChessFightNight"
+    handle: "@CFNChannel"
     tier: 3
     notes: "Russian. Multi-board tournament coverage."
 
   - name: "Шахматы & Сергей Жигалко"
-    handle: null
+    handle: "@SergeiZhigalkoChess"
     tier: 3
-    notes: "RESOLVE MANUALLY. Search 'Жигалко шахматы'. Cyrillic handle."
 
   # ── Tier 4: FIDE and National Federation Channels ──────────────────
   - name: "Chess Olympiad Chennai 2022"
@@ -135,9 +133,9 @@ channels:
     notes: "British Championship. Small archive."
 
   - name: "ChessDE / German Chess Federation"
-    handle: null
+    handle: "@DeutscherSchachbund"
     tier: 4
-    notes: "RESOLVE MANUALLY. Search 'Deutscher Schachbund' on YouTube. Bundesliga."
+    notes: "Bundesliga."
 
   # ── Tier 5: Individual GM Channels (supplemental) ──────────────────
   - name: "Hikaru Nakamura"
@@ -150,7 +148,7 @@ channels:
     tier: 5
 
   - name: "Anish Giri"
-    handle: "@AnishGiri"
+    handle: "@AnishGiriOfficial"
     tier: 5
 
   - name: "Anna Cramling"
@@ -167,6 +165,5 @@ channels:
     tier: 5
 
   - name: "Ben Finegold"
-    handle: "@GMBenFinegold"
+    handle: "@BenFinegold"
     tier: 5
-    notes: "Verify handle. Legacy URL was /user/BenFinegold."
