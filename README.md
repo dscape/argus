@@ -98,6 +98,8 @@ Shared across domains: `src/argus/chess/` (move vocabulary, state machine, const
 
 ## Development Setup
 
+Requires Python 3.10+, Node.js 18+, Docker, Cairo, Blender 4.0+, and ffmpeg. See [CONTRIBUTING.md](CONTRIBUTING.md) for install commands and per-domain details.
+
 ### direnv (recommended)
 
 Auto-activates the Python virtual environment and installs dependencies whenever you `cd` into the project.
@@ -114,17 +116,9 @@ After this, every new terminal that enters the project directory will have the v
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-make dev
+make dev                # install Python package + dev dependencies
+make pipeline-install   # install pipeline dependencies (if working on pipeline)
 ```
-
-### Prerequisites
-
-```bash
-brew install cairo                  # SVG rendering (required)
-brew install --cask blender         # 3D synthetic data (optional, 4.0+)
-```
-
-Verify Blender: `blender --version`. See [CONTRIBUTING.md](CONTRIBUTING.md) for Linux instructions.
 
 ### Start all services
 
