@@ -1,16 +1,13 @@
-"""Video frame inspection service — extract frames, detect overlay + OTB, auto-classify.
+"""Video frame inspection service — fetch YouTube frames, detect overlay + OTB, auto-classify.
 
-Two-tier speed optimization:
-1. Fast: Fetch YouTube thumbnail via HTTP (~1s)
-2. Thorough: Extract frames at multiple timestamps via yt-dlp in parallel (~15s)
+Fetches 4 YouTube auto-generated frame thumbnails (0.jpg–3.jpg) for each video,
+runs overlay + OTB detection on each, and aggregates results.
 
 Background job system for batch inspection with polling support.
 """
 
 import base64
 import logging
-import os
-import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Thread
 from uuid import uuid4
@@ -19,9 +16,8 @@ import cv2
 import numpy as np
 
 from pipeline.db.connection import get_conn
-from pipeline.overlay.scanner import detect_overlay_in_frame, extract_frames_from_video
+from pipeline.overlay.scanner import detect_overlay_in_frame
 from pipeline.screen.dual_region_detector import (
-    ScreeningResult,
     detect_otb_region,
     overlay_bbox_to_json,
 )
@@ -32,36 +28,64 @@ logger = logging.getLogger(__name__)
 
 _jobs: dict[str, dict] = {}
 
-# YouTube thumbnail URLs (publicly accessible, no API quota)
-_THUMBNAIL_URLS = [
-    "https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
-    "https://i.ytimg.com/vi/{video_id}/sddefault.jpg",
-    "https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+# YouTube auto-generated frame URLs (publicly accessible, no API quota)
+# 0.jpg = default thumbnail, 1.jpg ≈ 25%, 2.jpg ≈ 50%, 3.jpg ≈ 75%
+_FRAME_URLS = [
+    ("https://img.youtube.com/vi/{video_id}/0.jpg", "thumb"),
+    ("https://img.youtube.com/vi/{video_id}/1.jpg", "25%"),
+    ("https://img.youtube.com/vi/{video_id}/2.jpg", "50%"),
+    ("https://img.youtube.com/vi/{video_id}/3.jpg", "75%"),
 ]
 
-# Minimum resolution for reliable overlay detection
-_MIN_FRAME_WIDTH = 400
+# Minimum resolution to accept a frame (YouTube 1/2/3.jpg are 120x90)
+_MIN_FRAME_WIDTH = 100
 
 
-def _fetch_youtube_thumbnail(video_id: str) -> np.ndarray | None:
-    """Fetch the best available YouTube thumbnail as a numpy array."""
+def _fetch_single_frame(url: str) -> np.ndarray | None:
+    """Fetch a single image URL and return as numpy array."""
     import urllib.request
     import urllib.error
 
-    for url_template in _THUMBNAIL_URLS:
-        url = url_template.format(video_id=video_id)
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = resp.read()
-                arr = np.frombuffer(data, dtype=np.uint8)
-                frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                if frame is not None and frame.shape[1] >= _MIN_FRAME_WIDTH:
-                    return frame
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError):
-            continue
-
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = resp.read()
+            arr = np.frombuffer(data, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if frame is not None and frame.shape[1] >= _MIN_FRAME_WIDTH:
+                return frame
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+        pass
     return None
+
+
+def _fetch_youtube_frames(video_id: str) -> list[tuple[np.ndarray, str]]:
+    """Fetch all 4 YouTube auto-generated frames in parallel.
+
+    Returns list of (frame, label) tuples.
+    """
+    results: list[tuple[np.ndarray, str]] = []
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {
+            executor.submit(
+                _fetch_single_frame, url_template.format(video_id=video_id)
+            ): label
+            for url_template, label in _FRAME_URLS
+        }
+        for future in as_completed(futures):
+            label = futures[future]
+            try:
+                frame = future.result()
+                if frame is not None:
+                    results.append((frame, label))
+            except Exception as e:
+                logger.warning(f"Failed to fetch frame {label}: {e}")
+
+    # Sort to maintain consistent order: thumb, 25%, 50%, 75%
+    label_order = {label: i for i, (_, label) in enumerate(_FRAME_URLS)}
+    results.sort(key=lambda x: label_order.get(x[1], 99))
+    return results
 
 
 def _frame_to_base64(frame: np.ndarray, max_width: int = 640) -> str:
@@ -72,14 +96,6 @@ def _frame_to_base64(frame: np.ndarray, max_width: int = 640) -> str:
         frame = cv2.resize(frame, (max_width, int(h * scale)))
     _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
     return base64.b64encode(buf.tobytes()).decode("ascii")
-
-
-def _file_to_base64(path: str, max_width: int = 640) -> str | None:
-    """Read a JPEG file and return base64, optionally resizing."""
-    frame = cv2.imread(path)
-    if frame is None:
-        return None
-    return _frame_to_base64(frame, max_width)
 
 
 def _analyze_frame(
@@ -106,89 +122,6 @@ def _analyze_frame(
     }
 
 
-def _extract_single_frame(video_url: str, timestamp: int, output_dir: str) -> str | None:
-    """Extract a single frame at a given timestamp. Returns path or None."""
-    import subprocess
-
-    section_path = os.path.join(output_dir, f"section_{timestamp}.mp4")
-    frame_path = os.path.join(output_dir, f"frame_{timestamp}.jpg")
-
-    try:
-        subprocess.run(
-            [
-                "yt-dlp",
-                "--download-sections", f"*{timestamp}-{timestamp + 2}",
-                "-f", "worst[ext=mp4]/worst",
-                "-o", section_path,
-                "--no-warnings",
-                "--quiet",
-            video_url,
-            ],
-            capture_output=True,
-            timeout=60,
-            check=False,
-        )
-
-        if os.path.exists(section_path):
-            subprocess.run(
-                [
-                    "ffmpeg", "-y", "-i", section_path,
-                    "-frames:v", "1",
-                    "-q:v", "2",
-                    frame_path,
-                ],
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
-            # Clean up section
-            try:
-                os.remove(section_path)
-            except OSError:
-                pass
-
-            if os.path.exists(frame_path):
-                return frame_path
-
-    except (subprocess.TimeoutExpired, OSError) as e:
-        logger.warning(f"Failed to extract frame at {timestamp}s: {e}")
-
-    return None
-
-
-def _extract_frames_parallel(
-    video_url: str, timestamps: list[int] | None = None
-) -> list[tuple[str, int]]:
-    """Extract frames at multiple timestamps in parallel.
-
-    Returns list of (frame_path, timestamp) tuples.
-    """
-    if timestamps is None:
-        timestamps = [30, 120, 300]
-
-    output_dir = tempfile.mkdtemp(prefix="argus_inspect_")
-    results: list[tuple[str, int]] = []
-
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = {
-            executor.submit(_extract_single_frame, video_url, ts, output_dir): ts
-            for ts in timestamps
-        }
-
-        for future in as_completed(futures):
-            ts = futures[future]
-            try:
-                path = future.result()
-                if path:
-                    results.append((path, ts))
-            except Exception as e:
-                logger.warning(f"Frame extraction failed for ts={ts}: {e}")
-
-    # Sort by timestamp
-    results.sort(key=lambda x: x[1])
-    return results
-
-
 def inspect_single_video(video_id: str) -> dict:
     """Inspect a single video: extract frames, run detection, update DB.
 
@@ -207,28 +140,14 @@ def inspect_single_video(video_id: str) -> dict:
         raise ValueError(f"Video {video_id} not found")
 
     vid, channel_handle, title = row
-    video_url = f"https://www.youtube.com/watch?v={video_id}"
 
     frame_results: list[dict] = []
 
-    # Tier 1: YouTube thumbnail (fast)
-    thumbnail = _fetch_youtube_thumbnail(video_id)
-    if thumbnail is not None:
-        result = _analyze_frame(thumbnail, "thumbnail")
+    # Fetch all 4 YouTube auto-generated frames in parallel
+    frames = _fetch_youtube_frames(video_id)
+    for frame, label in frames:
+        result = _analyze_frame(frame, label)
         frame_results.append(result)
-
-    # Tier 2: Extract frames at timestamps in parallel
-    extracted = _extract_frames_parallel(video_url)
-    for path, ts in extracted:
-        frame = cv2.imread(path)
-        if frame is not None:
-            result = _analyze_frame(frame, f"{ts}s")
-            frame_results.append(result)
-        # Clean up
-        try:
-            os.remove(path)
-        except OSError:
-            pass
 
     # Aggregate: take best scores across all frames
     best_overlay_score = 0.0

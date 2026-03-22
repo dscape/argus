@@ -84,7 +84,7 @@ function InspectResultPanel({
               <img
                 src={`data:image/jpeg;base64,${frame.image_base64}`}
                 alt={`Frame ${frame.label}`}
-                className="h-24 rounded border"
+                className="h-40 rounded border"
               />
               <div className="text-[10px] text-center text-muted-foreground">
                 {frame.label}

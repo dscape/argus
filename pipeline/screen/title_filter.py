@@ -3,7 +3,7 @@
 A lightweight pre-filter that avoids expensive frame sampling on videos
 unlikely to contain usable training data. Positive signals include "vs",
 tournament names, and player-name-like patterns. Negative signals exclude
-lessons, puzzles, and non-game content.
+lessons, puzzles, clickbait, reaction content, and non-game content.
 """
 
 import re
@@ -11,9 +11,9 @@ import re
 # ── Positive patterns ──────────────────────────────────────────────────
 
 # "Player A vs Player B", "Player A v. Player B", "Player A versus Player B"
-# Also match dash separator: "Player A - Player B"
+# Also match dash/|| separator: "Player A - Player B", "Player A || Tournament"
 _VS_PATTERN = re.compile(
-    r"\b(?:versus|vs\.?|v\.)\s|[A-Z][a-z]+\s+[-–—]\s+[A-Z][a-z]+",
+    r"\b(?:versus|vs\.?|v\.)\s|[A-Z][a-z]+\s+[-–—]\s+[A-Z][a-z]+|[A-Z][a-z]+\s+\|\|\s+",
     re.IGNORECASE,
 )
 
@@ -54,9 +54,36 @@ _NEGATIVE_KEYWORDS = re.compile(
     r"how to|beginner|learn chess|chess tips|rating climb|"
     r"guess the elo|tier list|shorts|reaction|meme|funny|"
     r"compilation|drama|lichess|chess\.com|bullet|arena|"
-    r"opening trap|trick|hack|speedrun)\b",
+    r"opening trap|trick|hack|speedrun|"
+    # Sensationalized / clickbait
+    r"destroys|insane|incredible|unbelievable|impossible|"
+    # Casual / meme
+    r"rizz|cursed|"
+    # First-person
+    r"i got|my moves|join me|i played|i tried|"
+    # Clickbait phrases
+    r"you won't believe|you wont believe|wait for it|do you see it|"
+    # Player reaction
+    r"slams table|pushes camera|"
+    # Educational
+    r"secret rule|secret move|secret trick)\b",
     re.IGNORECASE,
 )
+
+# Excessive punctuation: 3+ exclamation or question marks
+_EXCESSIVE_PUNCTUATION = re.compile(r"[!]{3,}|[?]{3,}")
+
+
+def _is_mostly_caps(title: str) -> bool:
+    """Return True if >50% of alphabetic characters are uppercase and title has 5+ words."""
+    words = title.split()
+    if len(words) < 5:
+        return False
+    alpha = [c for c in title if c.isalpha()]
+    if not alpha:
+        return False
+    upper_ratio = sum(1 for c in alpha if c.isupper()) / len(alpha)
+    return upper_ratio > 0.5
 
 
 def score_title(title: str) -> tuple[bool, float]:
@@ -73,18 +100,33 @@ def score_title(title: str) -> tuple[bool, float]:
     if _NEGATIVE_KEYWORDS.search(title):
         return False, 0.0
 
+    # ALL CAPS rejection — sensationalized titles
+    if _is_mostly_caps(title):
+        return False, 0.0
+
+    # Excessive punctuation rejection
+    if _EXCESSIVE_PUNCTUATION.search(title):
+        return False, 0.0
+
     score = 0.0
+
+    has_tournament = bool(_TOURNAMENT_PATTERN.search(title))
+    has_player_vs = bool(_PLAYER_VS_PATTERN.search(title))
+
+    # Question without tournament/player context — reject
+    if title.rstrip().endswith("?") and not has_tournament and not has_player_vs:
+        return False, 0.0
 
     # "vs" pattern — strong signal
     if _VS_PATTERN.search(title):
         score += 0.4
 
     # Full "Player A vs Player B" pattern — very strong
-    if _PLAYER_VS_PATTERN.search(title):
+    if has_player_vs:
         score += 0.3
 
     # Tournament name — strong signal
-    if _TOURNAMENT_PATTERN.search(title):
+    if has_tournament:
         score += 0.3
 
     # Context keywords — mild boost
