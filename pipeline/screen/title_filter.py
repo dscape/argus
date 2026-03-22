@@ -11,15 +11,16 @@ import re
 # ── Positive patterns ──────────────────────────────────────────────────
 
 # "Player A vs Player B", "Player A v. Player B", "Player A versus Player B"
+# Also match dash separator: "Player A - Player B"
 _VS_PATTERN = re.compile(
-    r"\b(?:versus|vs\.?|v\.)\s",
+    r"\b(?:versus|vs\.?|v\.)\s|[A-Z][a-z]+\s+[-–—]\s+[A-Z][a-z]+",
     re.IGNORECASE,
 )
 
-# Two capitalized multi-word names separated by vs/v.
-# e.g. "Magnus Carlsen vs Ian Nepomniachtchi"
+# Two capitalized multi-word names separated by vs/v./dash
+# e.g. "Magnus Carlsen vs Ian Nepomniachtchi" or "Carlsen - Nepomniachtchi"
 _PLAYER_VS_PATTERN = re.compile(
-    r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\s+(?:vs?\.?|versus)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+",
+    r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\s+(?:vs?\.?|versus|[-–—])\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+",
 )
 
 # Known tournament / event names (case-insensitive fragments)
@@ -41,7 +42,7 @@ _TOURNAMENT_PATTERN = re.compile(
 
 # Chess context words (boost when combined with other signals)
 _CONTEXT_KEYWORDS = re.compile(
-    r"\b(?:round|game|match|classical|rapid|blitz|tournament|championship)\b",
+    r"\b(?:round\s*\d+|game\s*\d+|round|game|match|classical|rapid|blitz|tournament|championship)\b",
     re.IGNORECASE,
 )
 
@@ -51,7 +52,9 @@ _NEGATIVE_KEYWORDS = re.compile(
     r"\b(?:puzzle|lesson|tutorial|opening theory|endgame study|"
     r"stream highlights|subscriber game|top\s*\d+|best of|"
     r"how to|beginner|learn chess|chess tips|rating climb|"
-    r"guess the elo|tier list)\b",
+    r"guess the elo|tier list|shorts|reaction|meme|funny|"
+    r"compilation|drama|lichess|chess\.com|bullet|arena|"
+    r"opening trap|trick|hack|speedrun)\b",
     re.IGNORECASE,
 )
 
@@ -87,6 +90,10 @@ def score_title(title: str) -> tuple[bool, float]:
     # Context keywords — mild boost
     context_matches = len(_CONTEXT_KEYWORDS.findall(title))
     score += min(context_matches * 0.1, 0.2)
+
+    # Year pattern — mild boost when combined with other signals
+    if score > 0 and re.search(r"\b20[0-2]\d\b", title):
+        score += 0.1
 
     # Threshold: need at least 0.3 to be a candidate
     is_candidate = score >= 0.3

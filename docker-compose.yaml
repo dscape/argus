@@ -30,6 +30,7 @@ services:
       - ./configs:/app/configs
       - ./data:/app/data
       - ./dev-tools/api:/app/dev-tools/api
+    env_file: .env
     environment:
       - PYTHONPATH=/app/src:/app
       - DATABASE_URL=postgresql://argus:${POSTGRES_PASSWORD:-argus_dev}@postgres:5432/argus

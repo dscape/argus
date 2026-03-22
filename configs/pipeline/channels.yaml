@@ -137,6 +137,32 @@ channels:
     tier: 4
     notes: "Bundesliga."
 
+  # ── Tier 3: Game Analysis Channels ────────────────────────────────
+  - name: "MatoJelic"
+    handle: "@MatoJelic"
+    tier: 3
+    notes: "Classic and modern game analysis. Board overlays. Consistent 'Player A vs Player B' titles."
+
+  - name: "Jozarov's Chess Channel"
+    handle: "@Jozarov"
+    tier: 3
+    notes: "Game analysis with board overlays. Good title formatting."
+
+  - name: "GM Huschenbeth"
+    handle: "@GMHuschenbeth"
+    tier: 3
+    notes: "German GM. English game analysis content."
+
+  - name: "Kingscrusher"
+    handle: "@Kingscrusher"
+    tier: 3
+    notes: "Long-running channel. Game analysis with overlay. Structured titles."
+
+  - name: "Chess Network (Jerry)"
+    handle: "@ChessNetwork"
+    tier: 3
+    notes: "Game analysis with board overlay. Classic and modern games."
+
   # ── Tier 5: Individual GM Channels (supplemental) ──────────────────
   - name: "Hikaru Nakamura"
     handle: "@GMHikaru"

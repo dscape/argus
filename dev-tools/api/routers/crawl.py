@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from api.services import crawl_service
+from api.services import crawl_service, inspect_service
 
 router = APIRouter()
 
@@ -29,7 +29,21 @@ class BatchStatusRequest(BaseModel):
     status: str
 
 
+class ScreenRequest(BaseModel):
+    channel_id: str | None = None
+    limit: int = 500
+
+
+class AutoClassifyRequest(BaseModel):
+    channel_id: str | None = None
+    limit: int = 200
+
+
 class ClassifyRequest(BaseModel):
+    video_ids: list[str]
+
+
+class BatchInspectRequest(BaseModel):
     video_ids: list[str]
 
 
@@ -106,6 +120,11 @@ async def list_videos(
     )
 
 
+@router.get("/videos/counts")
+async def get_video_counts(channel_id: str | None = Query(None)):
+    return await run_in_threadpool(crawl_service.get_video_counts, channel_id)
+
+
 @router.patch("/videos/{video_id}/status")
 async def update_video_status(video_id: str, body: UpdateStatusRequest):
     try:
@@ -130,6 +149,48 @@ async def batch_update_status(body: BatchStatusRequest):
         raise HTTPException(400, str(e))
 
 
+# ── Frame inspection ─────────────────────────────────────
+
+
+@router.post("/videos/{video_id}/inspect")
+async def inspect_video(video_id: str):
+    try:
+        return await run_in_threadpool(inspect_service.inspect_single_video, video_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@router.post("/videos/batch-inspect")
+async def batch_inspect_videos(body: BatchInspectRequest):
+    if not body.video_ids:
+        raise HTTPException(400, "video_ids must not be empty")
+    job_id = inspect_service.start_batch_job(body.video_ids)
+    return {"job_id": job_id}
+
+
+@router.get("/videos/inspect-job/{job_id}")
+async def get_inspect_job(job_id: str):
+    result = inspect_service.get_job_status(job_id)
+    if result is None:
+        raise HTTPException(404, f"Job {job_id} not found")
+    return result
+
+
+# ── Screening ─────────────────────────────────────────────
+
+
+@router.post("/screen")
+async def screen_videos(body: ScreenRequest):
+    try:
+        return await run_in_threadpool(
+            crawl_service.screen_videos, body.channel_id, body.limit
+        )
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 # ── Quota ──────────────────────────────────────────────────
 
 
@@ -139,6 +200,18 @@ async def get_quota():
 
 
 # ── AI Classification ─────────────────────────────────────
+
+
+@router.post("/auto-classify")
+async def auto_classify(body: AutoClassifyRequest):
+    try:
+        return await run_in_threadpool(
+            crawl_service.auto_classify_titles, body.channel_id, body.limit
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @router.post("/classify")

@@ -229,6 +229,32 @@ def crawl_all_channels() -> dict:
 # ── Videos ──────────────────────────────────────────────────
 
 
+def get_video_counts(channel_id: str | None = None) -> dict:
+    """Get video counts grouped by screening status."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            where = "WHERE channel_id = %s" if channel_id else ""
+            params = [channel_id] if channel_id else []
+
+            cur.execute(
+                f"""
+                SELECT screening_status, COUNT(*) AS cnt
+                FROM youtube_videos
+                {where}
+                GROUP BY screening_status
+                """,
+                params,
+            )
+            counts: dict[str, int] = {}
+            total = 0
+            for status, cnt in cur.fetchall():
+                key = status if status else "unscreened"
+                counts[key] = cnt
+                total += cnt
+            counts["all"] = total
+            return counts
+
+
 def list_videos(
     channel_id: str | None = None,
     status_filter: str | None = None,
@@ -325,6 +351,85 @@ def batch_update_status(video_ids: list[str], status: str) -> int:
             return cur.rowcount
 
 
+# ── Screening ──────────────────────────────────────────────
+
+
+def screen_videos(channel_id: str | None = None, limit: int = 500) -> dict:
+    """Run title-based screening on unscreened videos.
+
+    Applies score_title() to each unscreened video and marks it as
+    'candidate' (score >= 0.3) or 'rejected' (below threshold).
+    """
+    conditions = ["screening_status IS NULL"]
+    params: list = []
+
+    if channel_id:
+        conditions.append("channel_id = %s")
+        params.append(channel_id)
+
+    where = "WHERE " + " AND ".join(conditions)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT video_id, title
+                FROM youtube_videos
+                {where}
+                ORDER BY published_at DESC
+                LIMIT %s
+                """,
+                params + [limit],
+            )
+            videos = cur.fetchall()
+
+    if not videos:
+        return {"screened": 0, "candidates": 0, "rejected": 0}
+
+    candidates_ids: list[tuple[str, float]] = []
+    rejected_ids: list[str] = []
+
+    for video_id, title in videos:
+        is_candidate, confidence = score_title(title)
+        if is_candidate:
+            candidates_ids.append((video_id, confidence))
+        else:
+            rejected_ids.append(video_id)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if candidates_ids:
+                for vid, conf in candidates_ids:
+                    cur.execute(
+                        """
+                        UPDATE youtube_videos
+                        SET screening_status = 'candidate',
+                            screening_confidence = %s,
+                            updated_at = now()
+                        WHERE video_id = %s
+                        """,
+                        (conf, vid),
+                    )
+            if rejected_ids:
+                cur.execute(
+                    """
+                    UPDATE youtube_videos
+                    SET screening_status = 'rejected',
+                        screening_confidence = 0,
+                        updated_at = now()
+                    WHERE video_id = ANY(%s)
+                    """,
+                    (rejected_ids,),
+                )
+            conn.commit()
+
+    return {
+        "screened": len(videos),
+        "candidates": len(candidates_ids),
+        "rejected": len(rejected_ids),
+    }
+
+
 # ── Quota ───────────────────────────────────────────────────
 
 
@@ -418,3 +523,136 @@ Output ONLY the classification prompt text, nothing else."""
         messages=[{"role": "user", "content": user_prompt}],
     )
     return response.content[0].text
+
+
+def auto_classify_titles(
+    channel_id: str | None = None, limit: int = 200
+) -> dict:
+    """Use Claude to batch-classify unscreened video titles.
+
+    Sends titles to Claude with approved examples as context and asks for
+    a structured classification. Updates screening_status in the database.
+    """
+    import json as _json
+    import anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY not set in environment")
+
+    # Fetch positive examples
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT title, channel_handle
+                FROM youtube_videos
+                WHERE screening_status = 'approved'
+                ORDER BY published_at DESC
+                LIMIT 100
+                """
+            )
+            positives = [
+                f"{row[0]}  (channel: {row[1] or 'unknown'})"
+                for row in cur.fetchall()
+            ]
+
+            # Fetch unscreened titles to classify
+            conditions = ["screening_status IS NULL"]
+            params: list = []
+            if channel_id:
+                conditions.append("channel_id = %s")
+                params.append(channel_id)
+            where = "WHERE " + " AND ".join(conditions)
+
+            cur.execute(
+                f"""
+                SELECT video_id, title, channel_handle
+                FROM youtube_videos
+                {where}
+                ORDER BY published_at DESC
+                LIMIT %s
+                """,
+                params + [limit],
+            )
+            to_classify = [
+                {"video_id": row[0], "title": row[1], "channel": row[2] or "unknown"}
+                for row in cur.fetchall()
+            ]
+
+    if not to_classify:
+        return {"classified": 0, "candidates": 0, "rejected": 0}
+
+    if not positives:
+        raise ValueError(
+            "No approved videos to use as examples. Approve some videos first."
+        )
+
+    positive_list = "\n".join(f"  - {t}" for t in positives[:50])
+    titles_list = "\n".join(
+        f"  {i+1}. [{v['video_id']}] {v['title']}  (channel: {v['channel']})"
+        for i, v in enumerate(to_classify)
+    )
+
+    user_prompt = f"""## Positive examples (titles confirmed to have OTB chess footage with overlay)
+{positive_list}
+
+## Titles to classify
+{titles_list}
+
+Classify each title as "candidate" (likely OTB chess game footage with board overlay) \
+or "rejected" (unlikely to have usable footage).
+
+Respond with a JSON array only, no other text:
+[{{"id": "VIDEO_ID", "status": "candidate|rejected"}}]"""
+
+    client = anthropic.Anthropic(api_key=api_key)
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=4096,
+        system="You are an expert at classifying YouTube video titles for OTB "
+               "(over-the-board) chess footage. You return valid JSON only.",
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+
+    # Parse response
+    raw = response.content[0].text.strip()
+    # Strip markdown code fences if present
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+        if raw.endswith("```"):
+            raw = raw[:-3].strip()
+
+    classifications = _json.loads(raw)
+
+    # Apply classifications
+    candidate_ids = [c["id"] for c in classifications if c["status"] == "candidate"]
+    rejected_ids = [c["id"] for c in classifications if c["status"] == "rejected"]
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if candidate_ids:
+                cur.execute(
+                    """
+                    UPDATE youtube_videos
+                    SET screening_status = 'candidate', updated_at = now()
+                    WHERE video_id = ANY(%s) AND screening_status IS NULL
+                    """,
+                    (candidate_ids,),
+                )
+            if rejected_ids:
+                cur.execute(
+                    """
+                    UPDATE youtube_videos
+                    SET screening_status = 'rejected', updated_at = now()
+                    WHERE video_id = ANY(%s) AND screening_status IS NULL
+                    """,
+                    (rejected_ids,),
+                )
+            conn.commit()
+
+    return {
+        "classified": len(classifications),
+        "candidates": len(candidate_ids),
+        "rejected": len(rejected_ids),
+    }
