@@ -610,8 +610,30 @@ Respond with a JSON array only, no other text:
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=4096,
-        system="You are an expert at classifying YouTube video titles for OTB "
-               "(over-the-board) chess footage. You return valid JSON only.",
+        system=(
+            "You are an expert at classifying YouTube video titles for OTB "
+            "(over-the-board) chess footage with 2D board overlay. You return valid JSON only.\n\n"
+            "POSITIVE indicators:\n"
+            "- Tournament names with years in format: '[Player] vs [Player] || [Tournament] ([Year])'\n"
+            "- Formal chess event references (Candidates, World Championship, named tournaments)\n"
+            "- Classical game analysis format with opponent names and tournament context\n"
+            "- Titles suggesting serious competitive chess coverage\n\n"
+            "NEGATIVE indicators:\n"
+            "- Sensationalized language (ALL CAPS, multiple exclamation marks, 'DESTROYS', 'INSANE')\n"
+            "- Casual/meme language ('rizz', 'cursed', reaction content)\n"
+            "- First-person references ('I got destroyed', 'MY MOVES', 'Join me')\n"
+            "- Clickbait phrases ('You won't believe', 'Wait for it', 'Do you see it?')\n"
+            "- Player reaction focus ('slams table', 'pushes camera')\n"
+            "- Educational/tutorial framing ('How To Win', 'Secret Rule')\n"
+            "- Streaming/live content references (lichess.org, 'blitz or bullet')\n"
+            "- Vague dramatic titles without specific game context\n"
+            "- Questions without tournament context\n"
+            "- Personal commentary format\n\n"
+            "If title contains formal tournament structure with specific players, venue, and year, "
+            "classify as 'candidate'. Otherwise, classify as 'rejected'.\n"
+            "Edge cases: Titles mentioning famous players but without tournament context should be "
+            "classified as 'rejected' unless they follow the formal game analysis format."
+        ),
         messages=[{"role": "user", "content": user_prompt}],
     )
 
