@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ChannelManager from "@/components/ChannelManager";
 import VideoInspector from "@/components/VideoInspector";
-import AIClassifier from "@/components/AIClassifier";
 import { listCrawlChannels } from "@/lib/api";
 import type { CrawlChannel } from "@/lib/types";
 
@@ -39,7 +38,6 @@ export default function CrawlPage() {
         <TabsList>
           <TabsTrigger value="channels">Channels</TabsTrigger>
           <TabsTrigger value="videos">Videos</TabsTrigger>
-          <TabsTrigger value="classify">AI Classify</TabsTrigger>
         </TabsList>
 
         <TabsContent value="channels">
@@ -51,10 +49,6 @@ export default function CrawlPage() {
             channels={channels}
             initialChannelId={selectedChannelId}
           />
-        </TabsContent>
-
-        <TabsContent value="classify">
-          <AIClassifier />
         </TabsContent>
       </Tabs>
     </div>

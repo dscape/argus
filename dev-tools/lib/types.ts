@@ -159,6 +159,8 @@ export interface InspectFrame {
   overlay_bbox: number[] | null;
   otb_found: boolean;
   otb_confidence: number;
+  has_person: boolean;
+  person_count: number;
   image_base64: string;
 }
 
@@ -167,6 +169,7 @@ export interface InspectResult {
   title: string;
   has_overlay: boolean;
   has_otb: boolean;
+  has_person: boolean;
   overlay_score: number;
   otb_confidence: number;
   approved: boolean;

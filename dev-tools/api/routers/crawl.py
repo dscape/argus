@@ -22,6 +22,7 @@ class ToggleChannelRequest(BaseModel):
 
 class UpdateStatusRequest(BaseModel):
     status: str | None = None
+    layout_type: str | None = None
 
 
 class BatchStatusRequest(BaseModel):
@@ -129,7 +130,7 @@ async def get_video_counts(channel_id: str | None = Query(None)):
 async def update_video_status(video_id: str, body: UpdateStatusRequest):
     try:
         result = await run_in_threadpool(
-            crawl_service.update_video_status, video_id, body.status
+            crawl_service.update_video_status, video_id, body.status, body.layout_type
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

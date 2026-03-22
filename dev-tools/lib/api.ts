@@ -237,14 +237,17 @@ export async function listCrawlVideos(params: {
 
 export async function updateVideoStatus(
   videoId: string,
-  status: string | null
+  status: string | null,
+  layoutType?: string
 ): Promise<void> {
+  const body: Record<string, unknown> = { status };
+  if (layoutType) body.layout_type = layoutType;
   const res = await fetch(
     `/api/crawl/videos/${encodeURIComponent(videoId)}/status`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify(body),
     }
   );
   if (!res.ok) throw new Error(await res.text());
@@ -258,19 +261,6 @@ export async function batchUpdateVideoStatus(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ video_ids: videoIds, status }),
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-export async function screenVideos(params?: {
-  channel_id?: string;
-  limit?: number;
-}): Promise<{ screened: number; candidates: number; rejected: number }> {
-  const res = await fetch("/api/crawl/screen", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params ?? {}),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

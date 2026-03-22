@@ -299,30 +299,73 @@ def list_videos(
             cols = [d[0] for d in cur.description]
             rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
+    # Score titles and auto-reject low-scoring unscreened videos
+    auto_reject_ids: list[str] = []
+    kept_rows: list[dict] = []
+
     for row in rows:
         is_candidate, confidence = score_title(row["title"])
         row["title_score"] = round(confidence, 3)
         row["title_is_candidate"] = is_candidate
 
+        if row["screening_status"] is None and not is_candidate:
+            auto_reject_ids.append(row["video_id"])
+        else:
+            kept_rows.append(row)
+
+    # Persist auto-rejections
+    if auto_reject_ids:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE youtube_videos
+                    SET screening_status = 'rejected', updated_at = now()
+                    WHERE video_id = ANY(%s)
+                    """,
+                    (auto_reject_ids,),
+                )
+                conn.commit()
+
+    # When viewing unscreened, return only kept rows and adjust total
+    if status_filter == "unscreened" and auto_reject_ids:
+        total -= len(auto_reject_ids)
+        return {"videos": kept_rows, "total": total}
+
     return {"videos": rows, "total": total}
 
 
-def update_video_status(video_id: str, status: str | None) -> dict | None:
-    """Set screening_status for a video."""
+def update_video_status(
+    video_id: str, status: str | None, layout_type: str | None = None
+) -> dict | None:
+    """Set screening_status and optionally layout_type for a video."""
     if status is not None and status not in ("candidate", "approved", "rejected"):
         raise ValueError(f"Invalid status: {status}")
+    if layout_type is not None and layout_type not in ("overlay", "otb_only"):
+        raise ValueError(f"Invalid layout_type: {layout_type}")
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE youtube_videos
-                SET screening_status = %s, updated_at = now()
-                WHERE video_id = %s
-                RETURNING video_id, title, screening_status
-                """,
-                (status, video_id),
-            )
+            if layout_type is not None:
+                cur.execute(
+                    """
+                    UPDATE youtube_videos
+                    SET screening_status = %s, layout_type = %s, updated_at = now()
+                    WHERE video_id = %s
+                    RETURNING video_id, title, screening_status
+                    """,
+                    (status, layout_type, video_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE youtube_videos
+                    SET screening_status = %s, updated_at = now()
+                    WHERE video_id = %s
+                    RETURNING video_id, title, screening_status
+                    """,
+                    (status, video_id),
+                )
             row = cur.fetchone()
             if not row:
                 return None

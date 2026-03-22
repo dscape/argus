@@ -24,6 +24,12 @@ from pipeline.screen.dual_region_detector import (
 
 logger = logging.getLogger(__name__)
 
+# ── Face detection (loaded once, bundled with OpenCV) ─────
+
+_face_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+)
+
 # ── In-memory job store (dev tool only) ────────────────────
 
 _jobs: dict[str, dict] = {}
@@ -98,10 +104,20 @@ def _frame_to_base64(frame: np.ndarray, max_width: int = 640) -> str:
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+def _detect_person(frame: np.ndarray) -> tuple[bool, int]:
+    """Detect faces/people in frame using Haar cascade. Returns (found, count)."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = _face_cascade.detectMultiScale(
+        gray, scaleFactor=1.1, minNeighbors=3, minSize=(15, 15)
+    )
+    count = len(faces)
+    return count > 0, count
+
+
 def _analyze_frame(
     frame: np.ndarray, label: str
 ) -> dict:
-    """Run overlay + OTB detection on a single frame."""
+    """Run overlay + OTB + person detection on a single frame."""
     overlay_det = detect_overlay_in_frame(frame)
 
     otb_found = False
@@ -111,6 +127,8 @@ def _analyze_frame(
         otb_found = otb_det.found
         otb_confidence = otb_det.confidence
 
+    has_person, person_count = _detect_person(frame)
+
     return {
         "label": label,
         "overlay_found": overlay_det.found,
@@ -118,6 +136,8 @@ def _analyze_frame(
         "overlay_bbox": list(overlay_det.bbox) if overlay_det.bbox else None,
         "otb_found": otb_found,
         "otb_confidence": round(otb_confidence, 3),
+        "has_person": has_person,
+        "person_count": person_count,
         "image_base64": _frame_to_base64(frame),
     }
 
@@ -154,6 +174,7 @@ def inspect_single_video(video_id: str) -> dict:
     best_otb_confidence = 0.0
     has_overlay = False
     has_otb = False
+    has_person = False
     best_bbox = None
 
     for fr in frame_results:
@@ -164,8 +185,10 @@ def inspect_single_video(video_id: str) -> dict:
         if fr["otb_found"] and fr["otb_confidence"] > best_otb_confidence:
             best_otb_confidence = fr["otb_confidence"]
             has_otb = True
+        if fr.get("has_person"):
+            has_person = True
 
-    approved = has_overlay and has_otb
+    approved = has_overlay and has_otb and has_person
 
     # Update DB
     status = "approved" if approved else "rejected"
@@ -202,6 +225,7 @@ def inspect_single_video(video_id: str) -> dict:
         "title": title,
         "has_overlay": has_overlay,
         "has_otb": has_otb,
+        "has_person": has_person,
         "overlay_score": round(best_overlay_score, 3),
         "otb_confidence": round(best_otb_confidence, 3),
         "approved": approved,

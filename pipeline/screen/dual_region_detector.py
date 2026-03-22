@@ -21,16 +21,18 @@ from pipeline.overlay.scanner import (
 logger = logging.getLogger(__name__)
 
 # Minimum Laplacian variance for natural textures (wood grain, people, etc.)
-# Rendered UIs and solid backgrounds have much lower values.
-MIN_LAPLACIAN_VARIANCE = 50.0
+# Real camera footage of tournament scenes typically has variance 300-800+.
+# Rendered UIs, move lists, and sidebar chrome sit around 50-150.
+MIN_LAPLACIAN_VARIANCE = 200.0
 
 # Minimum color standard deviation across the OTB region.
-# Real scenes have diverse colors; solid backgrounds do not.
-MIN_COLOR_STD = 15.0
+# Real scenes have diverse colors from lighting, skin tones, wood, clothing.
+# UI elements and rendered boards have limited palettes (typically std < 25).
+MIN_COLOR_STD = 30.0
 
 # Minimum fraction of frame area that must be non-overlay to be considered
-# as potentially containing OTB footage.
-MIN_OTB_AREA_FRACTION = 0.15
+# as potentially containing OTB footage. Needs a substantial camera region.
+MIN_OTB_AREA_FRACTION = 0.25
 
 
 @dataclass

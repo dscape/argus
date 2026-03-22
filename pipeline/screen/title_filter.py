@@ -137,8 +137,8 @@ def score_title(title: str) -> tuple[bool, float]:
     if score > 0 and re.search(r"\b20[0-2]\d\b", title):
         score += 0.1
 
-    # Threshold: need at least 0.3 to be a candidate
-    is_candidate = score >= 0.3
+    # Threshold: need at least 0.15 to be a candidate
+    is_candidate = score >= 0.15
     confidence = min(score, 1.0)
 
     return is_candidate, confidence
