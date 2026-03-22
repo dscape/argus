@@ -41,10 +41,11 @@ def get_conn():
 
 
 def init_schema():
-    """Apply schema.sql to the database."""
+    """Drop all tables and apply schema.sql from scratch."""
     schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
     with open(schema_path) as f:
         sql = f.read()
     with get_connection(autocommit=True) as conn:
+        conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
         conn.execute(sql)
     print("Schema applied successfully.")

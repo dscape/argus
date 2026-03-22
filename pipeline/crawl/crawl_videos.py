@@ -23,14 +23,21 @@ def crawl_channel(
 
     Returns the number of new videos inserted.
     """
+    from tqdm import tqdm
+
     total_new = 0
     page_token = None
+    page_num = 0
+
+    pbar = tqdm(desc="  Pages", unit="pg", leave=False)
 
     while True:
         response = client.list_playlist_items(
             playlist_id=playlist_id,
             page_token=page_token,
         )
+        page_num += 1
+        pbar.update(1)
 
         # Store raw response
         with get_conn() as conn:
@@ -52,6 +59,7 @@ def crawl_channel(
 
         new_in_page = _store_videos(items, channel_id, channel_handle)
         total_new += new_in_page
+        pbar.set_postfix(videos=total_new)
 
         # If refreshing, stop when we hit videos we already have
         if refresh and new_in_page == 0:
@@ -62,6 +70,7 @@ def crawl_channel(
         if not page_token:
             break
 
+    pbar.close()
     return total_new
 
 
@@ -152,15 +161,19 @@ def crawl_all(
         print("No channels to crawl. Run resolve-channels first.")
         return
 
+    from tqdm import tqdm
+
     print(f"Crawling {len(channels)} channels (refresh={refresh})")
     total_videos = 0
 
-    for ch_id, ch_handle, ch_name, playlist_id, last_crawled in channels:
-        print(f"\n{'='*60}")
-        print(f"Crawling: {ch_name} ({ch_handle or ch_id})")
+    for ch_id, ch_handle, ch_name, playlist_id, last_crawled in tqdm(
+        channels, desc="Channels", unit="ch"
+    ):
+        tqdm.write(f"\n{'='*60}")
+        tqdm.write(f"Crawling: {ch_name} ({ch_handle or ch_id})")
 
         remaining = quota.get_remaining()
-        print(f"  Quota remaining: {remaining}")
+        tqdm.write(f"  Quota remaining: {remaining}")
 
         try:
             new_count = crawl_channel(
@@ -172,7 +185,7 @@ def crawl_all(
                 last_crawled_at=last_crawled,
             )
             total_videos += new_count
-            print(f"  New videos: {new_count}")
+            tqdm.write(f"  New videos: {new_count}")
 
             # Update last_crawled_at
             with get_conn() as conn:
@@ -189,7 +202,7 @@ def crawl_all(
 
         except Exception as e:
             logger.error(f"Error crawling {ch_name}: {e}")
-            print(f"  ERROR: {e}")
+            tqdm.write(f"  ERROR: {e}")
             if "quota" in str(e).lower():
                 print("Quota exhausted. Stopping all crawls.")
                 break

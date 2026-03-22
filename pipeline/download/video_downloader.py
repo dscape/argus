@@ -1,4 +1,4 @@
-"""Download matched YouTube videos using yt-dlp."""
+"""Download approved YouTube videos using yt-dlp."""
 
 import logging
 import os
@@ -13,31 +13,27 @@ logger = logging.getLogger(__name__)
 DEFAULT_OUTPUT_DIR = os.path.join("data", "videos")
 
 
-def download_matched_videos(
-    min_confidence: float = 70.0,
+def download_approved_videos(
     output_dir: str = DEFAULT_OUTPUT_DIR,
     limit: int | None = None,
     delay: float = 2.0,
 ):
-    """Download videos that have been matched to games.
+    """Download videos that passed screening (overlay + OTB approved).
 
     Args:
-        min_confidence: Minimum match confidence to download.
         output_dir: Base directory for downloaded videos.
         limit: Maximum number of videos to download.
         delay: Seconds to wait between downloads.
     """
-    # Get videos to download
     with get_conn() as conn:
         with conn.cursor() as cur:
             query = """
-                SELECT DISTINCT v.video_id, v.channel_handle, v.title
-                FROM game_video_links gvl
-                JOIN youtube_videos v ON v.video_id = gvl.video_id
-                WHERE gvl.match_confidence >= %s
-                ORDER BY v.video_id
+                SELECT video_id, channel_handle, title
+                FROM youtube_videos
+                WHERE screening_status = 'approved'
+                ORDER BY published_at DESC
             """
-            params = [min_confidence]
+            params: list = []
 
             if limit:
                 query += " LIMIT %s"
@@ -47,29 +43,30 @@ def download_matched_videos(
             videos = cur.fetchall()
 
     if not videos:
-        print("No videos to download.")
+        print("No approved videos to download.")
         return
 
     # Filter out already downloaded
     to_download = []
     for video_id, channel_handle, title in videos:
-        channel_dir = channel_handle or "unknown"
-        channel_dir = channel_dir.lstrip("@")
+        channel_dir = (channel_handle or "unknown").lstrip("@")
         filepath = os.path.join(output_dir, channel_dir, f"{video_id}.mp4")
         if not os.path.exists(filepath):
             to_download.append((video_id, channel_dir, title, filepath))
 
     if not to_download:
-        print(f"All {len(videos)} matched videos already downloaded.")
+        print(f"All {len(videos)} approved videos already downloaded.")
         return
 
-    print(f"Downloading {len(to_download)} videos (skipping {len(videos) - len(to_download)} already downloaded)...")
+    print(
+        f"Downloading {len(to_download)} videos "
+        f"(skipping {len(videos) - len(to_download)} already downloaded)..."
+    )
 
     downloaded = 0
     failed = 0
 
     for video_id, channel_dir, title, filepath in to_download:
-        # Create output directory
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
         url = f"https://www.youtube.com/watch?v={video_id}"

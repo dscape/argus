@@ -1,5 +1,5 @@
 .PHONY: install dev test lint typecheck format train eval datagen infer clean \
-       db-up db-down pipeline-install import-data crawl extract match download-videos generate-clips pipeline-stats \
+       db-up db-down pipeline-install seed-channels crawl screen download generate-clips pipeline-stats \
        dev-tools dev-tools-down blender-server blender-server-stop \
        up down
 
@@ -54,21 +54,16 @@ db-down:
 pipeline-install:
 	$(PIP) install -r pipeline/requirements.txt
 
-import-data:
-	$(PYTHON) -m pipeline.cli import-players
-	$(PYTHON) -m pipeline.cli import-pgns $(ARGS)
+seed-channels:
 	$(PYTHON) -m pipeline.cli seed-channels
 
 crawl:
 	$(PYTHON) -m pipeline.cli crawl $(ARGS)
 
-extract:
-	$(PYTHON) -m pipeline.cli extract $(ARGS)
+screen:
+	$(PYTHON) -m pipeline.cli screen $(ARGS)
 
-match:
-	$(PYTHON) -m pipeline.cli match $(ARGS)
-
-download-videos:
+download:
 	$(PYTHON) -m pipeline.cli download $(ARGS)
 
 generate-clips:

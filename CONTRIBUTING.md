@@ -44,7 +44,7 @@ Verify Blender: `blender --version` should show 4.0 or later. You can also set t
 
 | I want to... | Domain | Folder | Setup needed |
 |--------------|--------|--------|-------------|
-| Add YouTube channels or improve game matching | Pipeline | `pipeline/` | Python + PostgreSQL + API keys |
+| Add YouTube channels or improve video screening | Pipeline | `pipeline/` | Python + PostgreSQL + API keys |
 | Improve overlay board reading or calibration | Pipeline (overlay) | `pipeline/overlay/` | Python + Cairo |
 | Generate better synthetic training data | Data Generation | `src/argus/datagen/` | Python + Cairo (+ Blender 4.0+ for 3D) |
 | Train the model or tune hyperparameters | Training | `src/argus/model/`, `src/argus/training/` | Python + PyTorch + GPU |
@@ -125,8 +125,6 @@ cd dev-tools && npm install && npm run dev
 |--------|---------|--------------|
 | **All** | `make test` | Full suite |
 | **Chess core** | `pytest tests/test_move_vocabulary.py tests/test_chess_state_machine.py tests/test_constraint_mask.py -v` | Move vocabulary, state machine, constraint masking |
-| **Pipeline — extraction** | `pytest tests/pipeline/test_title_parser.py tests/pipeline/test_description_parser.py tests/pipeline/test_player_aliases.py -v` | Title/description parsing, player name normalization |
-| **Pipeline — matching** | `pytest tests/pipeline/test_scoring.py tests/pipeline/test_pgn_verifier.py tests/pipeline/test_pgn_aligner.py -v` | Match scoring, PGN verification, move alignment |
 | **Pipeline — overlay** | `pytest tests/pipeline/test_overlay_reader.py tests/pipeline/test_overlay_move_detector.py -v` | Overlay FEN reading, move detection |
 
 ### Linting & Type Checking

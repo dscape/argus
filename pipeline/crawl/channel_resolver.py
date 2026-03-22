@@ -71,7 +71,14 @@ def resolve_channels(client: YouTubeClient | None = None):
         with get_conn() as conn:
             with conn.cursor() as cur:
                 if channel_id and channel_id.startswith("UNRESOLVED:"):
-                    # Replace placeholder with real channel_id
+                    # Fetch tier before deleting the placeholder row
+                    cur.execute(
+                        "SELECT tier FROM crawl_channels WHERE channel_id = %s",
+                        (channel_id,),
+                    )
+                    row = cur.fetchone()
+                    tier = row[0] if row else 3
+
                     cur.execute(
                         "DELETE FROM crawl_channels WHERE channel_id = %s",
                         (channel_id,),
@@ -81,9 +88,7 @@ def resolve_channels(client: YouTubeClient | None = None):
                         INSERT INTO crawl_channels
                             (channel_id, channel_handle, channel_name, tier,
                              uploads_playlist_id, enabled)
-                        VALUES (%s, %s, %s,
-                                (SELECT tier FROM crawl_channels WHERE channel_id = %s),
-                                %s, true)
+                        VALUES (%s, %s, %s, %s, %s, true)
                         ON CONFLICT (channel_id) DO UPDATE SET
                             uploads_playlist_id = EXCLUDED.uploads_playlist_id,
                             channel_handle = EXCLUDED.channel_handle
@@ -92,7 +97,7 @@ def resolve_channels(client: YouTubeClient | None = None):
                             info["channel_id"],
                             handle,
                             name,
-                            channel_id,
+                            tier,
                             info["uploads_playlist_id"],
                         ),
                     )
