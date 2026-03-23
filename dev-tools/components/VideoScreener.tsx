@@ -7,8 +7,6 @@ import {
   updateVideoStatus,
   batchUpdateVideoStatus,
   getVideoCounts,
-  batchInspectVideos,
-  getInspectJobStatus,
   undoAutoReject,
 } from "@/lib/api";
 import type { CrawlChannel, CrawlVideo } from "@/lib/types";
@@ -38,7 +36,6 @@ interface Toast {
   undoAction?: () => Promise<void>;
 }
 
-// Extended video with local inspect reason
 interface VideoWithReason extends CrawlVideo {
   inspect_reason?: string;
 }
@@ -98,6 +95,14 @@ function TrashIcon({ className }: { className?: string }) {
   );
 }
 
+function SpinnerIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={className}>
+      <path d="M12 2a10 10 0 0110 10" />
+    </svg>
+  );
+}
+
 // ── Helpers ─────────────────────────────────────────────────
 
 function statusBadge(status: string | null, layoutType?: string | null) {
@@ -125,12 +130,23 @@ function youtubeThumb(videoId: string, index: number): string {
   return `https://img.youtube.com/vi/${videoId}/${index}.jpg`;
 }
 
-/** Compute how many video cards fit above the fold in a 3-col grid. */
+/** Card tint based on screening status (only in unscreened filter). */
+function cardTintClass(status: string | null, layoutType: string | null, inUnscreenedFilter: boolean): string {
+  if (!inUnscreenedFilter || status === null) return "";
+  if (status === "rejected") return "bg-red-50 dark:bg-red-950/30 opacity-60";
+  if (status === "approved") {
+    return layoutType === "otb_only"
+      ? "bg-green-50 dark:bg-green-950/30 opacity-75"
+      : "bg-green-50 dark:bg-green-950/30 opacity-75";
+  }
+  return "opacity-60";
+}
+
 function computePageSize(): number {
   if (typeof window === "undefined") return 6;
   const vh = window.innerHeight;
-  const headerHeight = 130; // page title + toolbar
-  const cardHeight = 308;   // card (~300px) + gap (8px)
+  const headerHeight = 130;
+  const cardHeight = 308;
   const cols = window.innerWidth >= 1280 ? 3 : 2;
   const rows = Math.max(1, Math.floor((vh - headerHeight) / cardHeight));
   return rows * cols;
@@ -353,14 +369,10 @@ export default function VideoScreener({
   const [orderBy, setOrderBy] = useState("title_score_desc");
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [batchJob, setBatchJob] = useState<{
-    id: string;
-    total: number;
-    completed: number;
-  } | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const [pageSize, setPageSize] = useState(() => computePageSize());
+  const [autoRunning, setAutoRunning] = useState(false);
 
   // Dropdown state
   const [sortOpen, setSortOpen] = useState(false);
@@ -408,6 +420,69 @@ export default function VideoScreener({
     loadCounts();
   }, [loadCounts]);
 
+  // Ref to track whether automatic should run after load
+  const shouldAutoRejectRef = useRef(false);
+
+  const runAutomaticReject = useCallback(async (vids: VideoWithReason[]) => {
+    const unscreened = vids.filter((v) => v.screening_status === null);
+    if (unscreened.length === 0) return;
+
+    const toReject = unscreened.filter((v) => !v.title_is_candidate);
+    const toKeep = unscreened.filter((v) => v.title_is_candidate);
+
+    if (toReject.length === 0) {
+      // Mark all as title-checked
+      for (const v of toKeep) {
+        setVideos((prev) =>
+          prev.map((pv) =>
+            pv.video_id === v.video_id ? { ...pv, inspect_reason: "title \u2713" } : pv
+          )
+        );
+      }
+      return;
+    }
+
+    const rejectIds = toReject.map((v) => v.video_id);
+
+    try {
+      await batchUpdateVideoStatus(rejectIds, "rejected");
+      const idSet = new Set(rejectIds);
+
+      setVideos((prev) =>
+        prev.map((v) => {
+          if (idSet.has(v.video_id)) {
+            return { ...v, screening_status: "rejected", inspect_reason: `title ${v.title_score.toFixed(2)}` };
+          }
+          if (v.screening_status === null && v.title_is_candidate) {
+            return { ...v, inspect_reason: "title \u2713" };
+          }
+          return v;
+        })
+      );
+
+      await loadCounts();
+
+      addToast({
+        message: `Auto-rejected ${toReject.length} by title, ${toKeep.length} kept`,
+        type: "success",
+        undoAction: async () => {
+          await undoAutoReject(rejectIds);
+          setVideos((prev) =>
+            prev.map((v) =>
+              idSet.has(v.video_id) ? { ...v, screening_status: null, inspect_reason: undefined } : v
+            )
+          );
+          loadCounts();
+        },
+      });
+    } catch (e) {
+      addToast({
+        message: e instanceof Error ? e.message : "Auto reject failed",
+        type: "error",
+      });
+    }
+  }, [loadCounts, addToast]);
+
   const loadVideos = useCallback(async () => {
     setLoading(true);
     try {
@@ -420,6 +495,11 @@ export default function VideoScreener({
       });
       setVideos(data.videos);
       setTotal(data.total);
+
+      // Auto-run title rejection on unscreened batches
+      if (statusFilter === "unscreened" && data.videos.some((v: CrawlVideo) => v.screening_status === null)) {
+        shouldAutoRejectRef.current = true;
+      }
     } catch (e) {
       addToast({
         message: e instanceof Error ? e.message : "Failed to load videos",
@@ -430,6 +510,15 @@ export default function VideoScreener({
     }
   }, [channelId, statusFilter, orderBy, pageSize, addToast]);
 
+  // After videos load, run automatic reject if flagged
+  useEffect(() => {
+    if (!loading && shouldAutoRejectRef.current && videos.length > 0) {
+      shouldAutoRejectRef.current = false;
+      setAutoRunning(true);
+      runAutomaticReject(videos).finally(() => setAutoRunning(false));
+    }
+  }, [loading, videos, runAutomaticReject]);
+
   useEffect(() => {
     loadVideos();
   }, [loadVideos]);
@@ -438,7 +527,6 @@ export default function VideoScreener({
     setSelected(new Set());
   }, [channelId, statusFilter]);
 
-  // In-place status update (videos don't disappear)
   const updateVideoInPlace = useCallback(
     (videoId: string, newStatus: string | null, layoutType?: string | null, inspectReason?: string) => {
       setVideos((prev) =>
@@ -533,76 +621,11 @@ export default function VideoScreener({
     }
   }, [videos, loadCounts, addToast]);
 
-  const handleAutomaticInspect = useCallback(async () => {
-    const allIds = videos
-      .filter((v) => v.screening_status === null)
-      .map((v) => v.video_id);
-    if (allIds.length === 0) {
-      addToast({ message: "No unscreened videos to inspect", type: "warning" });
-      return;
-    }
-    try {
-      const { job_id } = await batchInspectVideos(allIds);
-      setBatchJob({ id: job_id, total: allIds.length, completed: 0 });
-
-      const poll = setInterval(async () => {
-        try {
-          const status = await getInspectJobStatus(job_id);
-          setBatchJob({
-            id: job_id,
-            total: status.total,
-            completed: status.completed,
-          });
-
-          if (status.results) {
-            for (const r of status.results) {
-              let reason = "";
-              if (r.approved) {
-                reason = "";
-              } else if (r.error) {
-                reason = "inspect failed";
-              } else if (!r.has_overlay) {
-                reason = "no overlay";
-              } else if (!r.has_otb) {
-                reason = "no OTB";
-              } else {
-                reason = "rejected";
-              }
-
-              updateVideoInPlace(
-                r.video_id,
-                r.status ?? (r.approved ? "approved" : "rejected"),
-                undefined,
-                reason
-              );
-            }
-          }
-
-          if (status.status === "done") {
-            clearInterval(poll);
-            setBatchJob(null);
-            addToast({
-              message: `Inspected ${status.total}: ${status.approved} approved, ${status.rejected} rejected${status.failed ? `, ${status.failed} failed` : ""}`,
-              type: "success",
-            });
-            loadCounts();
-          }
-        } catch {
-          clearInterval(poll);
-          setBatchJob(null);
-          addToast({
-            message: "Failed to poll inspection job",
-            type: "error",
-          });
-        }
-      }, 2000);
-    } catch (e) {
-      addToast({
-        message: e instanceof Error ? e.message : "Batch inspection failed",
-        type: "error",
-      });
-    }
-  }, [videos, updateVideoInPlace, loadCounts, addToast]);
+  const handleManualAutoReject = useCallback(async () => {
+    setAutoRunning(true);
+    await runAutomaticReject(videos);
+    setAutoRunning(false);
+  }, [videos, runAutomaticReject]);
 
   const toggleSelect = (videoId: string) => {
     setSelected((prev) => {
@@ -613,7 +636,6 @@ export default function VideoScreener({
     });
   };
 
-  // Client-side sorting
   const sortedVideos = useMemo(() => {
     const sorted = [...videos];
     switch (orderBy) {
@@ -636,12 +658,24 @@ export default function VideoScreener({
     videos.length > 0 && videos.every((v) => v.screening_status !== null);
 
   const hasActiveFilter = statusFilter !== null || channelId !== null;
+  const inUnscreenedFilter = statusFilter === "unscreened";
 
   return (
     <div className="relative h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
+      {/* Pulse animation for commit button */}
+      <style>{`
+        @keyframes commit-pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.5); }
+          50% { box-shadow: 0 0 0 6px rgba(22, 163, 74, 0); }
+        }
+        .commit-ready {
+          animation: commit-pulse 1.5s ease-in-out infinite;
+        }
+      `}</style>
+
       {/* Floating Toasts */}
       {toasts.length > 0 && (
-        <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 max-w-sm">
           {toasts.map((toast) => (
             <div
               key={toast.id}
@@ -763,24 +797,30 @@ export default function VideoScreener({
 
           <div className="flex-1" />
 
-          {/* Accept (green pill) */}
+          {/* Commit (green pill) — loads next batch */}
           <button
             onClick={loadVideos}
-            disabled={!allScreened && videos.length > 0}
-            className="flex items-center gap-1.5 px-3 h-8 rounded-xl text-xs font-medium bg-green-600 text-white hover:bg-green-700 transition-all duration-150 disabled:opacity-50 disabled:pointer-events-none"
+            disabled={(!allScreened && videos.length > 0) || loading}
+            className={`flex items-center gap-1.5 px-3 h-8 rounded-xl text-xs font-medium bg-green-600 text-white hover:bg-green-700 transition-all duration-150 disabled:opacity-50 disabled:pointer-events-none ${
+              allScreened ? "commit-ready" : ""
+            }`}
           >
             <CheckIcon className="w-3.5 h-3.5" />
-            Accept
+            Commit
           </button>
 
-          {/* Automatic (blue pill) */}
+          {/* Automatic (blue pill) — reject by title only */}
           <button
-            onClick={handleAutomaticInspect}
-            disabled={!!batchJob}
+            onClick={handleManualAutoReject}
             className="flex items-center gap-1.5 px-3 h-8 rounded-xl text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 transition-all duration-150 disabled:opacity-50 disabled:pointer-events-none"
+            disabled={autoRunning || !videos.some((v) => v.screening_status === null)}
           >
-            <RobotIcon className="w-3.5 h-3.5" />
-            {batchJob ? `${batchJob.completed}/${batchJob.total}` : "Automatic"}
+            {autoRunning ? (
+              <SpinnerIcon className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <RobotIcon className="w-3.5 h-3.5" />
+            )}
+            {autoRunning ? "Running..." : "Automatic"}
           </button>
 
           {/* Reject All (red pill) */}
@@ -790,21 +830,9 @@ export default function VideoScreener({
             className="flex items-center gap-1.5 px-3 h-8 rounded-xl text-xs font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-all duration-150 disabled:opacity-50 disabled:pointer-events-none"
           >
             <TrashIcon className="w-3.5 h-3.5" />
-            Reject All
+            Reject Remaining
           </button>
         </div>
-
-        {/* Batch inspection progress */}
-        {batchJob && (
-          <div className="mt-1 h-1.5 bg-muted rounded-full overflow-hidden">
-            <div
-              className="h-full bg-blue-500 transition-all duration-300"
-              style={{
-                width: `${(batchJob.completed / batchJob.total) * 100}%`,
-              }}
-            />
-          </div>
-        )}
       </div>
 
       {/* Video grid */}
@@ -819,15 +847,15 @@ export default function VideoScreener({
       ) : (
         <div className="flex-1 grid grid-cols-2 xl:grid-cols-3 gap-2 auto-rows-min content-start overflow-hidden">
           {sortedVideos.map((v) => {
-            const isScreened = v.screening_status !== null;
             const isUnscreened = v.screening_status === null;
+            const tint = cardTintClass(v.screening_status, v.layout_type, inUnscreenedFilter);
 
             return (
               <div
                 key={v.video_id}
-                className={`border rounded-lg bg-card transition-opacity ${
-                  isScreened && statusFilter === "unscreened" ? "opacity-60" : ""
-                } ${selected.has(v.video_id) ? "ring-2 ring-primary" : ""}`}
+                className={`border rounded-lg bg-card transition-all duration-300 ${tint} ${
+                  selected.has(v.video_id) ? "ring-2 ring-primary" : ""
+                }`}
               >
                 {/* Header: title + score + status */}
                 <div className="px-2 py-1 flex items-center gap-1.5 min-w-0">
@@ -848,7 +876,6 @@ export default function VideoScreener({
                   >
                     {v.title}
                   </a>
-                  {/* Status (for screened videos) */}
                   {!isUnscreened && (
                     <StatusDropdown video={v} onStatusChange={handleStatusChange} />
                   )}
