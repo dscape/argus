@@ -13,7 +13,7 @@ export default function VideosPage() {
   const [channels, setChannels] = useState<CrawlChannel[]>([]);
 
   useEffect(() => {
-    listCrawlChannels().then(setChannels).catch(() => {});
+    listCrawlChannels({ screenedOnly: true }).then(setChannels).catch(() => {});
   }, []);
 
   return (

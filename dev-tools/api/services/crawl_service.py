@@ -13,22 +13,42 @@ logger = logging.getLogger(__name__)
 # ── Channels ────────────────────────────────────────────────
 
 
-def list_channels() -> list[dict]:
-    """List all channels with video counts."""
+def list_channels(screened_only: bool = False) -> list[dict]:
+    """List all channels with video counts.
+
+    If screened_only is True, only count approved/rejected videos and
+    exclude channels with zero screened videos.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT c.channel_id, c.channel_handle, c.channel_name,
-                       c.tier, c.enabled, c.last_crawled_at, c.notes,
-                       c.uploads_playlist_id,
-                       COUNT(v.video_id) AS video_count
-                FROM crawl_channels c
-                LEFT JOIN youtube_videos v ON v.channel_id = c.channel_id
-                GROUP BY c.channel_id
-                ORDER BY c.tier ASC, c.channel_name ASC
-                """
-            )
+            if screened_only:
+                cur.execute(
+                    """
+                    SELECT c.channel_id, c.channel_handle, c.channel_name,
+                           c.tier, c.enabled, c.last_crawled_at, c.notes,
+                           c.uploads_playlist_id,
+                           COUNT(v.video_id) AS video_count
+                    FROM crawl_channels c
+                    INNER JOIN youtube_videos v
+                        ON v.channel_id = c.channel_id
+                        AND v.screening_status IN ('approved', 'rejected')
+                    GROUP BY c.channel_id
+                    ORDER BY c.tier ASC, c.channel_name ASC
+                    """
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT c.channel_id, c.channel_handle, c.channel_name,
+                           c.tier, c.enabled, c.last_crawled_at, c.notes,
+                           c.uploads_playlist_id,
+                           COUNT(v.video_id) AS video_count
+                    FROM crawl_channels c
+                    LEFT JOIN youtube_videos v ON v.channel_id = c.channel_id
+                    GROUP BY c.channel_id
+                    ORDER BY c.tier ASC, c.channel_name ASC
+                    """
+                )
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
 
@@ -273,7 +293,7 @@ def list_videos(
     if status_filter == "unscreened":
         conditions.append("screening_status IS NULL")
     elif status_filter == "screened":
-        conditions.append("screening_status IS NOT NULL")
+        conditions.append("screening_status IN ('approved', 'rejected')")
     elif status_filter:
         conditions.append("screening_status = %s")
         params.append(status_filter)

@@ -271,7 +271,7 @@ export default function VideoBrowser({
                     {f.label}
                     {(() => {
                       const count = f.value === "screened"
-                        ? (statusCounts.all ?? 0) - (statusCounts.unscreened ?? 0)
+                        ? (statusCounts.approved ?? 0) + (statusCounts.rejected ?? 0)
                         : statusCounts[f.value];
                       return count !== undefined ? (
                         <span className="ml-1 opacity-60">({count})</span>
