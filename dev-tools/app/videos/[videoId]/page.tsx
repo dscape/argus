@@ -2,6 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { useState, useEffect, useCallback } from "react";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import {
   getVideo,
   getDownloadStatus,
@@ -306,6 +307,7 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [channelCal, setChannelCal] = useState<CalibrationEntry | null>(null);
   const [frameIdx, setFrameIdx] = useState(0);
+  const debouncedFrameIdx = useDebouncedValue(frameIdx, 150);
   const [overlayBbox, setOverlayBbox] = useState<Bbox | null>(null);
   const [cameraBbox, setCameraBbox] = useState<Bbox | null>(null);
   const [drawingMode, setDrawingMode] = useState<"overlay" | "camera">("overlay");
@@ -454,7 +456,7 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
   const totalFrames = session.total_frames;
   const fps = session.fps;
   const duration = session.duration_seconds;
-  const frameSrc = videoFrameUrl(session.session_id, frameIdx);
+  const frameSrc = videoFrameUrl(session.session_id, debouncedFrameIdx);
   const timestamp = fps > 0 ? (frameIdx / fps).toFixed(1) : "0";
   const selected = selectedIdx !== null ? clips[selectedIdx] : null;
 
