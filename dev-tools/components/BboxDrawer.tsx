@@ -39,33 +39,48 @@ export function BboxDrawer({
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
-  // Load image — cancel previous loads on new src
+  // Load image — abort previous fetches on new src
   useEffect(() => {
     setLoadError(false);
     setLoading(true);
-    let cancelled = false;
-    const img = new Image();
-    img.onload = () => {
-      if (cancelled) return;
-      setLoading(false);
-      imgRef.current = img;
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      // Fit to container width (max 800px)
-      const maxW = Math.min(800, canvas.parentElement?.clientWidth || 800);
-      const s = maxW / img.width;
-      setScale(s);
-      canvas.width = img.width * s;
-      canvas.height = img.height * s;
-      redraw(img, s, existingBbox || null, secondBbox || null);
-    };
-    img.onerror = () => {
-      if (cancelled) return;
-      setLoading(false);
-      setLoadError(true);
-    };
-    img.src = imageSrc;
-    return () => { cancelled = true; };
+    const controller = new AbortController();
+
+    fetch(imageSrc, { signal: controller.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.blob();
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          setLoading(false);
+          imgRef.current = img;
+          const canvas = canvasRef.current;
+          if (!canvas) { URL.revokeObjectURL(url); return; }
+          // Fit to container width (max 800px)
+          const maxW = Math.min(800, canvas.parentElement?.clientWidth || 800);
+          const s = maxW / img.width;
+          setScale(s);
+          canvas.width = img.width * s;
+          canvas.height = img.height * s;
+          redraw(img, s, existingBbox || null, secondBbox || null);
+          URL.revokeObjectURL(url);
+        };
+        img.onerror = () => {
+          setLoading(false);
+          setLoadError(true);
+          URL.revokeObjectURL(url);
+        };
+        img.src = url;
+      })
+      .catch((err) => {
+        if (err.name === "AbortError") return;
+        setLoading(false);
+        setLoadError(true);
+      });
+
+    return () => { controller.abort(); };
   }, [imageSrc, existingBbox, secondBbox]);
 
   const redraw = useCallback(

@@ -1,12 +1,16 @@
 """Service layer for video annotation, wrapping overlay pipeline modules."""
 
 import base64
+import collections
 import os
+import threading
 import uuid
 from typing import Any
 
 import cv2
 import numpy as np
+
+_FRAME_CACHE_MAX = 64
 
 # Session storage
 _sessions: dict[str, dict[str, Any]] = {}
@@ -44,6 +48,8 @@ def open_video(video_path: str, channel_handle: str | None = None) -> dict:
     session_id = str(uuid.uuid4())[:8]
     _sessions[session_id] = {
         "cap": cap,
+        "lock": threading.Lock(),
+        "frame_cache": collections.OrderedDict(),
         "calibration": calibration,
         "video_path": video_path,
         "fps": fps,
@@ -70,18 +76,35 @@ def get_frame_jpeg(session_id: str, frame_index: int) -> bytes:
     if session is None:
         raise ValueError("Session not found")
 
-    cap = session["cap"]
     total = session["total_frames"]
     frame_index = max(0, min(frame_index, total - 1))
 
-    # Try the exact frame first, then fall back to nearby frames
-    for offset in [0, -1, -5, -10]:
-        idx = max(0, frame_index + offset)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if ret:
-            _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            return buffer.tobytes()
+    cache = session["frame_cache"]
+
+    # Fast path: return cached frame without acquiring the lock
+    if frame_index in cache:
+        cache.move_to_end(frame_index)
+        return cache[frame_index]
+
+    with session["lock"]:
+        # Double-check after acquiring lock
+        if frame_index in cache:
+            cache.move_to_end(frame_index)
+            return cache[frame_index]
+
+        cap = session["cap"]
+        # Try the exact frame first, then fall back to nearby frames
+        for offset in [0, -1, -5, -10]:
+            idx = max(0, frame_index + offset)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if ret:
+                _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                jpeg_bytes = buffer.tobytes()
+                cache[frame_index] = jpeg_bytes
+                if len(cache) > _FRAME_CACHE_MAX:
+                    cache.popitem(last=False)
+                return jpeg_bytes
 
     raise ValueError(f"Cannot read frame {frame_index}")
 
@@ -125,10 +148,11 @@ def read_overlay_at_frame(session_id: str, frame_index: int, clip_id: int | None
     if calibration is None:
         raise ValueError("No calibration for this session")
 
-    cap = session["cap"]
     fps = session["fps"]
-    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-    ret, frame = cap.read()
+    with session["lock"]:
+        cap = session["cap"]
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        ret, frame = cap.read()
     if not ret:
         raise ValueError(f"Cannot read frame {frame_index}")
 
@@ -193,9 +217,11 @@ def detect_moves(session_id: str, sample_fps: float = 2.0, clip_id: int | None =
     frame_indices: list[int] = []
     num_readable = 0
 
+    lock = session["lock"]
     for idx in range(start_frame, end_frame, frame_interval):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
+        with lock:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
         if not ret:
             fens.append(None)
             frame_indices.append(idx)
