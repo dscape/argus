@@ -56,8 +56,8 @@ class UndoAutoRejectRequest(BaseModel):
 
 
 @router.get("/channels")
-async def list_channels():
-    return await run_in_threadpool(crawl_service.list_channels)
+async def list_channels(screened_only: bool = Query(False)):
+    return await run_in_threadpool(crawl_service.list_channels, screened_only)
 
 
 @router.post("/channels")

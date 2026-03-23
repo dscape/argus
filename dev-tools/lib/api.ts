@@ -170,8 +170,11 @@ export async function deleteVideoSession(sessionId: string): Promise<void> {
 
 // ── Crawl ───────────────────────────────────────────────────
 
-export async function listCrawlChannels(): Promise<CrawlChannel[]> {
-  const res = await fetch("/api/crawl/channels");
+export async function listCrawlChannels(opts?: { screenedOnly?: boolean }): Promise<CrawlChannel[]> {
+  const params = new URLSearchParams();
+  if (opts?.screenedOnly) params.set("screened_only", "true");
+  const qs = params.toString();
+  const res = await fetch(`/api/crawl/channels${qs ? `?${qs}` : ""}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
