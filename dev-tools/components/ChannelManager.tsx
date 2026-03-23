@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,13 +15,8 @@ import {
 } from "@/lib/api";
 import type { CrawlChannel, QuotaStatus } from "@/lib/types";
 
-interface ChannelManagerProps {
-  onSelectChannel: (channelId: string) => void;
-}
-
-export default function ChannelManager({
-  onSelectChannel,
-}: ChannelManagerProps) {
+export default function ChannelManager() {
+  const router = useRouter();
   const [channels, setChannels] = useState<CrawlChannel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -208,7 +204,7 @@ export default function ChannelManager({
                 >
                   <td className="px-3 py-2">
                     <button
-                      onClick={() => onSelectChannel(ch.channel_id)}
+                      onClick={() => router.push(`/videos?channel=${ch.channel_id}`)}
                       className="text-left hover:text-primary transition-colors"
                     >
                       <div className="font-medium">{ch.channel_name}</div>

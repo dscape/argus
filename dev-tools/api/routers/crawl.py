@@ -48,6 +48,10 @@ class BatchInspectRequest(BaseModel):
     video_ids: list[str]
 
 
+class UndoAutoRejectRequest(BaseModel):
+    video_ids: list[str]
+
+
 # ── Channel endpoints ──────────────────────────────────────
 
 
@@ -113,11 +117,12 @@ async def crawl_all():
 async def list_videos(
     channel_id: str | None = Query(None),
     status: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=200),
+    order_by: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=5000),
     offset: int = Query(0, ge=0),
 ):
     return await run_in_threadpool(
-        crawl_service.list_videos, channel_id, status, limit, offset
+        crawl_service.list_videos, channel_id, status, limit, offset, order_by
     )
 
 
@@ -148,6 +153,14 @@ async def batch_update_status(body: BatchStatusRequest):
         return {"updated": count}
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.post("/videos/undo-auto-reject")
+async def undo_auto_rejections(body: UndoAutoRejectRequest):
+    count = await run_in_threadpool(
+        crawl_service.undo_auto_rejections, body.video_ids
+    )
+    return {"restored": count}
 
 
 # ── Frame inspection ─────────────────────────────────────
@@ -226,3 +239,32 @@ async def classify_titles(body: ClassifyRequest):
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+# ── Annotations ──────────────────────────────────────────
+
+
+class SaveAnnotationsRequest(BaseModel):
+    games: list[dict] | None = None
+    notes: str | None = None
+
+
+@router.get("/videos/{video_id}/annotations")
+async def get_annotations(video_id: str):
+    result = await run_in_threadpool(crawl_service.get_video_annotations, video_id)
+    if result is None:
+        return {"video_id": video_id, "annotations": None}
+    return result
+
+
+@router.put("/videos/{video_id}/annotations")
+async def save_annotations(video_id: str, body: SaveAnnotationsRequest):
+    try:
+        result = await run_in_threadpool(
+            crawl_service.save_video_annotations,
+            video_id,
+            {"games": body.games, "notes": body.notes},
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(404, str(e))

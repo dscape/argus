@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS youtube_videos (
     has_otb_footage     BOOLEAN,
     layout_type         VARCHAR(20),
     -- 'overlay' (has 2D board overlay), 'otb_only' (camera only)
+    annotations         JSONB,
+    -- {"games": [...], "notes": "..."}
 
     created_at          TIMESTAMPTZ DEFAULT now(),
     updated_at          TIMESTAMPTZ DEFAULT now()

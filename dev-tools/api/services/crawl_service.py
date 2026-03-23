@@ -260,6 +260,7 @@ def list_videos(
     status_filter: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    order_by: str | None = None,
 ) -> dict:
     """List videos with live title scoring."""
     conditions = []
@@ -277,6 +278,12 @@ def list_videos(
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
+    # Determine ORDER BY clause
+    if order_by == "channel_name":
+        order_clause = "ORDER BY channel_handle ASC NULLS LAST, published_at DESC NULLS LAST"
+    else:
+        order_clause = "ORDER BY published_at DESC NULLS LAST"
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -289,9 +296,9 @@ def list_videos(
                 f"""
                 SELECT video_id, channel_id, channel_handle, title,
                        description, published_at, screening_status,
-                       screening_confidence
+                       screening_confidence, layout_type
                 FROM youtube_videos {where}
-                ORDER BY published_at DESC NULLS LAST
+                {order_clause}
                 LIMIT %s OFFSET %s
                 """,
                 params + [limit, offset],
@@ -299,38 +306,11 @@ def list_videos(
             cols = [d[0] for d in cur.description]
             rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
-    # Score titles and auto-reject low-scoring unscreened videos
-    auto_reject_ids: list[str] = []
-    kept_rows: list[dict] = []
-
+    # Score titles (no auto-rejection — reviewer decides)
     for row in rows:
         is_candidate, confidence = score_title(row["title"])
         row["title_score"] = round(confidence, 3)
         row["title_is_candidate"] = is_candidate
-
-        if row["screening_status"] is None and not is_candidate:
-            auto_reject_ids.append(row["video_id"])
-        else:
-            kept_rows.append(row)
-
-    # Persist auto-rejections
-    if auto_reject_ids:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE youtube_videos
-                    SET screening_status = 'rejected', updated_at = now()
-                    WHERE video_id = ANY(%s)
-                    """,
-                    (auto_reject_ids,),
-                )
-                conn.commit()
-
-    # When viewing unscreened, return only kept rows and adjust total
-    if status_filter == "unscreened" and auto_reject_ids:
-        total -= len(auto_reject_ids)
-        return {"videos": kept_rows, "total": total}
 
     return {"videos": rows, "total": total}
 
@@ -389,6 +369,26 @@ def batch_update_status(video_ids: list[str], status: str) -> int:
                 WHERE video_id = ANY(%s)
                 """,
                 (status, video_ids),
+            )
+            conn.commit()
+            return cur.rowcount
+
+
+def undo_auto_rejections(video_ids: list[str]) -> int:
+    """Reset auto-rejected videos back to unscreened (NULL status)."""
+    if not video_ids:
+        return 0
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE youtube_videos
+                SET screening_status = NULL, updated_at = now()
+                WHERE video_id = ANY(%s)
+                  AND screening_status = 'rejected'
+                """,
+                (video_ids,),
             )
             conn.commit()
             return cur.rowcount
@@ -721,3 +721,42 @@ Respond with a JSON array only, no other text:
         "candidates": len(candidate_ids),
         "rejected": len(rejected_ids),
     }
+
+
+# ── Annotations ───────────────────────────────────────────
+
+
+def get_video_annotations(video_id: str) -> dict | None:
+    """Get annotations stored for a video."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT video_id, annotations FROM youtube_videos WHERE video_id = %s",
+                (video_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return {"video_id": row[0], "annotations": row[1]}
+
+
+def save_video_annotations(video_id: str, data: dict) -> dict:
+    """Save annotations for a video as JSONB."""
+    import json as _json
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE youtube_videos
+                SET annotations = %s::jsonb, updated_at = now()
+                WHERE video_id = %s
+                RETURNING video_id
+                """,
+                (_json.dumps(data), video_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"Video {video_id} not found")
+            conn.commit()
+            return {"video_id": video_id, "annotations": data}
