@@ -4,16 +4,29 @@ Wraps existing pipeline.overlay.* modules to provide a REST API
 for the developer tools web UI.
 """
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routers import calibration, clips, crawl, overlay, synthetic, video
+from pipeline.db.connection import migrate
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Argus API", version="0.1.0")
 
+
+@app.on_event("startup")
+def run_migrations():
+    try:
+        migrate()
+    except Exception as e:
+        logger.warning("Migration failed (database may be unavailable): %s", e)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origin_regex=r"http://localhost:\d+",
     allow_methods=["*"],
     allow_headers=["*"],
 )

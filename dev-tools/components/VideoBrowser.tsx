@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import {
   listCrawlVideos,
   updateVideoStatus,
@@ -28,6 +29,8 @@ interface VideoBrowserProps {
 const STATUS_OPTIONS = [
   { label: "All", value: "screened" },
   { label: "Approved", value: "approved" },
+  { label: "OTB Only", value: "approved:otb_only" },
+  { label: "With Overlay", value: "approved:!otb_only" },
   { label: "Rejected", value: "rejected" },
 ];
 
@@ -59,6 +62,7 @@ export default function VideoBrowser({
   channels,
   initialChannelId,
 }: VideoBrowserProps) {
+  const router = useRouter();
   const [channelId, setChannelId] = useState<string | null>(initialChannelId);
   const [videos, setVideos] = useState<VideoWithReason[]>([]);
   const [total, setTotal] = useState(0);
@@ -92,9 +96,19 @@ export default function VideoBrowser({
   const loadVideos = useCallback(async () => {
     setLoading(true);
     try {
+      // Parse compound filter like "approved:otb_only" into status + layout_type
+      let status = statusFilter;
+      let layoutType: string | undefined;
+      if (statusFilter.includes(":")) {
+        const [s, l] = statusFilter.split(":");
+        status = s;
+        layoutType = l;
+      }
+
       const data = await listCrawlVideos({
         channel_id: channelId ?? undefined,
-        status: statusFilter,
+        status,
+        layout_type: layoutType,
         order_by: orderBy === "title_score_desc" ? undefined : orderBy,
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
@@ -270,9 +284,12 @@ export default function VideoBrowser({
                   >
                     {f.label}
                     {(() => {
-                      const count = f.value === "screened"
-                        ? (statusCounts.approved ?? 0) + (statusCounts.rejected ?? 0)
-                        : statusCounts[f.value];
+                      let count: number | undefined;
+                      if (f.value === "screened") {
+                        count = (statusCounts.approved ?? 0) + (statusCounts.rejected ?? 0);
+                      } else if (!f.value.includes(":")) {
+                        count = statusCounts[f.value];
+                      }
                       return count !== undefined ? (
                         <span className="ml-1 opacity-60">({count})</span>
                       ) : null;
@@ -342,22 +359,22 @@ export default function VideoBrowser({
           {sortedVideos.map((v) => (
             <div
               key={v.video_id}
-              className="border rounded-lg bg-card transition-all duration-300"
+              onClick={() => router.push(`/videos/${v.video_id}`)}
+              className="border rounded-lg bg-card transition-all duration-300 cursor-pointer hover:border-primary/50 hover:shadow-sm"
             >
               {/* Header: title + score + status */}
               <div className="px-2 py-1 flex items-center gap-1.5 min-w-0">
                 <div
                   className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${scoreColor(v.title_score)}`}
                 />
-                <a
-                  href={`https://www.youtube.com/watch?v=${v.video_id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <span
                   className="text-xs font-medium line-clamp-1 flex-1 min-w-0 hover:text-primary transition-colors"
                 >
                   {v.title}
-                </a>
-                <StatusDropdown video={v} onStatusChange={handleStatusChange} />
+                </span>
+                <div onClick={(e) => e.stopPropagation()}>
+                  <StatusDropdown video={v} onStatusChange={handleStatusChange} />
+                </div>
               </div>
 
               {/* 2x2 thumbnail grid */}

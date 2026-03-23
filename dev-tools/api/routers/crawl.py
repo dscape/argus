@@ -117,12 +117,13 @@ async def crawl_all():
 async def list_videos(
     channel_id: str | None = Query(None),
     status: str | None = Query(None),
+    layout_type: str | None = Query(None),
     order_by: str | None = Query(None),
     limit: int = Query(50, ge=1, le=5000),
     offset: int = Query(0, ge=0),
 ):
     return await run_in_threadpool(
-        crawl_service.list_videos, channel_id, status, limit, offset, order_by
+        crawl_service.list_videos, channel_id, status, limit, offset, order_by, layout_type
     )
 
 
@@ -244,6 +245,33 @@ async def classify_titles(body: ClassifyRequest):
 # ── Annotations ──────────────────────────────────────────
 
 
+# ── Single video ──────────────────────────────────────────
+
+
+@router.get("/videos/{video_id}")
+async def get_video(video_id: str):
+    result = await run_in_threadpool(crawl_service.get_video, video_id)
+    if result is None:
+        raise HTTPException(404, f"Video {video_id} not found")
+    return result
+
+
+@router.get("/videos/{video_id}/download-status")
+async def get_download_status(video_id: str):
+    return await run_in_threadpool(crawl_service.get_download_status, video_id)
+
+
+@router.post("/videos/{video_id}/download")
+async def download_video(video_id: str):
+    try:
+        return await run_in_threadpool(crawl_service.download_single_video, video_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+# ── Annotations ──────────────────────────────────────────
+
+
 class SaveAnnotationsRequest(BaseModel):
     games: list[dict] | None = None
     notes: str | None = None
@@ -268,3 +296,62 @@ async def save_annotations(video_id: str, body: SaveAnnotationsRequest):
         return result
     except ValueError as e:
         raise HTTPException(404, str(e))
+
+
+# ── Video Clips ──────────────────────────────────────────
+
+
+class CreateClipRequest(BaseModel):
+    start_time: float = 0.0
+    end_time: float | None = None
+    label: str | None = None
+    overlay_bbox: list[int]
+    camera_bbox: list[int]
+    ref_resolution: list[int] = [1920, 1080]
+    board_flipped: bool = False
+    board_theme: str = "lichess_default"
+
+
+class UpdateClipRequest(BaseModel):
+    start_time: float | None = None
+    end_time: float | None = None
+    label: str | None = None
+    overlay_bbox: list[int] | None = None
+    camera_bbox: list[int] | None = None
+    ref_resolution: list[int] | None = None
+    board_flipped: bool | None = None
+    board_theme: str | None = None
+
+
+@router.get("/videos/{video_id}/clips")
+async def list_video_clips(video_id: str):
+    return await run_in_threadpool(crawl_service.list_video_clips, video_id)
+
+
+@router.post("/videos/{video_id}/clips")
+async def create_video_clip(video_id: str, body: CreateClipRequest):
+    try:
+        return await run_in_threadpool(
+            crawl_service.create_video_clip, video_id, body.model_dump()
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.put("/videos/{video_id}/clips/{clip_id}")
+async def update_video_clip(video_id: str, clip_id: int, body: UpdateClipRequest):
+    try:
+        data = body.model_dump(exclude_unset=True)
+        return await run_in_threadpool(
+            crawl_service.update_video_clip, clip_id, data
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/videos/{video_id}/clips/{clip_id}")
+async def delete_video_clip(video_id: str, clip_id: int):
+    deleted = await run_in_threadpool(crawl_service.delete_video_clip, clip_id)
+    if not deleted:
+        raise HTTPException(404, f"Clip {clip_id} not found")
+    return {"deleted": True}

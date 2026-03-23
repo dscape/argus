@@ -281,6 +281,7 @@ def list_videos(
     limit: int = 50,
     offset: int = 0,
     order_by: str | None = None,
+    layout_type: str | None = None,
 ) -> dict:
     """List videos with live title scoring."""
     conditions = []
@@ -297,6 +298,15 @@ def list_videos(
     elif status_filter:
         conditions.append("screening_status = %s")
         params.append(status_filter)
+
+    if layout_type:
+        if layout_type.startswith("!"):
+            # Negation: e.g. "!otb_only" means layout_type != 'otb_only' OR IS NULL
+            conditions.append("(layout_type IS NULL OR layout_type != %s)")
+            params.append(layout_type[1:])
+        else:
+            conditions.append("layout_type = %s")
+            params.append(layout_type)
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -748,6 +758,135 @@ Respond with a JSON array only, no other text:
 # ── Annotations ───────────────────────────────────────────
 
 
+def get_video(video_id: str) -> dict | None:
+    """Get a single video by ID with title scoring."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT video_id, channel_id, channel_handle, title,
+                       description, published_at, screening_status,
+                       screening_confidence, layout_type, annotations
+                FROM youtube_videos
+                WHERE video_id = %s
+                """,
+                (video_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            cols = [d[0] for d in cur.description]
+            video = dict(zip(cols, row))
+
+    is_candidate, confidence = score_title(video["title"])
+    video["title_score"] = round(confidence, 3)
+    video["title_is_candidate"] = is_candidate
+    return video
+
+
+def _project_root() -> str:
+    """Resolve the project root directory.
+
+    The pipeline uses relative paths like ``data/videos/...`` which assume
+    CWD is the project root.  The FastAPI server, however, starts from
+    ``<root>/dev-tools/``.  We detect the root by walking up from this
+    file until we find the ``pipeline/`` package directory.
+    """
+    d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(10):
+        if os.path.isdir(os.path.join(d, "pipeline")):
+            return d
+        d = os.path.dirname(d)
+    return os.getcwd()
+
+
+def _video_path(video_id: str, channel_handle: str | None) -> str:
+    """Canonical local path for a downloaded video."""
+    channel_dir = (channel_handle or "unknown").lstrip("@")
+    return os.path.join(_project_root(), "data", "videos", channel_dir, f"{video_id}.mp4")
+
+
+def get_download_status(video_id: str) -> dict:
+    """Check if a video file is downloaded and return its status."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT channel_handle FROM youtube_videos WHERE video_id = %s",
+                (video_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {"downloaded": False, "path": None, "file_size_mb": None, "duration_seconds": None}
+
+    path = _video_path(video_id, row[0])
+
+    if os.path.exists(path):
+        import cv2
+
+        size_mb = round(os.path.getsize(path) / (1024 * 1024), 1)
+        duration_seconds = None
+        try:
+            cap = cv2.VideoCapture(path)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            if fps > 0 and frame_count > 0:
+                duration_seconds = round(frame_count / fps, 1)
+            cap.release()
+        except Exception:
+            pass
+        return {"downloaded": True, "path": path, "file_size_mb": size_mb, "duration_seconds": duration_seconds}
+
+    return {"downloaded": False, "path": None, "file_size_mb": None, "duration_seconds": None}
+
+
+def download_single_video(video_id: str) -> dict:
+    """Download a single video. Returns download status."""
+    import yt_dlp
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT video_id, channel_handle, title FROM youtube_videos WHERE video_id = %s",
+                (video_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"Video {video_id} not found")
+
+    vid, channel_handle, title = row
+    filepath = _video_path(vid, channel_handle)
+    output_dir = os.path.dirname(filepath)
+
+    if os.path.exists(filepath):
+        size_mb = round(os.path.getsize(filepath) / (1024 * 1024), 1)
+        return {"status": "already_downloaded", "path": filepath, "file_size_mb": size_mb}
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    url = f"https://www.youtube.com/watch?v={vid}"
+    ydl_opts = {
+        # Prefer H.264 (avc1) so OpenCV can decode without extra codecs
+        "format": "bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[vcodec^=avc1]+bestaudio/best[ext=mp4]/best",
+        "outtmpl": filepath.replace(".mp4", ".%(ext)s"),
+        "merge_output_format": "mp4",
+        "quiet": True,
+        "no_warnings": True,
+        "ratelimit": 5 * 1024 * 1024,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+    except Exception as e:
+        raise ValueError(f"Download failed: {e}")
+
+    if os.path.exists(filepath):
+        size_mb = round(os.path.getsize(filepath) / (1024 * 1024), 1)
+        return {"status": "downloaded", "path": filepath, "file_size_mb": size_mb}
+
+    raise ValueError("Download completed but file not found")
+
+
 def get_video_annotations(video_id: str) -> dict | None:
     """Get annotations stored for a video."""
     with get_conn() as conn:
@@ -782,3 +921,205 @@ def save_video_annotations(video_id: str, data: dict) -> dict:
                 raise ValueError(f"Video {video_id} not found")
             conn.commit()
             return {"video_id": video_id, "annotations": data}
+
+
+# ── Video Clips ──────────────────────────────────────────
+
+
+def list_video_clips(video_id: str) -> list[dict]:
+    """List all clips for a video, ordered by clip_index."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, video_id, clip_index, label, start_time, end_time,
+                       overlay_bbox, camera_bbox, ref_resolution,
+                       board_flipped, board_theme
+                FROM video_clips
+                WHERE video_id = %s
+                ORDER BY clip_index
+                """,
+                (video_id,),
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def create_video_clip(video_id: str, data: dict) -> dict:
+    """Create a new clip for a video. Assigns next clip_index, validates no overlap."""
+    import json as _json
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Get next clip_index
+            cur.execute(
+                "SELECT COALESCE(MAX(clip_index), -1) + 1 FROM video_clips WHERE video_id = %s",
+                (video_id,),
+            )
+            next_index = cur.fetchone()[0]
+
+            # Validate no overlap with existing clips
+            start = data.get("start_time", 0.0)
+            end = data.get("end_time")
+            _validate_no_overlap(cur, video_id, start, end, exclude_id=None)
+
+            cur.execute(
+                """
+                INSERT INTO video_clips
+                    (video_id, clip_index, label, start_time, end_time,
+                     overlay_bbox, camera_bbox, ref_resolution,
+                     board_flipped, board_theme)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s)
+                RETURNING id, video_id, clip_index, label, start_time, end_time,
+                          overlay_bbox, camera_bbox, ref_resolution,
+                          board_flipped, board_theme
+                """,
+                (
+                    video_id,
+                    next_index,
+                    data.get("label"),
+                    start,
+                    end,
+                    _json.dumps(data["overlay_bbox"]),
+                    _json.dumps(data["camera_bbox"]),
+                    _json.dumps(data.get("ref_resolution", [1920, 1080])),
+                    data.get("board_flipped", False),
+                    data.get("board_theme", "lichess_default"),
+                ),
+            )
+            cols = [d[0] for d in cur.description]
+            row = cur.fetchone()
+            conn.commit()
+            return dict(zip(cols, row))
+
+
+def update_video_clip(clip_id: int, data: dict) -> dict:
+    """Update an existing clip's fields."""
+    import json as _json
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Fetch current clip to get video_id for overlap validation
+            cur.execute(
+                "SELECT video_id, start_time, end_time FROM video_clips WHERE id = %s",
+                (clip_id,),
+            )
+            existing = cur.fetchone()
+            if not existing:
+                raise ValueError(f"Clip {clip_id} not found")
+
+            video_id = existing[0]
+            start = data.get("start_time", existing[1])
+            end = data.get("end_time", existing[2])
+
+            if "start_time" in data or "end_time" in data:
+                _validate_no_overlap(cur, video_id, start, end, exclude_id=clip_id)
+
+            sets = []
+            params = []
+            for field in ["label", "start_time", "end_time", "board_flipped", "board_theme"]:
+                if field in data:
+                    sets.append(f"{field} = %s")
+                    params.append(data[field])
+            for json_field in ["overlay_bbox", "camera_bbox", "ref_resolution"]:
+                if json_field in data:
+                    sets.append(f"{json_field} = %s::jsonb")
+                    params.append(_json.dumps(data[json_field]))
+
+            if not sets:
+                raise ValueError("No fields to update")
+
+            sets.append("updated_at = now()")
+            params.append(clip_id)
+
+            cur.execute(
+                f"""
+                UPDATE video_clips SET {', '.join(sets)}
+                WHERE id = %s
+                RETURNING id, video_id, clip_index, label, start_time, end_time,
+                          overlay_bbox, camera_bbox, ref_resolution,
+                          board_flipped, board_theme
+                """,
+                params,
+            )
+            cols = [d[0] for d in cur.description]
+            row = cur.fetchone()
+            conn.commit()
+            return dict(zip(cols, row))
+
+
+def delete_video_clip(clip_id: int) -> bool:
+    """Delete a clip and reindex remaining clips for the same video."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT video_id, clip_index FROM video_clips WHERE id = %s",
+                (clip_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+
+            video_id, deleted_index = row
+            cur.execute("DELETE FROM video_clips WHERE id = %s", (clip_id,))
+
+            # Reindex remaining clips
+            cur.execute(
+                """
+                UPDATE video_clips
+                SET clip_index = clip_index - 1, updated_at = now()
+                WHERE video_id = %s AND clip_index > %s
+                """,
+                (video_id, deleted_index),
+            )
+            conn.commit()
+            return True
+
+
+def get_video_clip(clip_id: int) -> dict | None:
+    """Get a single clip by ID."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, video_id, clip_index, label, start_time, end_time,
+                       overlay_bbox, camera_bbox, ref_resolution,
+                       board_flipped, board_theme
+                FROM video_clips
+                WHERE id = %s
+                """,
+                (clip_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            cols = [d[0] for d in cur.description]
+            return dict(zip(cols, row))
+
+
+def _validate_no_overlap(cur, video_id: str, start: float, end: float | None, exclude_id: int | None):
+    """Raise ValueError if the time range overlaps with existing clips."""
+    if exclude_id is not None:
+        cur.execute(
+            """
+            SELECT clip_index, start_time, end_time FROM video_clips
+            WHERE video_id = %s AND id != %s
+            ORDER BY clip_index
+            """,
+            (video_id, exclude_id),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT clip_index, start_time, end_time FROM video_clips
+            WHERE video_id = %s
+            ORDER BY clip_index
+            """,
+            (video_id,),
+        )
+    for idx, s, e in cur.fetchall():
+        # Two ranges overlap if start < other_end AND end > other_start
+        other_end = e if e is not None else float("inf")
+        new_end = end if end is not None else float("inf")
+        if start < other_end and new_end > s:
+            raise ValueError(f"Overlaps with clip {idx} ({s}s - {e or 'end'}s)")
