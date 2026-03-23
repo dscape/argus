@@ -398,7 +398,7 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
           >
             <CheckIcon className="w-3.5 h-3.5" />
             Commit
-            <kbd className="ml-0.5 text-[10px] opacity-70 font-mono">c</kbd>
+            <kbd className="ml-1 flex-shrink-0 w-4 h-4 rounded text-[10px] font-mono font-bold inline-flex items-center justify-center bg-muted text-muted-foreground border">c</kbd>
           </button>
 
           {/* Automatic (blue pill) — reject by title only */}
@@ -423,7 +423,7 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
           >
             <TrashIcon className="w-3.5 h-3.5" />
             {hasSelection ? "Reject Selected" : "Reject Remaining"}
-            <kbd className="ml-0.5 text-[10px] opacity-70 font-mono">v</kbd>
+            <kbd className="ml-1 flex-shrink-0 w-4 h-4 rounded text-[10px] font-mono font-bold inline-flex items-center justify-center bg-muted text-muted-foreground border">v</kbd>
           </button>
         </div>
       </div>
