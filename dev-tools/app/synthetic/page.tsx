@@ -13,7 +13,6 @@ import { getSyntheticStats } from "@/lib/api";
 import type { SyntheticStatsResponse, ClipInspectResponse } from "@/lib/types";
 import { ClipGallery } from "@/components/ClipGallery";
 import { ClipInspector } from "@/components/ClipInspector";
-import { ValidityChart } from "@/components/ValidityChart";
 import { usePolledScan } from "@/hooks/usePolledScan";
 
 const DIRECTORY = "data/train";
@@ -164,18 +163,10 @@ export default function SyntheticPage() {
                   value={`${stats.clip_length} frames`}
                 />
               )}
+              {(validCount > 0 || invalidCount > 0) && (
+                <ValidityStatCard valid={validCount} invalid={invalidCount} />
+              )}
             </div>
-
-            {(validCount > 0 || invalidCount > 0) && (
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">Clip validity</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <ValidityChart valid={validCount} invalid={invalidCount} />
-                </CardContent>
-              </Card>
-            )}
           </>
         )}
       </div>
@@ -239,6 +230,31 @@ function StatCard({
       </CardHeader>
       <CardContent className="px-4 pb-3">
         <p className="text-xl font-bold">{value}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ValidityStatCard({ valid, invalid }: { valid: number; invalid: number }) {
+  const total = valid + invalid;
+  if (total === 0) return null;
+  const pct = Math.round((valid / total) * 100);
+  return (
+    <Card>
+      <CardHeader className="pb-1 pt-3 px-4">
+        <CardDescription className="text-xs">Clip validity</CardDescription>
+      </CardHeader>
+      <CardContent className="px-4 pb-3">
+        <p className="text-xl font-bold">{pct}%</p>
+        <div className="mt-1 h-1.5 rounded-full bg-red-500/20 overflow-hidden">
+          <div
+            className="h-full bg-green-500 rounded-full transition-all"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          {valid} valid / {invalid} invalid
+        </p>
       </CardContent>
     </Card>
   );

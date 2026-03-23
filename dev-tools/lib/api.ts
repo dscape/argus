@@ -13,6 +13,7 @@ import type {
   QuotaStatus,
   InspectResult,
   InspectJobStatus,
+  VideoAnnotations,
 } from "./types";
 
 // ── Overlay ─────────────────────────────────────────────────
@@ -34,6 +35,28 @@ export async function testOverlayImage(
   const res = await fetch("/api/overlay/test-image", {
     method: "POST",
     body: form,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function testOverlayUrl(
+  url: string,
+  options?: {
+    overlay_bbox?: string;
+    flipped?: boolean;
+    theme?: string;
+  }
+): Promise<OverlayTestResponse> {
+  const body: Record<string, unknown> = { url };
+  if (options?.overlay_bbox) body.overlay_bbox = options.overlay_bbox;
+  if (options?.flipped) body.flipped = options.flipped;
+  if (options?.theme) body.theme = options.theme;
+
+  const res = await fetch("/api/overlay/test-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -222,12 +245,14 @@ export async function getVideoCounts(
 export async function listCrawlVideos(params: {
   channel_id?: string;
   status?: string;
+  order_by?: string;
   limit?: number;
   offset?: number;
 }): Promise<CrawlVideosResponse> {
   const qs = new URLSearchParams();
   if (params.channel_id) qs.set("channel_id", params.channel_id);
   if (params.status) qs.set("status", params.status);
+  if (params.order_by) qs.set("order_by", params.order_by);
   if (params.limit !== undefined) qs.set("limit", String(params.limit));
   if (params.offset !== undefined) qs.set("offset", String(params.offset));
   const res = await fetch(`/api/crawl/videos?${qs}`);
@@ -262,6 +287,44 @@ export async function batchUpdateVideoStatus(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ video_ids: videoIds, status }),
   });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function undoAutoReject(
+  videoIds: string[]
+): Promise<{ restored: number }> {
+  const res = await fetch("/api/crawl/videos/undo-auto-reject", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ video_ids: videoIds }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getVideoAnnotations(
+  videoId: string
+): Promise<{ video_id: string; annotations: VideoAnnotations | null }> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/annotations`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function saveVideoAnnotations(
+  videoId: string,
+  annotations: VideoAnnotations
+): Promise<{ video_id: string; annotations: VideoAnnotations }> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/annotations`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(annotations),
+    }
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

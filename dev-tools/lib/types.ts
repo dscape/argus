@@ -138,11 +138,27 @@ export interface CrawlVideo {
   screening_confidence: number | null;
   title_score: number;
   title_is_candidate: boolean;
+  layout_type?: string | null;
+  annotations?: VideoAnnotations | null;
+}
+
+export interface GameSegment {
+  start_time: number;
+  end_time: number;
+  has_overlay: boolean;
+  notes?: string;
+}
+
+export interface VideoAnnotations {
+  games: GameSegment[] | null;
+  notes: string | null;
 }
 
 export interface CrawlVideosResponse {
   videos: CrawlVideo[];
   total: number;
+  auto_rejected_count?: number;
+  auto_rejected_ids?: string[];
 }
 
 export interface QuotaStatus {

@@ -22,47 +22,25 @@ const navItems = [
     label: "Crawl",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
-        <circle cx="12" cy="12" r="3" />
-        <path d="M12 9V4" />
-        <path d="M12 15v5" />
-        <path d="M9 12H4" />
-        <path d="M15 12h5" />
-        <path d="M9.5 9.5L6 6" />
-        <path d="M14.5 14.5L18 18" />
-        <path d="M9.5 14.5L6 18" />
-        <path d="M14.5 9.5L18 6" />
+        {/* Spider body */}
+        <ellipse cx="12" cy="11" rx="3" ry="3.5" />
+        <circle cx="12" cy="7" r="1.5" />
+        {/* Left legs */}
+        <path d="M9 9.5C7 8.5 5 7 4 5" />
+        <path d="M9 11C6.5 11 4 11.5 2 12.5" />
+        <path d="M9 12.5C7 13.5 5 15 4 17" />
+        <path d="M9.5 14C8 15.5 7 17.5 6.5 20" />
+        {/* Right legs */}
+        <path d="M15 9.5C17 8.5 19 7 20 5" />
+        <path d="M15 11C17.5 11 20 11.5 22 12.5" />
+        <path d="M15 12.5C17 13.5 19 15 20 17" />
+        <path d="M14.5 14C16 15.5 17 17.5 17.5 20" />
       </svg>
     ),
   },
   {
-    href: "/overlay-tester",
-    label: "Overlay Tester",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
-        <rect x="3" y="3" width="8" height="8" />
-        <rect x="13" y="3" width="8" height="8" />
-        <rect x="3" y="13" width="8" height="8" />
-        <rect x="13" y="13" width="8" height="8" />
-      </svg>
-    ),
-  },
-  {
-    href: "/calibration",
-    label: "Calibration",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
-        <circle cx="12" cy="12" r="8" />
-        <line x1="12" y1="2" x2="12" y2="6" />
-        <line x1="12" y1="18" x2="12" y2="22" />
-        <line x1="2" y1="12" x2="6" y2="12" />
-        <line x1="18" y1="12" x2="22" y2="12" />
-        <circle cx="12" cy="12" r="2" />
-      </svg>
-    ),
-  },
-  {
-    href: "/video-annotator",
-    label: "Video Annotator",
+    href: "/videos",
+    label: "Videos",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
         <rect x="2" y="4" width="20" height="16" rx="2" />
