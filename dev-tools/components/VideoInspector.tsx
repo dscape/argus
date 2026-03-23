@@ -21,7 +21,6 @@ interface VideoInspectorProps {
 
 const STATUS_FILTERS = [
   { label: "All", value: null },
-  { label: "Candidates", value: "candidate" },
   { label: "Approved", value: "approved" },
   { label: "Rejected", value: "rejected" },
   { label: "Unscreened", value: "unscreened" },
@@ -35,8 +34,6 @@ function statusBadge(status: string | null) {
       return <Badge className="bg-green-600 text-white text-xs">approved</Badge>;
     case "rejected":
       return <Badge variant="destructive" className="text-xs">rejected</Badge>;
-    case "candidate":
-      return <Badge className="bg-yellow-500 text-white text-xs">candidate</Badge>;
     default:
       return <Badge variant="outline" className="text-xs">unscreened</Badge>;
   }
