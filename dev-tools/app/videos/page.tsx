@@ -2,7 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { useState, useEffect } from "react";
-import VideoScreener from "@/components/VideoScreener";
+import VideoBrowser from "@/components/VideoBrowser";
 import { listCrawlChannels } from "@/lib/api";
 import type { CrawlChannel } from "@/lib/types";
 
@@ -19,7 +19,7 @@ export default function VideosPage() {
   return (
     <div>
       <h2 className="text-2xl font-bold mb-4">Videos</h2>
-      <VideoScreener channels={channels} initialChannelId={initialChannelId} />
+      <VideoBrowser channels={channels} initialChannelId={initialChannelId} />
     </div>
   );
 }
