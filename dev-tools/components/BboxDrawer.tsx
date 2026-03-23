@@ -36,13 +36,18 @@ export function BboxDrawer({
   const [currentBbox, setCurrentBbox] = useState<Bbox | null>(existingBbox || null);
   const [scale, setScale] = useState(1);
 
+  const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
-  // Load image
+  // Load image — cancel previous loads on new src
   useEffect(() => {
     setLoadError(false);
+    setLoading(true);
+    let cancelled = false;
     const img = new Image();
     img.onload = () => {
+      if (cancelled) return;
+      setLoading(false);
       imgRef.current = img;
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -55,9 +60,12 @@ export function BboxDrawer({
       redraw(img, s, existingBbox || null, secondBbox || null);
     };
     img.onerror = () => {
+      if (cancelled) return;
+      setLoading(false);
       setLoadError(true);
     };
     img.src = imageSrc;
+    return () => { cancelled = true; };
   }, [imageSrc, existingBbox, secondBbox]);
 
   const redraw = useCallback(
@@ -121,12 +129,15 @@ export function BboxDrawer({
 
   return (
     <div className={className}>
+      {loading && (
+        <div className="text-xs text-muted-foreground mb-1 animate-pulse">Loading frame...</div>
+      )}
       {loadError && (
         <div className="text-xs text-destructive mb-1">Failed to load frame. Try scrubbing to a nearby position.</div>
       )}
       <canvas
         ref={canvasRef}
-        style={{ cursor: "crosshair" }}
+        style={{ cursor: "crosshair", opacity: loading ? 0.5 : 1, transition: "opacity 150ms" }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
