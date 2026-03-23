@@ -272,6 +272,8 @@ def list_videos(
 
     if status_filter == "unscreened":
         conditions.append("screening_status IS NULL")
+    elif status_filter == "screened":
+        conditions.append("screening_status IS NOT NULL")
     elif status_filter:
         conditions.append("screening_status = %s")
         params.append(status_filter)
