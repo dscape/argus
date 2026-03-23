@@ -51,6 +51,8 @@ class OverlayClipGenerator:
         video_path: str,
         calibration: LayoutCalibration,
         video_id: str = "",
+        start_time: float | None = None,
+        end_time: float | None = None,
     ) -> list[dict]:
         """Generate training clips from a video with 2D overlay.
 
@@ -58,6 +60,8 @@ class OverlayClipGenerator:
             video_path: Path to the video file.
             calibration: Layout calibration with overlay/camera crop coordinates.
             video_id: Identifier for naming output files.
+            start_time: If set, start processing from this time (seconds).
+            end_time: If set, stop processing at this time (seconds).
 
         Returns:
             List of dicts with clip metadata for each generated clip.
@@ -90,13 +94,20 @@ class OverlayClipGenerator:
         frame_indices = []
         fens = []
 
+        # Compute frame range from time bounds
+        first_frame = int(start_time * fps) if start_time is not None else 0
+        last_frame = int(end_time * fps) if end_time is not None else total_frames
+        first_frame = max(0, first_frame)
+        last_frame = min(total_frames, last_frame)
+        clip_start_time = first_frame / fps if fps > 0 else 0.0
+
         logger.info(
-            f"Processing {video_path}: {total_frames} frames at {fps:.1f} FPS, "
+            f"Processing {video_path}: frames {first_frame}-{last_frame} at {fps:.1f} FPS, "
             f"sampling every {frame_skip} frames"
         )
 
-        current_frame = 0
-        while current_frame < total_frames:
+        current_frame = first_frame
+        while current_frame < last_frame:
             cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
             ret, frame = cap.read()
             if not ret:
@@ -134,7 +145,7 @@ class OverlayClipGenerator:
             fens=fens,
             frame_indices=frame_indices,
             fps=fps,
-            start_time=0.0,
+            start_time=clip_start_time,
         )
 
         if not segments:

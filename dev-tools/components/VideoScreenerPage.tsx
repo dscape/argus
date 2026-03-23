@@ -504,6 +504,26 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
           })}
         </div>
       )}
+
+      {/* Keyboard shortcuts bar */}
+      <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="flex items-center justify-center gap-4 px-4 py-1.5 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <kbd className="flex-shrink-0 w-4 h-4 rounded text-[10px] font-mono font-bold flex items-center justify-center bg-muted text-muted-foreground border">1</kbd>
+            –
+            <kbd className="flex-shrink-0 w-4 h-4 rounded text-[10px] font-mono font-bold flex items-center justify-center bg-muted text-muted-foreground border">9</kbd>
+            <span>cycle status</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <kbd className="flex-shrink-0 w-4 h-4 rounded text-[10px] font-mono font-bold flex items-center justify-center bg-muted text-muted-foreground border">c</kbd>
+            <span>commit</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <kbd className="flex-shrink-0 w-4 h-4 rounded text-[10px] font-mono font-bold flex items-center justify-center bg-muted text-muted-foreground border">v</kbd>
+            <span>reject remaining</span>
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

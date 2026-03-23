@@ -1,10 +1,14 @@
 """Database connection management using psycopg3."""
 
+import glob
+import logging
 import os
 from contextlib import contextmanager
 
 import psycopg
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -49,3 +53,43 @@ def init_schema():
         conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
         conn.execute(sql)
     print("Schema applied successfully.")
+
+
+def migrate():
+    """Run pending SQL migrations from pipeline/db/migrations/.
+
+    Tracks applied migrations in a `schema_migrations` table.
+    Safe to call on every startup — already-applied migrations are skipped.
+    """
+    migrations_dir = os.path.join(os.path.dirname(__file__), "migrations")
+    if not os.path.isdir(migrations_dir):
+        return
+
+    files = sorted(glob.glob(os.path.join(migrations_dir, "*.sql")))
+    if not files:
+        return
+
+    with get_connection(autocommit=True) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                filename TEXT PRIMARY KEY,
+                applied_at TIMESTAMPTZ DEFAULT now()
+            )
+            """
+        )
+        cur = conn.execute("SELECT filename FROM schema_migrations")
+        applied = {row[0] for row in cur.fetchall()}
+
+        for path in files:
+            name = os.path.basename(path)
+            if name in applied:
+                continue
+            logger.info("Applying migration: %s", name)
+            with open(path) as f:
+                sql = f.read()
+            conn.execute(sql)
+            conn.execute(
+                "INSERT INTO schema_migrations (filename) VALUES (%s)", (name,)
+            )
+            logger.info("Migration applied: %s", name)

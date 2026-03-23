@@ -17,6 +17,11 @@ class OpenVideoRequest(BaseModel):
 
 class DetectMovesRequest(BaseModel):
     sample_fps: float = 2.0
+    clip_id: int | None = None
+
+
+class GenerateClipsRequest(BaseModel):
+    clip_id: int | None = None
 
 
 @router.post("/open")
@@ -45,11 +50,11 @@ async def get_frame(session_id: str, index: int = Query(...)):
 
 
 @router.get("/{session_id}/overlay-read")
-async def read_overlay(session_id: str, index: int = Query(...)):
+async def read_overlay(session_id: str, index: int = Query(...), clip_id: int | None = Query(None)):
     """Read overlay FEN at a specific frame."""
     try:
         return await run_in_threadpool(
-            video_service.read_overlay_at_frame, session_id, index
+            video_service.read_overlay_at_frame, session_id, index, clip_id
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -60,7 +65,18 @@ async def detect_moves(session_id: str, body: DetectMovesRequest):
     """Run full move detection on the video."""
     try:
         return await run_in_threadpool(
-            video_service.detect_moves, session_id, body.sample_fps
+            video_service.detect_moves, session_id, body.sample_fps, body.clip_id
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/{session_id}/generate-clips")
+async def generate_clips(session_id: str, body: GenerateClipsRequest = GenerateClipsRequest()):
+    """Generate training clips from this video session."""
+    try:
+        return await run_in_threadpool(
+            video_service.generate_clips, session_id, body.clip_id
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

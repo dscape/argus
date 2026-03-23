@@ -1,6 +1,7 @@
 """Service layer for video annotation, wrapping overlay pipeline modules."""
 
 import base64
+import os
 import uuid
 from typing import Any
 
@@ -70,13 +71,19 @@ def get_frame_jpeg(session_id: str, frame_index: int) -> bytes:
         raise ValueError("Session not found")
 
     cap = session["cap"]
-    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-    ret, frame = cap.read()
-    if not ret:
-        raise ValueError(f"Cannot read frame {frame_index}")
+    total = session["total_frames"]
+    frame_index = max(0, min(frame_index, total - 1))
 
-    _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    return buffer.tobytes()
+    # Try the exact frame first, then fall back to nearby frames
+    for offset in [0, -1, -5, -10]:
+        idx = max(0, frame_index + offset)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ret, frame = cap.read()
+        if ret:
+            _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            return buffer.tobytes()
+
+    raise ValueError(f"Cannot read frame {frame_index}")
 
 
 def _encode_crop_b64(frame: np.ndarray, bbox: tuple) -> str:
@@ -86,15 +93,35 @@ def _encode_crop_b64(frame: np.ndarray, bbox: tuple) -> str:
     return base64.b64encode(buf).decode("utf-8")
 
 
-def read_overlay_at_frame(session_id: str, frame_index: int) -> dict:
-    """Read overlay FEN at a specific frame."""
+def _get_clip_calibration(clip_id: int):
+    """Build a LayoutCalibration from a video_clips DB row."""
+    from pipeline.overlay.calibration import LayoutCalibration
+    from api.services.crawl_service import get_video_clip
+
+    clip = get_video_clip(clip_id)
+    if clip is None:
+        raise ValueError(f"Clip {clip_id} not found")
+    return clip, LayoutCalibration(
+        overlay=tuple(clip["overlay_bbox"]),
+        camera=tuple(clip["camera_bbox"]),
+        ref_resolution=tuple(clip["ref_resolution"]),
+        board_flipped=clip["board_flipped"],
+        board_theme=clip["board_theme"],
+    )
+
+
+def read_overlay_at_frame(session_id: str, frame_index: int, clip_id: int | None = None) -> dict:
+    """Read overlay FEN at a specific frame. Optionally use a clip's calibration."""
     from pipeline.overlay.overlay_reader import OverlayReader
 
     session = _sessions.get(session_id)
     if session is None:
         raise ValueError("Session not found")
 
-    calibration = session.get("calibration")
+    if clip_id is not None:
+        _, calibration = _get_clip_calibration(clip_id)
+    else:
+        calibration = session.get("calibration")
     if calibration is None:
         raise ValueError("No calibration for this session")
 
@@ -125,8 +152,8 @@ def read_overlay_at_frame(session_id: str, frame_index: int) -> dict:
     }
 
 
-def detect_moves(session_id: str, sample_fps: float = 2.0) -> dict:
-    """Run full move detection on the video."""
+def detect_moves(session_id: str, sample_fps: float = 2.0, clip_id: int | None = None) -> dict:
+    """Run full move detection on the video. If clip_id is given, restrict to that clip's time range and calibration."""
     from pipeline.overlay.overlay_move_detector import (
         detect_moves as run_detect,
     )
@@ -136,13 +163,27 @@ def detect_moves(session_id: str, sample_fps: float = 2.0) -> dict:
     if session is None:
         raise ValueError("Session not found")
 
-    calibration = session.get("calibration")
+    clip_data = None
+    if clip_id is not None:
+        clip_data, calibration = _get_clip_calibration(clip_id)
+    else:
+        calibration = session.get("calibration")
     if calibration is None:
         raise ValueError("No calibration for this session")
 
     cap = session["cap"]
     fps = session["fps"]
     total_frames = session["total_frames"]
+
+    # Determine frame range
+    start_frame = 0
+    end_frame = total_frames
+    start_time = 0.0
+    if clip_data is not None:
+        start_frame = int(clip_data["start_time"] * fps) if fps > 0 else 0
+        if clip_data["end_time"] is not None:
+            end_frame = int(clip_data["end_time"] * fps)
+        start_time = clip_data["start_time"]
 
     # Sample frames
     frame_interval = max(1, int(fps / sample_fps))
@@ -152,7 +193,7 @@ def detect_moves(session_id: str, sample_fps: float = 2.0) -> dict:
     frame_indices: list[int] = []
     num_readable = 0
 
-    for idx in range(0, total_frames, frame_interval):
+    for idx in range(start_frame, end_frame, frame_interval):
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
         if not ret:
@@ -173,7 +214,7 @@ def detect_moves(session_id: str, sample_fps: float = 2.0) -> dict:
         fens=fens,
         frame_indices=frame_indices,
         fps=fps,
-        start_time=0.0,
+        start_time=start_time,
     )
 
     result_segments = []
@@ -203,6 +244,53 @@ def detect_moves(session_id: str, sample_fps: float = 2.0) -> dict:
         "num_readable": num_readable,
         "segments": result_segments,
     }
+
+
+def generate_clips(session_id: str, clip_id: int | None = None) -> dict:
+    """Generate training clips from the video. If clip_id given, restrict to that clip."""
+    from pipeline.overlay.overlay_clip_generator import OverlayClipGenerator
+
+    session = _sessions.get(session_id)
+    if session is None:
+        raise ValueError("Session not found")
+
+    clip_data = None
+    if clip_id is not None:
+        clip_data, calibration = _get_clip_calibration(clip_id)
+    else:
+        calibration = session.get("calibration")
+    if calibration is None:
+        raise ValueError("No calibration for this session — calibrate first")
+
+    video_path = session["video_path"]
+    video_id = os.path.splitext(os.path.basename(video_path))[0]
+
+    # Build suffix for clip-specific output
+    output_suffix = ""
+    start_time = None
+    end_time = None
+    if clip_data is not None:
+        output_suffix = f"_clip{clip_data['clip_index']}"
+        start_time = clip_data["start_time"]
+        end_time = clip_data["end_time"]
+
+    generator = OverlayClipGenerator()
+    results = generator.generate_clips(
+        video_path, calibration, video_id=video_id + output_suffix,
+        start_time=start_time, end_time=end_time,
+    )
+
+    clips = []
+    for r in results:
+        clips.append({
+            "filepath": r["filepath"],
+            "num_frames": r["num_frames"],
+            "num_moves": r["num_moves"],
+            "game_index": r["game_index"],
+            "pgn_moves": r.get("pgn_moves", ""),
+        })
+
+    return {"clips": clips, "total_clips": len(clips)}
 
 
 def delete_session(session_id: str):

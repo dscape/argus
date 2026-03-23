@@ -149,6 +149,20 @@ export interface GameSegment {
   notes?: string;
 }
 
+export interface VideoClip {
+  id: number;
+  video_id: string;
+  clip_index: number;
+  label: string | null;
+  start_time: number;
+  end_time: number | null;
+  overlay_bbox: [number, number, number, number];
+  camera_bbox: [number, number, number, number];
+  ref_resolution: [number, number];
+  board_flipped: boolean;
+  board_theme: string;
+}
+
 export interface VideoAnnotations {
   games: GameSegment[] | null;
   notes: string | null;
@@ -214,6 +228,35 @@ export interface InspectJobStatus {
   failed: number;
   current_video: string | null;
   results: InspectJobResult[];
+}
+
+// Download status
+export interface DownloadStatus {
+  downloaded: boolean;
+  path: string | null;
+  file_size_mb: number | null;
+  duration_seconds: number | null;
+}
+
+// Download result
+export interface DownloadResult {
+  status: "downloaded" | "already_downloaded";
+  path: string;
+  file_size_mb: number;
+}
+
+// Generate clips
+export interface GeneratedClip {
+  filepath: string;
+  num_frames: number;
+  num_moves: number;
+  game_index: number;
+  pgn_moves: string;
+}
+
+export interface GenerateClipsResponse {
+  clips: GeneratedClip[];
+  total_clips: number;
 }
 
 // Synthetic data monitoring

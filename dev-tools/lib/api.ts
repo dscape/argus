@@ -9,11 +9,16 @@ import type {
   SyntheticStatsResponse,
   CrawlChannel,
   CrawlChannelDetail,
+  CrawlVideo,
   CrawlVideosResponse,
   QuotaStatus,
   InspectResult,
   InspectJobStatus,
   VideoAnnotations,
+  VideoClip,
+  DownloadStatus,
+  DownloadResult,
+  GenerateClipsResponse,
 } from "./types";
 
 // ── Overlay ─────────────────────────────────────────────────
@@ -153,12 +158,15 @@ export async function readOverlayFrame(
 
 export async function detectVideoMoves(
   sessionId: string,
-  sampleFps: number = 2.0
+  sampleFps: number = 2.0,
+  clipId?: number
 ): Promise<VideoMoveDetectionResponse> {
+  const body: Record<string, unknown> = { sample_fps: sampleFps };
+  if (clipId !== undefined) body.clip_id = clipId;
   const res = await fetch(`/api/video/${sessionId}/detect-moves`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sample_fps: sampleFps }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -248,6 +256,7 @@ export async function getVideoCounts(
 export async function listCrawlVideos(params: {
   channel_id?: string;
   status?: string;
+  layout_type?: string;
   order_by?: string;
   limit?: number;
   offset?: number;
@@ -255,6 +264,7 @@ export async function listCrawlVideos(params: {
   const qs = new URLSearchParams();
   if (params.channel_id) qs.set("channel_id", params.channel_id);
   if (params.status) qs.set("status", params.status);
+  if (params.layout_type) qs.set("layout_type", params.layout_type);
   if (params.order_by) qs.set("order_by", params.order_by);
   if (params.limit !== undefined) qs.set("limit", String(params.limit));
   if (params.offset !== undefined) qs.set("offset", String(params.offset));
@@ -346,6 +356,108 @@ export async function autoClassifyTitles(params?: {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params ?? {}),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── Single video ────────────────────────────────────────────
+
+export async function getVideo(videoId: string): Promise<CrawlVideo> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getDownloadStatus(
+  videoId: string
+): Promise<DownloadStatus> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/download-status`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── Video Clips ────────────────────────────────────────────
+
+export async function listVideoClips(videoId: string): Promise<VideoClip[]> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/clips`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createVideoClip(
+  videoId: string,
+  clip: Omit<VideoClip, "id" | "video_id" | "clip_index">
+): Promise<VideoClip> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/clips`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(clip),
+    }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateVideoClip(
+  videoId: string,
+  clipId: number,
+  updates: Partial<VideoClip>
+): Promise<VideoClip> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/clips/${clipId}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteVideoClip(
+  videoId: string,
+  clipId: number
+): Promise<void> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/clips/${clipId}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function downloadVideo(
+  videoId: string
+): Promise<DownloadResult> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/download`,
+    { method: "POST" }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── Clip generation ─────────────────────────────────────────
+
+export async function generateClips(
+  sessionId: string,
+  clipId?: number
+): Promise<GenerateClipsResponse> {
+  const body: Record<string, unknown> = {};
+  if (clipId !== undefined) body.clip_id = clipId;
+  const res = await fetch(`/api/video/${sessionId}/generate-clips`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

@@ -36,8 +36,11 @@ export function BboxDrawer({
   const [currentBbox, setCurrentBbox] = useState<Bbox | null>(existingBbox || null);
   const [scale, setScale] = useState(1);
 
+  const [loadError, setLoadError] = useState(false);
+
   // Load image
   useEffect(() => {
+    setLoadError(false);
     const img = new Image();
     img.onload = () => {
       imgRef.current = img;
@@ -50,6 +53,9 @@ export function BboxDrawer({
       canvas.width = img.width * s;
       canvas.height = img.height * s;
       redraw(img, s, existingBbox || null, secondBbox || null);
+    };
+    img.onerror = () => {
+      setLoadError(true);
     };
     img.src = imageSrc;
   }, [imageSrc, existingBbox, secondBbox]);
@@ -114,13 +120,17 @@ export function BboxDrawer({
   };
 
   return (
-    <canvas
-      ref={canvasRef}
-      className={className}
-      style={{ cursor: "crosshair" }}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-    />
+    <div className={className}>
+      {loadError && (
+        <div className="text-xs text-destructive mb-1">Failed to load frame. Try scrubbing to a nearby position.</div>
+      )}
+      <canvas
+        ref={canvasRef}
+        style={{ cursor: "crosshair" }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+      />
+    </div>
   );
 }
