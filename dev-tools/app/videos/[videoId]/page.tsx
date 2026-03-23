@@ -556,6 +556,49 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
                 onChange={(e) => setFrameIdx(Number(e.target.value))}
                 className="w-full"
               />
+
+              {/* Clip timeline */}
+              <div className="relative w-full h-3 bg-muted rounded-full overflow-hidden">
+                {clips.map((c, i) => {
+                  const startPct = duration > 0 ? (c.start_time / duration) * 100 : 0;
+                  const endTime = c.end_time ?? duration;
+                  const widthPct = duration > 0 ? ((endTime - c.start_time) / duration) * 100 : 0;
+                  return (
+                    <div
+                      key={c.id}
+                      onClick={() => selectClip(i)}
+                      title={`${c.label || `Clip ${c.clip_index + 1}`}: ${fmtTime(c.start_time)} — ${c.end_time != null ? fmtTime(c.end_time) : "end"}`}
+                      className={`absolute top-0 h-full cursor-pointer transition-opacity ${
+                        selectedIdx === i ? "bg-primary opacity-60" : "bg-primary/30 hover:opacity-50"
+                      }`}
+                      style={{ left: `${startPct}%`, width: `${widthPct}%` }}
+                    />
+                  );
+                })}
+                <div
+                  className="absolute top-0 w-0.5 h-full bg-foreground"
+                  style={{ left: `${totalFrames > 1 ? (frameIdx / (totalFrames - 1)) * 100 : 0}%` }}
+                />
+              </div>
+
+              {/* Set start/end from current frame */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setClipStartTime(parseFloat((fps > 0 ? frameIdx / fps : 0).toFixed(1)))}
+                  className="px-3 py-1 rounded-md border text-xs font-medium hover:bg-muted transition-colors"
+                >
+                  Set Start
+                </button>
+                <button
+                  onClick={() => setClipEndTime(parseFloat((fps > 0 ? frameIdx / fps : 0).toFixed(1)))}
+                  className="px-3 py-1 rounded-md border text-xs font-medium hover:bg-muted transition-colors"
+                >
+                  Set End
+                </button>
+                <span className="text-xs text-muted-foreground">
+                  Current: {fps > 0 ? (frameIdx / fps).toFixed(1) : "0"}s
+                </span>
+              </div>
             </div>
 
             {/* Drawing mode controls */}
@@ -589,6 +632,8 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
               }}
               existingBbox={drawingMode === "overlay" ? overlayBbox : cameraBbox}
               secondBbox={drawingMode === "overlay" ? cameraBbox : overlayBbox}
+              bboxColor={drawingMode === "overlay" ? "#22c55e" : "#3b82f6"}
+              secondBboxColor={drawingMode === "overlay" ? "#3b82f6" : "#22c55e"}
             />
 
             {/* Options */}
