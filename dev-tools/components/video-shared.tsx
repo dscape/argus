@@ -165,39 +165,58 @@ export function ToastContainer({
 }) {
   if (toasts.length === 0) return null;
 
+  // Show max 3 toasts stacked; newest on top
+  const visible = toasts.slice(-3).reverse();
+
   return (
-    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 max-w-sm">
-      {toasts.map((toast) => (
-        <div
-          key={toast.id}
-          className={`rounded-lg border shadow-lg p-3 text-sm flex items-center gap-3 animate-in slide-in-from-top-2 ${
+    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 max-w-sm">
+      <div className="relative" style={{ height: 48 }}>
+        {visible.map((toast, i) => {
+          const bgClass =
             toast.type === "error"
               ? "bg-destructive/10 border-destructive/30 text-destructive"
               : toast.type === "warning"
               ? "bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-400"
-              : "bg-background border-border"
-          }`}
-        >
-          <span className="flex-1">{toast.message}</span>
-          {toast.undoAction && (
-            <button
-              onClick={async () => {
-                await toast.undoAction!();
-                removeToast(toast.id);
+              : "bg-background border-border";
+
+          return (
+            <div
+              key={toast.id}
+              className={`absolute left-1/2 rounded-lg border shadow-lg p-3 text-sm flex items-center gap-3 transition-all duration-200 ${bgClass}`}
+              style={{
+                transform: `translateX(-50%) scale(${1 - i * 0.04})`,
+                top: i * 6,
+                zIndex: 50 - i,
+                opacity: i === 0 ? 1 : 0.5,
+                width: "max-content",
+                maxWidth: "24rem",
+                pointerEvents: i === 0 ? "auto" : "none",
               }}
-              className="text-xs font-medium text-primary underline whitespace-nowrap"
             >
-              Undo
-            </button>
-          )}
-          <button
-            onClick={() => removeToast(toast.id)}
-            className="text-muted-foreground hover:text-foreground text-xs"
-          >
-            &times;
-          </button>
-        </div>
-      ))}
+              <span className="flex-1 truncate">{toast.message}</span>
+              {i === 0 && toast.undoAction && (
+                <button
+                  onClick={async () => {
+                    await toast.undoAction!();
+                    removeToast(toast.id);
+                  }}
+                  className="text-xs font-medium text-primary underline whitespace-nowrap"
+                >
+                  Undo
+                </button>
+              )}
+              {i === 0 && (
+                <button
+                  onClick={() => removeToast(toast.id)}
+                  className="text-muted-foreground hover:text-foreground text-xs"
+                >
+                  &times;
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
