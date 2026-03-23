@@ -315,6 +315,54 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
 
   const hasSelection = selected.size > 1;
 
+  // Keyboard shortcuts: c=commit, v=reject remaining, 1-9=cycle video status
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore when typing in inputs
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      if (e.key === "c") {
+        if (allScreened && !loading) loadVideos();
+        return;
+      }
+
+      if (e.key === "v") {
+        if (videos.some((v) => v.screening_status === null)) handleRejectAction();
+        return;
+      }
+
+      const num = parseInt(e.key, 10);
+      if (num >= 1 && num <= 9) {
+        const idx = num - 1;
+        if (idx >= sortedVideos.length) return;
+        const video = sortedVideos[idx];
+
+        // Cycle: unscreened → approved → otb_only → rejected → approved → ...
+        let nextStatus: string | null;
+        let nextLayout: string | undefined;
+
+        if (video.screening_status === null) {
+          nextStatus = "approved";
+        } else if (video.screening_status === "approved" && video.layout_type !== "otb_only") {
+          nextStatus = "approved";
+          nextLayout = "otb_only";
+        } else if (video.screening_status === "approved" && video.layout_type === "otb_only") {
+          nextStatus = "rejected";
+        } else {
+          // rejected → approved
+          nextStatus = "approved";
+        }
+
+        handleStatusChange(video.video_id, nextStatus, nextLayout);
+        return;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [sortedVideos, allScreened, loading, videos, loadVideos, handleRejectAction, handleStatusChange]);
+
   return (
     <div className="relative h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
       {/* Pulse animation for commit button */}
@@ -350,6 +398,7 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
           >
             <CheckIcon className="w-3.5 h-3.5" />
             Commit
+            <kbd className="ml-0.5 text-[10px] opacity-70 font-mono">c</kbd>
           </button>
 
           {/* Automatic (blue pill) — reject by title only */}
@@ -374,6 +423,7 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
           >
             <TrashIcon className="w-3.5 h-3.5" />
             {hasSelection ? "Reject Selected" : "Reject Remaining"}
+            <kbd className="ml-0.5 text-[10px] opacity-70 font-mono">v</kbd>
           </button>
         </div>
       </div>
@@ -389,9 +439,10 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
         </div>
       ) : (
         <div className="flex-1 grid grid-cols-2 xl:grid-cols-3 gap-2 auto-rows-min content-start overflow-hidden">
-          {sortedVideos.map((v) => {
+          {sortedVideos.map((v, idx) => {
             const isUnscreened = v.screening_status === null;
             const tint = cardTintClass(v.screening_status, v.layout_type, true);
+            const shortcutKey = idx < 9 ? idx + 1 : null;
 
             return (
               <div
@@ -408,6 +459,11 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
                     onChange={() => toggleSelect(v.video_id)}
                     className="rounded flex-shrink-0"
                   />
+                  {shortcutKey && (
+                    <kbd className="flex-shrink-0 w-4 h-4 rounded text-[10px] font-mono font-bold flex items-center justify-center bg-muted text-muted-foreground border">
+                      {shortcutKey}
+                    </kbd>
+                  )}
                   <div
                     className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${scoreColor(v.title_score)}`}
                   />
