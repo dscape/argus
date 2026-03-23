@@ -339,7 +339,7 @@ def update_video_status(
     video_id: str, status: str | None, layout_type: str | None = None
 ) -> dict | None:
     """Set screening_status and optionally layout_type for a video."""
-    if status is not None and status not in ("candidate", "approved", "rejected"):
+    if status is not None and status not in ("approved", "rejected"):
         raise ValueError(f"Invalid status: {status}")
     if layout_type is not None and layout_type not in ("overlay", "otb_only"):
         raise ValueError(f"Invalid layout_type: {layout_type}")
@@ -375,7 +375,7 @@ def update_video_status(
 
 def batch_update_status(video_ids: list[str], status: str) -> int:
     """Batch update screening_status. Returns count of updated rows."""
-    if status not in ("candidate", "approved", "rejected"):
+    if status not in ("approved", "rejected"):
         raise ValueError(f"Invalid status: {status}")
     if not video_ids:
         return 0
