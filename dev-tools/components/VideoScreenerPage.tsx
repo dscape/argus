@@ -7,6 +7,7 @@ import {
   batchUpdateVideoStatus,
   getVideoCounts,
   undoAutoReject,
+  aiScreenBatch,
 } from "@/lib/api";
 import type { CrawlChannel, CrawlVideo } from "@/lib/types";
 import {
@@ -15,6 +16,7 @@ import {
   RobotIcon,
   TrashIcon,
   SpinnerIcon,
+  AiInfoIcon,
   scoreColor,
   youtubeThumb,
   cardTintClass,
@@ -114,6 +116,95 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
       });
     }
   }, [loadCounts, addToast]);
+
+  const runAiScreen = useCallback(async () => {
+    // Collect videos to screen: unscreened + title-rejected (re-review)
+    const toScreen = videos.filter(
+      (v) => v.screening_status === null || (v.screening_status === "rejected" && v.inspect_reason?.startsWith("title"))
+    );
+    if (toScreen.length === 0) return;
+
+    // Undo title-based rejections first so AI can re-evaluate
+    const titleRejectedIds = toScreen
+      .filter((v) => v.screening_status === "rejected" && v.inspect_reason?.startsWith("title"))
+      .map((v) => v.video_id);
+
+    if (titleRejectedIds.length > 0) {
+      try {
+        await undoAutoReject(titleRejectedIds);
+        const idSet = new Set(titleRejectedIds);
+        setVideos((prev) =>
+          prev.map((v) =>
+            idSet.has(v.video_id) ? { ...v, screening_status: null, inspect_reason: undefined } : v
+          )
+        );
+      } catch {
+        // best-effort undo
+      }
+    }
+
+    try {
+      const videoIds = toScreen.map((v) => v.video_id);
+      const { results } = await aiScreenBatch(videoIds, 0.90);
+
+      const resultMap = new Map(results.map((r) => [r.video_id, r]));
+      let approved = 0;
+      let rejected = 0;
+      let deferred = 0;
+
+      setVideos((prev) =>
+        prev.map((v) => {
+          const r = resultMap.get(v.video_id);
+          if (!r) return v;
+
+          const updated = { ...v, ai_result: r };
+
+          if (r.error) {
+            deferred++;
+            return updated;
+          }
+
+          if (r.vertical || (r.auto_decided && r.predicted_class === "reject")) {
+            rejected++;
+            return {
+              ...updated,
+              screening_status: "rejected",
+              inspect_reason: r.vertical ? "vertical" : `AI reject ${Math.round((r.confidence ?? 0) * 100)}%`,
+            };
+          }
+
+          if (r.auto_decided && r.predicted_class !== "reject") {
+            approved++;
+            return {
+              ...updated,
+              screening_status: "approved",
+              layout_type: r.predicted_class === "otb_only" ? "otb_only" : "overlay",
+              inspect_reason: `AI ${r.predicted_class} ${Math.round((r.confidence ?? 0) * 100)}%`,
+            };
+          }
+
+          // Low confidence — leave for manual review
+          deferred++;
+          return {
+            ...updated,
+            inspect_reason: `AI ${r.predicted_class} ${Math.round((r.confidence ?? 0) * 100)}% — review`,
+          };
+        })
+      );
+
+      await loadCounts();
+
+      addToast({
+        message: `AI screened ${results.length}: ${approved} approved, ${rejected} rejected, ${deferred} for review`,
+        type: "success",
+      });
+    } catch (e) {
+      addToast({
+        message: e instanceof Error ? e.message : "AI screening failed",
+        type: "error",
+      });
+    }
+  }, [videos, loadCounts, addToast]);
 
   const loadVideos = useCallback(async () => {
     setLoading(true);
@@ -292,9 +383,9 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
 
   const handleManualAutoReject = useCallback(async () => {
     setAutoRunning(true);
-    await runAutomaticReject(videos);
+    await runAiScreen();
     setAutoRunning(false);
-  }, [videos, runAutomaticReject]);
+  }, [runAiScreen]);
 
   const toggleSelect = (videoId: string) => {
     setSelected((prev) => {
@@ -401,18 +492,18 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
             <kbd className="ml-1 flex-shrink-0 w-4 h-4 rounded text-[10px] font-mono font-bold inline-flex items-center justify-center bg-muted text-muted-foreground border">c</kbd>
           </button>
 
-          {/* Automatic (blue pill) — reject by title only */}
+          {/* AI Screen (blue pill) — run AI classifier on current batch */}
           <button
             onClick={handleManualAutoReject}
             className="flex items-center gap-1.5 px-3 h-8 rounded-xl text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 transition-all duration-150 disabled:opacity-50 disabled:pointer-events-none"
-            disabled={autoRunning || !videos.some((v) => v.screening_status === null)}
+            disabled={autoRunning || !videos.some((v) => v.screening_status === null || (v.screening_status === "rejected" && v.inspect_reason?.startsWith("title")))}
           >
             {autoRunning ? (
               <SpinnerIcon className="w-3.5 h-3.5 animate-spin" />
             ) : (
               <RobotIcon className="w-3.5 h-3.5" />
             )}
-            {autoRunning ? "Running..." : "Automatic"}
+            {autoRunning ? "Screening..." : "AI Screen"}
           </button>
 
           {/* Reject Remaining / Reject Selected (red pill) */}
@@ -467,6 +558,7 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
                   <div
                     className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${scoreColor(v.title_score)}`}
                   />
+                  {v.ai_result && <AiInfoIcon result={v.ai_result} />}
                   <a
                     href={`https://www.youtube.com/watch?v=${v.video_id}`}
                     target="_blank"

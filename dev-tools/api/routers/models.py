@@ -44,9 +44,10 @@ class SaveEvalRequest(BaseModel):
 
 
 @router.get("/ai-screening/sample")
-async def sample_labeled_videos(limit: int = 20):
+async def sample_labeled_videos(limit: int = 20, exclude: str | None = None):
     """Return random sample of labeled video IDs for progressive inspection."""
-    video_ids = await run_in_threadpool(models_service.sample_labeled_video_ids, limit)
+    exclude_list = exclude.split(",") if exclude else None
+    video_ids = await run_in_threadpool(models_service.sample_labeled_video_ids, limit, exclude_list)
     return {"video_ids": video_ids}
 
 

@@ -259,6 +259,20 @@ export interface GenerateClipsResponse {
   total_clips: number;
 }
 
+// AI Screening result (lightweight, for screening page)
+export interface AiScreenResult {
+  video_id: string;
+  predicted_class?: string;
+  confidence?: number;
+  auto_decided?: boolean;
+  vertical: boolean;
+  title_score: number;
+  max_ovl_score?: number;
+  max_otb_score?: number;
+  model_version?: string | null;
+  error?: string;
+}
+
 // Synthetic data monitoring
 export interface SyntheticClipFile {
   filename: string;

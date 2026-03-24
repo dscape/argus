@@ -19,6 +19,7 @@ import type {
   DownloadStatus,
   DownloadResult,
   GenerateClipsResponse,
+  AiScreenResult,
 } from "./types";
 
 // ── Overlay ─────────────────────────────────────────────────
@@ -494,6 +495,23 @@ export async function getInspectJobStatus(
   const res = await fetch(
     `/api/crawl/videos/inspect-job/${encodeURIComponent(jobId)}`
   );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── AI Screening ────────────────────────────────────────────
+
+export async function aiScreenBatch(
+  videoIds: string[],
+  threshold?: number
+): Promise<{ results: AiScreenResult[] }> {
+  const body: Record<string, unknown> = { video_ids: videoIds };
+  if (threshold !== undefined) body.threshold = threshold;
+  const res = await fetch("/api/crawl/ai-screen", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

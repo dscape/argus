@@ -193,14 +193,20 @@ def inspect_ai_screening_batch(
     return results
 
 
-def sample_labeled_video_ids(limit: int = 20) -> list[str]:
+def sample_labeled_video_ids(limit: int = 20, exclude: list[str] | None = None) -> list[str]:
     """Return random sample of video IDs from labeled (screened) videos."""
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT video_id FROM youtube_videos WHERE screening_status IN ('approved', 'rejected') ORDER BY random() LIMIT %s",
-                (limit,),
-            )
+            if exclude:
+                cur.execute(
+                    "SELECT video_id FROM youtube_videos WHERE screening_status IN ('approved', 'rejected') AND video_id != ALL(%s) ORDER BY random() LIMIT %s",
+                    (exclude, limit),
+                )
+            else:
+                cur.execute(
+                    "SELECT video_id FROM youtube_videos WHERE screening_status IN ('approved', 'rejected') ORDER BY random() LIMIT %s",
+                    (limit,),
+                )
             return [r[0] for r in cur.fetchall()]
 
 
@@ -233,6 +239,194 @@ def save_screening_eval(accuracy: float, sample_size: int, per_class: dict, mode
         "accuracy": round(accuracy, 4),
         "model_version": model_version,
     }
+
+
+# ── Lightweight AI Screening for Screening Page ──────────────
+
+
+def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]:
+    """Run AI screening classifier on a batch of videos — lightweight, no base64 images.
+
+    Returns per-video: predicted_class, confidence, auto_decided, vertical,
+    title_score, max_ovl_score, max_otb_score.
+
+    Also writes ai_screening_* metadata and screening_status (for auto-decided) to DB.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    from pipeline.screen.ai_classifier import (
+        CLASS_NAMES,
+        ScreeningClassifier,
+        ScreeningFeatureExtractor,
+    )
+    from pipeline.screen.ai_train import CACHE_DIR
+
+    checkpoint_path = os.path.join(_get_checkpoint_dir(), "best.pt")
+    if not os.path.exists(checkpoint_path):
+        return [{"video_id": vid, "error": "No checkpoint found"} for vid in video_ids]
+
+    # Load model once for entire batch
+    model = ScreeningClassifier()
+    model.load_state_dict(torch.load(checkpoint_path, map_location="cpu", weights_only=True))
+    model.eval()
+
+    extractor = ScreeningFeatureExtractor(device="cpu")
+    model_version = _get_model_version()
+
+    # Fetch titles for all videos in one query
+    titles_map: dict[str, str] = {}
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT video_id, title FROM youtube_videos WHERE video_id = ANY(%s)",
+                (video_ids,),
+            )
+            for vid, title in cur.fetchall():
+                titles_map[vid] = title
+
+    results = []
+    db_updates = []  # collect DB writes for batch commit
+
+    for video_id in video_ids:
+        title = titles_map.get(video_id, "")
+        _, title_score = score_title(title) if title else (False, 0.0)
+
+        # Fetch frames and check vertical
+        frames = fetch_youtube_frames(video_id)
+        if not frames:
+            results.append({
+                "video_id": video_id,
+                "error": "Could not fetch thumbnails",
+                "vertical": False,
+                "title_score": round(title_score, 3),
+            })
+            continue
+
+        vertical = is_vertical_video(frames)
+
+        if vertical:
+            results.append({
+                "video_id": video_id,
+                "predicted_class": "reject",
+                "confidence": 1.0,
+                "auto_decided": True,
+                "vertical": True,
+                "title_score": round(title_score, 3),
+                "max_ovl_score": 0.0,
+                "max_otb_score": 0.0,
+                "model_version": model_version,
+            })
+            db_updates.append({
+                "video_id": video_id,
+                "predicted_class": "reject",
+                "confidence": 1.0,
+                "auto_decided": True,
+            })
+            continue
+
+        # Extract features (uses cache if available)
+        cache_path = os.path.join(CACHE_DIR, f"{video_id}.pt")
+        if os.path.exists(cache_path):
+            data = torch.load(cache_path, map_location="cpu", weights_only=True)
+        else:
+            data = extractor.extract_features(video_id)
+            if data is not None:
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                torch.save(data, cache_path)
+
+        if data is None:
+            results.append({
+                "video_id": video_id,
+                "error": "Feature extraction failed",
+                "vertical": False,
+                "title_score": round(title_score, 3),
+            })
+            continue
+
+        # Run classifier
+        emb = data["embeddings"].unsqueeze(0)
+        scan = data["scanner_scores"].unsqueeze(0)
+        otb = data["otb_scores"].unsqueeze(0)
+
+        with torch.no_grad():
+            logits = model(emb, scan, otb)
+            probs = F.softmax(logits, dim=-1).squeeze(0)
+
+        conf, pred_idx = probs.max(dim=0)
+        confidence = round(conf.item(), 4)
+        predicted_class = CLASS_NAMES[pred_idx.item()]
+        auto_decided = confidence >= threshold
+
+        # Max per-frame scores for the info icon
+        max_ovl = round(float(data["scanner_scores"].max()), 3)
+        max_otb = round(float(data["otb_scores"].max()), 3)
+
+        results.append({
+            "video_id": video_id,
+            "predicted_class": predicted_class,
+            "confidence": confidence,
+            "auto_decided": auto_decided,
+            "vertical": False,
+            "title_score": round(title_score, 3),
+            "max_ovl_score": max_ovl,
+            "max_otb_score": max_otb,
+            "model_version": model_version,
+        })
+        db_updates.append({
+            "video_id": video_id,
+            "predicted_class": predicted_class,
+            "confidence": confidence,
+            "auto_decided": auto_decided,
+        })
+
+    # Batch write to DB
+    if db_updates:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for pred in db_updates:
+                    vid = pred["video_id"]
+                    cls = pred["predicted_class"]
+                    conf = pred["confidence"]
+                    auto = pred["auto_decided"]
+
+                    # Always write AI metadata
+                    cur.execute(
+                        """
+                        UPDATE youtube_videos
+                        SET ai_screening_class = %s,
+                            ai_screening_confidence = %s,
+                            ai_screening_auto_decided = %s,
+                            updated_at = now()
+                        WHERE video_id = %s
+                        """,
+                        (cls, conf, auto, vid),
+                    )
+
+                    # For auto-decided, also update screening status
+                    if auto:
+                        if cls == "overlay":
+                            status, layout = "approved", "overlay"
+                        elif cls == "otb_only":
+                            status, layout = "approved", "otb_only"
+                        else:
+                            status, layout = "rejected", None
+
+                        cur.execute(
+                            """
+                            UPDATE youtube_videos
+                            SET screening_status = %s,
+                                screening_confidence = %s,
+                                layout_type = COALESCE(%s, layout_type),
+                                updated_at = now()
+                            WHERE video_id = %s
+                              AND screening_status IS NULL
+                            """,
+                            (status, conf, layout, vid),
+                        )
+                conn.commit()
+
+    return results
 
 
 # ── Auto-Calibration Inspection ──────────────────────────────

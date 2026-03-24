@@ -122,7 +122,7 @@ export default function VideoCard({ result }: { result: InspectResult }) {
           <span className={`text-xs px-2 py-0.5 rounded ${
             result.human_label === "rejected" ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"
           }`}>
-            Human: {result.human_label}{result.human_layout_type ? ` (${result.human_layout_type})` : ""}
+            Human: {result.human_label}{result.human_label !== "rejected" && result.human_layout_type ? ` (${result.human_layout_type})` : ""}
           </span>
         )}
         {agrees !== null && (
@@ -145,10 +145,10 @@ export default function VideoCard({ result }: { result: InspectResult }) {
               {frame.label} ({frame.width}x{frame.height})
             </div>
             <div className="flex justify-center gap-2 text-[10px]">
-              <span title="Overlay scanner score">
+              <span title="Overlay scanner score — auxiliary signal (8 of 3080 model features)">
                 OVL: <b>{frame.overlay_score.toFixed(2)}</b>
               </span>
-              <span title="OTB detector score">
+              <span title="OTB detector score — auxiliary signal (8 of 3080 model features)">
                 OTB: <b>{frame.otb_score.toFixed(2)}</b>
               </span>
             </div>
