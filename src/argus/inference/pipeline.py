@@ -117,7 +117,7 @@ class InferencePipeline:
 
         container = av.open(str(video_path))
         stream = container.streams.video[0]
-        video_fps = float(stream.average_rate)
+        video_fps = float(stream.average_rate) if stream.average_rate is not None else 30.0
         frame_skip = max(1, int(video_fps / self.fps))
 
         self.tracker.reset()

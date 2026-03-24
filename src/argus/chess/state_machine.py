@@ -89,7 +89,7 @@ class GameStateMachine:
         masked[~mask] = float("-inf")
 
         # Find the best move (excluding NO_MOVE and UNKNOWN)
-        best_idx = masked[:VOCAB_SIZE - 2].argmax().item()
+        best_idx = int(masked[:VOCAB_SIZE - 2].argmax().item())
         if masked[best_idx] == float("-inf"):
             return None
 
@@ -134,7 +134,7 @@ class GameStateMachine:
             game.headers["FEN"] = self._initial_fen
             game.headers["SetUp"] = "1"
 
-        node = game
+        node: chess.pgn.GameNode = game
         for move in self._move_history:
             node = node.add_variation(move)
 

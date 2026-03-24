@@ -75,6 +75,7 @@ module = [
     "transformers.*",
     "safetensors.*",
     "timm.*",
+    "torchvision.*",
 ]
 ignore_missing_imports = true
 

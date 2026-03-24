@@ -546,7 +546,7 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
         <div className="flex-1 grid grid-cols-2 xl:grid-cols-3 gap-2 auto-rows-min content-start overflow-hidden">
           {sortedVideos.map((v, idx) => {
             const isUnscreened = v.screening_status === null;
-            const tint = cardTintClass(v.screening_status, v.layout_type, true);
+            const tint = cardTintClass(v.screening_status, v.layout_type ?? null, true);
             const shortcutKey = idx < 9 ? idx + 1 : null;
 
             return (

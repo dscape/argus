@@ -38,7 +38,8 @@ class VisionEncoder(nn.Module):
 
     def forward_patches(self, x: torch.Tensor) -> torch.Tensor:
         outputs = self.model(pixel_values=x)
-        return outputs.last_hidden_state
+        result: torch.Tensor = outputs.last_hidden_state
+        return result
 
     def forward_pooled(self, x: torch.Tensor) -> torch.Tensor:
         patches = self.forward_patches(x)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -32,7 +33,7 @@ def kelvin_to_rgb(kelvin: int) -> tuple[float, float, float]:
     return (r, g, b)
 
 
-def randomize_lighting(config: LightingConfig, seed: int = 42) -> dict:
+def randomize_lighting(config: LightingConfig, seed: int = 42) -> dict[str, Any]:
     rng = random.Random(seed)
     return {
         "overhead_intensity": rng.uniform(*config.overhead_intensity_range),

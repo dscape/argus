@@ -24,6 +24,7 @@ lint:
 
 typecheck:
 	$(PYTHON) -m mypy src/argus/
+	cd dev-tools && npx tsc --noEmit
 
 format:
 	$(PYTHON) -m ruff format src/ tests/ scripts/

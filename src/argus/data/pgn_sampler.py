@@ -43,7 +43,7 @@ def load_pgn_games(pgn_path: str | Path, max_games: int = 1000, min_elo: int = 0
                 except ValueError:
                     continue
             moves: list[str] = []
-            node = game
+            node: chess.pgn.GameNode = game
             while node.variations:
                 next_node = node.variation(0)
                 moves.append(next_node.move.uci())

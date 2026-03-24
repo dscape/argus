@@ -8,7 +8,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-from torch.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast  # type: ignore[attr-defined]
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
@@ -94,7 +94,7 @@ class Trainer:
         # Mixed precision
         self.use_amp = precision in ("fp16", "bf16")
         self.amp_dtype = torch.bfloat16 if precision == "bf16" else torch.float16
-        self.scaler = GradScaler(device, enabled=(precision == "fp16"))
+        self.scaler = GradScaler(str(device), enabled=(precision == "fp16"))
 
         # Logging
         if use_wandb:
@@ -288,14 +288,14 @@ class Trainer:
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         self.global_step = checkpoint.get("global_step", 0)
-        return checkpoint.get("epoch", 0)
+        return int(checkpoint.get("epoch", 0))
 
     def fit(self, epochs: int) -> None:
         """Full training loop."""
         logger.info(f"Starting training for {epochs} epochs")
-        logger.info(f"Train samples: {len(self.train_loader.dataset)}")
+        logger.info(f"Train samples: {len(self.train_loader.dataset)}")  # type: ignore[arg-type]
         if self.val_loader:
-            logger.info(f"Val samples: {len(self.val_loader.dataset)}")
+            logger.info(f"Val samples: {len(self.val_loader.dataset)}")  # type: ignore[arg-type]
 
         for epoch in range(1, epochs + 1):
             t0 = time.time()

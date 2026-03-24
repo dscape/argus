@@ -214,7 +214,7 @@ export default function AiScreeningInspector() {
                 width={40}
               />
               <Tooltip
-                formatter={(value: number) => [`${value}%`, "Accuracy"]}
+                formatter={(value) => [`${value}%`, "Accuracy"]}
                 labelFormatter={(label, payload) => {
                   const d = payload?.[0]?.payload;
                   return `${label}${d?.notes ? ` — ${d.notes}` : ""} (n=${d?.sample_size ?? "?"})`;

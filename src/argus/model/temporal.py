@@ -26,6 +26,7 @@ class MambaTemporalModule(nn.Module):
         super().__init__()
         self.d_model = d_model
 
+        self.input_proj: nn.Module
         if input_dim is not None and input_dim != d_model:
             self.input_proj = nn.Linear(input_dim, d_model)
         else:
@@ -56,4 +57,5 @@ class MambaTemporalModule(nn.Module):
             else:
                 x, _ = layer(x)
             x = x + residual
-        return self.final_norm(x)
+        result: torch.Tensor = self.final_norm(x)
+        return result

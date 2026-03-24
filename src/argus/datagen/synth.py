@@ -22,7 +22,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import chess
 import numpy as np
@@ -32,12 +32,15 @@ from PIL import Image, ImageDraw, ImageFilter
 from argus.chess.constraint_mask import get_legal_mask
 from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
 from argus.data.pgn_sampler import sample_random_game
-from argus.datagen.board_themes import select_random_theme
+from argus.datagen.board_themes import BoardTheme, select_random_theme
 from argus.datagen.lighting import LightingConfig, randomize_lighting
 from argus.datagen.piece_renderer import (
     PieceMaterial,
     select_random_material,
 )
+
+if TYPE_CHECKING:
+    from argus.datagen.blender_server import BlenderServerClient
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +129,7 @@ def apply_augmentations(
         blur_radius = rng.uniform(0.5 * s, 2.0 * s)
         noise_sigma = rng.uniform(5 * s, 20 * s)
 
-    img = img.rotate(rotation, resample=Image.BILINEAR, fillcolor=(128, 128, 128))
+    img = img.rotate(rotation, resample=Image.Resampling.BILINEAR, fillcolor=(128, 128, 128))
 
     arr = np.array(img, dtype=np.float32)
     arr = np.clip(arr * brightness, 0, 255).astype(np.uint8)
@@ -256,7 +259,7 @@ _MATERIAL_PARAMS = {
 }
 
 
-def _material_to_dict(mat: PieceMaterial) -> dict:
+def _material_to_dict(mat: PieceMaterial) -> dict[str, Any]:
     """Convert PieceMaterial to manifest dict."""
     params = _MATERIAL_PARAMS.get(mat.material_type, _MATERIAL_PARAMS["plastic"])
     return {
@@ -268,7 +271,7 @@ def _material_to_dict(mat: PieceMaterial) -> dict:
     }
 
 
-def _theme_to_dict(theme) -> dict:
+def _theme_to_dict(theme: BoardTheme) -> dict[str, Any]:
     """Convert BoardTheme to manifest dict."""
     d = {
         "light": theme.light,
@@ -288,9 +291,9 @@ def _theme_to_dict(theme) -> dict:
 def _write_manifest(
     piece_set: str,
     material: PieceMaterial,
-    board_theme,
-    lighting: dict,
-    frames: list[dict],
+    board_theme: BoardTheme,
+    lighting: dict[str, Any],
+    frames: list[dict[str, Any]],
     path: Path,
 ) -> None:
     """Write a JSON manifest for the Blender rendering script."""
@@ -447,7 +450,7 @@ def generate_clip(
     move_occurrence_count = 0
 
     # First pass: advance game state, collect FENs and camera angles
-    frame_data: list[dict] = []
+    frame_data: list[dict[str, Any]] = []
 
     while frame_count < clip_length:
         is_move_frame = (
