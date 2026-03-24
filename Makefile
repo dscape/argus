@@ -1,7 +1,7 @@
 .PHONY: install dev test lint typecheck format train eval datagen infer clean \
        db-up db-down pipeline-install seed-channels crawl screen inspect download generate-clips pipeline-stats \
        dev-tools dev-tools-down blender-server blender-server-stop \
-       up down \
+       up down fetch-blender \
        docker-ai-extract docker-ai-train docker-ai-eval docker-ai-screen \
        docker-ai-extract-status docker-smoke-test
 

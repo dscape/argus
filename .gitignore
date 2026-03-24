@@ -56,6 +56,9 @@ node_modules/
 next-env.d.ts
 *.tsbuildinfo
 
+# Local cache (Blender tarball, etc.)
+.cache/
+
 # Misc
 *.log
 .env
