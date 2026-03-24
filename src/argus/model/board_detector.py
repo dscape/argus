@@ -22,6 +22,7 @@ class BoardDetector(nn.Module):
         self.num_queries = num_queries
         self.hidden_dim = hidden_dim
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
+        self.input_proj: nn.Module
         if input_dim is not None and input_dim != hidden_dim:
             self.input_proj = nn.Linear(input_dim, hidden_dim)
         else:

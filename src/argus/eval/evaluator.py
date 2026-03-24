@@ -159,7 +159,7 @@ class Evaluator:
 
         for t in range(len(predictions)):
             if detect_probs[t] > self.detect_threshold:
-                idx = predictions[t].item()
+                idx = int(predictions[t].item())
                 if idx != NO_MOVE_IDX and idx < self.vocab.num_moves:
                     moves.append(self.vocab.index_to_uci(idx))
 
@@ -174,7 +174,7 @@ class Evaluator:
         moves: list[str] = []
         for t in range(len(targets)):
             if move_mask[t]:
-                idx = targets[t].item()
+                idx = int(targets[t].item())
                 if idx != NO_MOVE_IDX and idx < self.vocab.num_moves:
                     moves.append(self.vocab.index_to_uci(idx))
         return moves

@@ -6,6 +6,8 @@ and PGN cleanup.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import chess
 
 from argus.chess.state_machine import GameStateMachine
@@ -32,7 +34,7 @@ def detect_game_completion(
     events: list[MoveEvent],
     no_move_frames: int = 30,
     last_frame: int = 0,
-) -> str:
+) -> Literal["in_progress", "completed", "lost_track"]:
     """Detect if a game has likely ended.
 
     Heuristics:

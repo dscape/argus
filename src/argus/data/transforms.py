@@ -135,7 +135,8 @@ class ResizeFrames:
         Returns:
             (T, C, size, size) tensor.
         """
-        return TF.resize(frames, [self.size, self.size], antialias=True)
+        result: torch.Tensor = TF.resize(frames, [self.size, self.size], antialias=True)
+        return result
 
 
 class ComposeTemporalTransforms:

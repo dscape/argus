@@ -67,9 +67,9 @@ def overlay_predictions_on_frames(
 
         # Move info at bottom
         if move_mask[t]:
-            gt_idx = targets[t].item()
+            gt_idx = int(targets[t].item())
             gt_uci = vocab.index_to_uci(gt_idx) if gt_idx < vocab.num_moves else "?"
-            pred_idx = predictions[t].item()
+            pred_idx = int(predictions[t].item())
             pred_uci = vocab.index_to_uci(pred_idx) if pred_idx < vocab.num_moves else "no_move"
 
             correct = gt_idx == pred_idx
@@ -110,7 +110,7 @@ def save_annotated_video(
     H, W = frames[0].shape[:2]
     path = str(output_path)
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # type: ignore[attr-defined]
     writer = cv2.VideoWriter(path, fourcc, fps, (W, H))
 
     for frame in frames:

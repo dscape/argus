@@ -19,6 +19,7 @@ import os
 import socket
 import struct
 from pathlib import Path
+from typing import Any
 
 from PIL import Image
 
@@ -59,7 +60,7 @@ class BlenderServerClient:
         return cls(sock)
 
     def render_clip(
-        self, manifest: dict, image_size: int = 224,
+        self, manifest: dict[str, Any], image_size: int = 224,
     ) -> list[Image.Image]:
         """Send a rendering job to the Blender server.
 
@@ -111,11 +112,11 @@ class BlenderServerClient:
             data.extend(chunk)
         return bytes(data)
 
-    def close(self):
+    def close(self) -> None:
         try:
             self._sock.close()
         except Exception:
             pass
 
-    def __del__(self):
+    def __del__(self) -> None:
         self.close()

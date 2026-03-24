@@ -51,13 +51,13 @@ class PieceProfile:
         self._ensure_interp()
         y = np.asarray(y, dtype=np.float64)
         r = self._interp(np.clip(y, self.control_points[0][0], self.control_points[-1][0]))
-        return np.maximum(r, 0.0)
+        return np.asarray(np.maximum(r, 0.0))
 
     def radius_derivative(self, y: np.ndarray | float) -> np.ndarray:
         """dr/dy at height(s) y via the interpolator derivative."""
         self._ensure_interp()
         y = np.asarray(y, dtype=np.float64)
-        return self._interp(np.clip(y, self.control_points[0][0], self.control_points[-1][0]), 1)
+        return np.asarray(self._interp(np.clip(y, self.control_points[0][0], self.control_points[-1][0]), 1))
 
 
 PAWN_PROFILE = PieceProfile(
@@ -278,7 +278,8 @@ class PieceMaterial:
         """Return a copy with small random variation."""
         wc = _perturb_color(self.white_color, rng)
         bc = _perturb_color(self.black_color, rng)
-        j = lambda v: v * rng.uniform(0.90, 1.10)  # noqa: E731
+        def j(v: float) -> float:
+            return v * rng.uniform(0.90, 1.10)
         return PieceMaterial(
             name=self.name,
             material_type=self.material_type,
@@ -671,7 +672,7 @@ def render_knight_sprite(
     if np.any(mask):
         nx = -dz_dx[mask]
         ny = -dz_dy[mask]
-        nz = np.ones(np.sum(mask), dtype=np.float64) * 0.3
+        nz = np.ones(int(np.sum(mask)), dtype=np.float64) * 0.3
 
         length = np.sqrt(nx**2 + ny**2 + nz**2) + 1e-12
         normals[mask, 0] = nx / length

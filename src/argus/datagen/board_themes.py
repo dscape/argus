@@ -317,6 +317,6 @@ def render_textured_board(
     if board_img.shape[0] != size or board_img.shape[1] != size:
         import cv2
 
-        board_img = cv2.resize(board_img, (size, size))
+        board_img = np.asarray(cv2.resize(board_img, (size, size)), dtype=np.uint8)
 
     return board_img

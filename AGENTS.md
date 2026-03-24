@@ -65,6 +65,6 @@ For long-running tasks (generation, extraction), use the in-memory job pattern:
 - React/Next.js with shadcn/ui components
 - PostgreSQL for persistence, in-memory dicts for ephemeral job state
 - Run `make format` before committing
-- Run `make test` to verify changes
+- **Validation**: Before completing any task that modifies code, always run `make typecheck` (covers both Python/mypy and TypeScript/tsc) and `make test` — both must pass with 0 errors
 - When you do changes to dev tools web app use preview/browser to visually inspect the desired result
 - When you train a model, or you change the source code of a model you need to change the version. v2 if it's the second version, r10 if it is the 10th training run of said model version
