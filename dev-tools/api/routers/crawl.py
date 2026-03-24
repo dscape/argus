@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from api.services import crawl_service, inspect_service
+from api.services import crawl_service, inspect_service, models_service
 
 router = APIRouter()
 
@@ -42,6 +42,11 @@ class AutoClassifyRequest(BaseModel):
 
 class ClassifyRequest(BaseModel):
     video_ids: list[str]
+
+
+class AiScreenRequest(BaseModel):
+    video_ids: list[str]
+    threshold: float = 0.90
 
 
 class BatchInspectRequest(BaseModel):
@@ -238,6 +243,18 @@ async def classify_titles(body: ClassifyRequest):
         return {"prompt": prompt}
     except ValueError as e:
         raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@router.post("/ai-screen")
+async def ai_screen(body: AiScreenRequest):
+    """Run lightweight AI screening on a batch of videos for the screening page."""
+    try:
+        results = await run_in_threadpool(
+            models_service.ai_screen_batch, body.video_ids, body.threshold
+        )
+        return {"results": results}
     except Exception as e:
         raise HTTPException(500, str(e))
 

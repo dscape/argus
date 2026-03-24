@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   LineChart,
   Line,
@@ -29,6 +29,7 @@ export default function AiScreeningInspector() {
   const [evalHistory, setEvalHistory] = useState<EvalPoint[]>([]);
   const [saving, setSaving] = useState(false);
   const [modelVersion, setModelVersion] = useState<string | null>(null);
+  const inspectedIds = useRef<Set<string>>(new Set());
 
   // Fetch eval history on mount
   useEffect(() => {
@@ -52,8 +53,11 @@ export default function AiScreeningInspector() {
     setModelVersion(null);
 
     try {
-      // Step 1: get sample video IDs
-      const sampleRes = await fetch(`/api/models/ai-screening/sample?limit=${sampleSize}`);
+      // Step 1: get sample video IDs (excluding previously inspected)
+      const excludeParam = inspectedIds.current.size > 0
+        ? `&exclude=${Array.from(inspectedIds.current).join(",")}`
+        : "";
+      const sampleRes = await fetch(`/api/models/ai-screening/sample?limit=${sampleSize}${excludeParam}`);
       if (!sampleRes.ok) throw new Error(await sampleRes.text());
       const { video_ids } = await sampleRes.json();
 
@@ -69,6 +73,7 @@ export default function AiScreeningInspector() {
         if (res.ok) {
           const result: InspectResult = await res.json();
           setResults((prev) => [...prev, result]);
+          inspectedIds.current.add(video_ids[i]);
           if (result.model_version) setModelVersion(result.model_version);
         }
         setProgress({ current: i + 1, total: video_ids.length });
@@ -264,7 +269,7 @@ export default function AiScreeningInspector() {
               disabled={saving}
               className="px-3 py-1 border rounded text-xs disabled:opacity-50 hover:bg-muted"
             >
-              {saving ? "Saving..." : "Save Evaluation"}
+              {saving ? "Committing..." : "Commit"}
             </button>
           </div>
           <div className="flex gap-3 text-xs text-muted-foreground">

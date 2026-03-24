@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
-import type { CrawlVideo } from "@/lib/types";
+import type { CrawlVideo, AiScreenResult } from "@/lib/types";
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -15,6 +15,7 @@ export interface Toast {
 
 export interface VideoWithReason extends CrawlVideo {
   inspect_reason?: string;
+  ai_result?: AiScreenResult;
 }
 
 // ── Icons ───────────────────────────────────────────────────
@@ -77,6 +78,94 @@ export function SpinnerIcon({ className }: { className?: string }) {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={className}>
       <path d="M12 2a10 10 0 0110 10" />
     </svg>
+  );
+}
+
+// ── AI Info Icon ────────────────────────────────────────────
+
+export function AiInfoIcon({ result }: { result: AiScreenResult }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  const recommendation = result.error
+    ? "error"
+    : result.vertical
+    ? "reject"
+    : result.auto_decided
+    ? result.predicted_class === "reject"
+      ? "reject"
+      : "approve"
+    : "defer";
+
+  const recColor =
+    recommendation === "approve"
+      ? "text-green-600"
+      : recommendation === "reject"
+      ? "text-red-600"
+      : recommendation === "defer"
+      ? "text-amber-600"
+      : "text-muted-foreground";
+
+  return (
+    <div className="relative inline-flex" ref={ref}>
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        className="w-3.5 h-3.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 text-[9px] font-bold flex items-center justify-center hover:bg-blue-200 dark:hover:bg-blue-800/60 transition-colors flex-shrink-0"
+      >
+        i
+      </button>
+      {open && (
+        <div
+          className="absolute left-0 top-full mt-1 z-[60] rounded-lg border bg-background shadow-lg p-2 min-w-[160px] text-[11px] space-y-0.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">vertical</span>
+            <span className={result.vertical ? "text-red-600 font-medium" : ""}>{result.vertical ? "yes" : "no"}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">title</span>
+            <span className={result.title_score >= 0.3 ? "text-green-600" : "text-red-600"}>
+              {result.title_score >= 0.3 ? "good" : "bad"} ({result.title_score.toFixed(2)})
+            </span>
+          </div>
+          {result.max_ovl_score != null && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">OVL</span>
+              <span>{Math.round(result.max_ovl_score * 100)}</span>
+            </div>
+          )}
+          {result.max_otb_score != null && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">OTB</span>
+              <span>{Math.round(result.max_otb_score * 100)}</span>
+            </div>
+          )}
+          {result.confidence != null && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{result.predicted_class ?? "?"}</span>
+              <span>{Math.round(result.confidence * 100)}</span>
+            </div>
+          )}
+          <div className="flex justify-between border-t pt-0.5 mt-0.5">
+            <span className="text-muted-foreground">rec</span>
+            <span className={`font-medium ${recColor}`}>{recommendation}</span>
+          </div>
+          {result.error && (
+            <div className="text-red-600 text-[10px]">{result.error}</div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
