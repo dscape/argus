@@ -14,7 +14,7 @@ from pipeline.db.connection import migrate
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Argus API", version="0.1.0")
+app = FastAPI(title="Argus API", version="0.1.0", redirect_slashes=False)
 
 
 @app.on_event("startup")

@@ -21,9 +21,11 @@ import {
   StatusDropdown,
 } from "@/components/video-shared";
 
+const DEFAULT_STATUS = "approved:!otb_only";
+const DEFAULT_SORT = "published_at_desc";
+
 interface VideoBrowserProps {
   channels: CrawlChannel[];
-  initialChannelId: string | null;
 }
 
 const STATUS_OPTIONS = [
@@ -58,28 +60,73 @@ function ChevronRightIcon({ className }: { className?: string }) {
   );
 }
 
+const SESSION_KEY = "videoBrowserState";
+
+function getSavedState(): { status: string; sort: string; channel: string | null; page: number } {
+  if (typeof window === "undefined") {
+    return { status: DEFAULT_STATUS, sort: DEFAULT_SORT, channel: null, page: 0 };
+  }
+  try {
+    const saved = sessionStorage.getItem(SESSION_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch { /* ignore */ }
+  return { status: DEFAULT_STATUS, sort: DEFAULT_SORT, channel: null, page: 0 };
+}
+
+function buildQs(statusFilter: string, orderBy: string, channelId: string | null, page: number) {
+  const params = new URLSearchParams();
+  if (statusFilter !== DEFAULT_STATUS) params.set("status", statusFilter);
+  if (orderBy !== DEFAULT_SORT) params.set("sort", orderBy);
+  if (channelId) params.set("channel", channelId);
+  if (page > 0) params.set("page", String(page));
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+interface BrowseState {
+  status: string;
+  sort: string;
+  channel: string | null;
+  page: number;
+}
+
 export default function VideoBrowser({
   channels,
-  initialChannelId,
 }: VideoBrowserProps) {
   const router = useRouter();
-  const [channelId, setChannelId] = useState<string | null>(initialChannelId);
+
+  const [browse, setBrowse] = useState<BrowseState>(getSavedState);
   const [videos, setVideos] = useState<VideoWithReason[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<string>("screened");
-  const [orderBy, setOrderBy] = useState("title_score_desc");
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
-  const [page, setPage] = useState(0);
   const { toasts, addToast, removeToast } = useToasts();
+
+  // Convenience aliases
+  const { status: statusFilter, sort: orderBy, channel: channelId, page } = browse;
+
+  // Setters that reset page when filters change
+  const setStatusFilter = (v: string) => setBrowse((s) => ({ ...s, status: v, page: 0 }));
+  const setOrderBy = (v: string) => setBrowse((s) => ({ ...s, sort: v, page: 0 }));
+  const setChannelId = (v: string | null) => setBrowse((s) => ({ ...s, channel: v, page: 0 }));
+  const setPage = (v: number | ((p: number) => number)) =>
+    setBrowse((s) => ({ ...s, page: typeof v === "function" ? v(s.page) : v }));
 
   // Dropdown state
   const [sortOpen, setSortOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
 
+  // Restore state from sessionStorage on mount (handles Next.js cache)
   useEffect(() => {
-    if (initialChannelId) setChannelId(initialChannelId);
-  }, [initialChannelId]);
+    setBrowse(getSavedState());
+  }, []);
+
+  // Sync state to URL (display) and sessionStorage (for back navigation)
+  useEffect(() => {
+    const qs = buildQs(statusFilter, orderBy, channelId, page);
+    window.history.replaceState(window.history.state, "", `/videos${qs}`);
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(browse));
+  }, [browse, statusFilter, orderBy, channelId, page]);
 
   const loadCounts = useCallback(async () => {
     try {
@@ -129,10 +176,6 @@ export default function VideoBrowser({
     loadVideos();
   }, [loadVideos]);
 
-  // Reset page when filters change
-  useEffect(() => {
-    setPage(0);
-  }, [channelId, statusFilter, orderBy]);
 
   const updateVideoInPlace = useCallback(
     (videoId: string, newStatus: string | null, layoutType?: string | null, inspectReason?: string) => {
@@ -223,7 +266,7 @@ export default function VideoBrowser({
   }, [videos, orderBy]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const hasActiveFilter = statusFilter !== "screened" || channelId !== null;
+  const hasActiveFilter = statusFilter !== DEFAULT_STATUS || channelId !== null;
 
   return (
     <div className="relative h-[calc(100vh-2rem)] flex flex-col overflow-hidden">

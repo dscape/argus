@@ -27,7 +27,6 @@ export default function AiScreeningInspector() {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [evalHistory, setEvalHistory] = useState<EvalPoint[]>([]);
-  const [saving, setSaving] = useState(false);
   const [modelVersion, setModelVersion] = useState<string | null>(null);
   const inspectedIds = useRef<Set<string>>(new Set());
 
@@ -52,6 +51,9 @@ export default function AiScreeningInspector() {
     setProgress({ current: 0, total: 0 });
     setModelVersion(null);
 
+    const collected: InspectResult[] = [];
+    let detectedModelVersion: string | null = null;
+
     try {
       // Step 1: get sample video IDs (excluding previously inspected)
       const excludeParam = inspectedIds.current.size > 0
@@ -72,39 +74,54 @@ export default function AiScreeningInspector() {
         });
         if (res.ok) {
           const result: InspectResult = await res.json();
+          collected.push(result);
           setResults((prev) => [...prev, result]);
           inspectedIds.current.add(video_ids[i]);
-          if (result.model_version) setModelVersion(result.model_version);
+          if (result.model_version) {
+            detectedModelVersion = result.model_version;
+            setModelVersion(result.model_version);
+          }
         }
         setProgress({ current: i + 1, total: video_ids.length });
+      }
+
+      // Step 3: auto-save evaluation results
+      const batchLabeled = collected.filter((r) => r.human_label && r.prediction);
+      if (batchLabeled.length > 0) {
+        const batchAgrees = batchLabeled.filter((r) => {
+          const pred = r.prediction!;
+          return (
+            (r.human_label === "approved" && pred.class !== "reject") ||
+            (r.human_label === "rejected" && pred.class === "reject")
+          );
+        });
+        const batchClassCounts: Record<string, { correct: number; total: number }> = {};
+        for (const r of batchLabeled) {
+          const cls = r.prediction!.class;
+          if (!batchClassCounts[cls]) batchClassCounts[cls] = { correct: 0, total: 0 };
+          batchClassCounts[cls].total++;
+          const isCorrect =
+            (r.human_label === "approved" && cls !== "reject") ||
+            (r.human_label === "rejected" && cls === "reject");
+          if (isCorrect) batchClassCounts[cls].correct++;
+        }
+
+        const saveRes = await fetch("/api/models/ai-screening/save-eval", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accuracy: batchAgrees.length / batchLabeled.length,
+            sample_size: batchLabeled.length,
+            per_class: batchClassCounts,
+            model_version: detectedModelVersion,
+          }),
+        });
+        if (saveRes.ok) await fetchHistory();
       }
     } catch (e: any) {
       alert(e.message);
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function saveEval() {
-    if (labeled.length === 0) return;
-    setSaving(true);
-    try {
-      const res = await fetch("/api/models/ai-screening/save-eval", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          accuracy: agrees.length / labeled.length,
-          sample_size: labeled.length,
-          per_class: classCounts,
-          model_version: modelVersion,
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      await fetchHistory();
-    } catch (e: any) {
-      alert(e.message);
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -248,7 +265,7 @@ export default function AiScreeningInspector() {
         </div>
       )}
 
-      {/* Accuracy summary + save */}
+      {/* Accuracy summary */}
       {labeled.length > 0 && (
         <div className="border rounded-lg p-3 space-y-2 bg-muted/20">
           <div className="flex items-center gap-4">
@@ -264,13 +281,6 @@ export default function AiScreeningInspector() {
                 }}
               />
             </div>
-            <button
-              onClick={saveEval}
-              disabled={saving}
-              className="px-3 py-1 border rounded text-xs disabled:opacity-50 hover:bg-muted"
-            >
-              {saving ? "Committing..." : "Commit"}
-            </button>
           </div>
           <div className="flex gap-3 text-xs text-muted-foreground">
             {Object.entries(classCounts).map(([cls, { correct, total }]) => (
