@@ -143,14 +143,17 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
       }
     }
 
-    try {
-      const videoIds = toScreen.map((v) => v.video_id);
-      const { results } = await aiScreenBatch(videoIds, 0.90);
+    // Process in small chunks so results appear progressively
+    const CHUNK_SIZE = 3;
+    const allIds = toScreen.map((v) => v.video_id);
+    let totalApproved = 0;
+    let totalRejected = 0;
+    let totalDeferred = 0;
+    let totalProcessed = 0;
+    let totalErrors = 0;
 
-      const resultMap = new Map(results.map((r) => [r.video_id, r]));
-      let approved = 0;
-      let rejected = 0;
-      let deferred = 0;
+    const applyResults = (results: any[]) => {
+      const resultMap = new Map(results.map((r: any) => [r.video_id, r]));
 
       setVideos((prev) =>
         prev.map((v) => {
@@ -160,12 +163,12 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
           const updated = { ...v, ai_result: r };
 
           if (r.error) {
-            deferred++;
-            return updated;
+            totalDeferred++;
+            return { ...updated, inspect_reason: `AI error: ${r.error}` };
           }
 
           if (r.vertical || (r.auto_decided && r.predicted_class === "reject")) {
-            rejected++;
+            totalRejected++;
             return {
               ...updated,
               screening_status: "rejected",
@@ -174,7 +177,7 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
           }
 
           if (r.auto_decided && r.predicted_class !== "reject") {
-            approved++;
+            totalApproved++;
             return {
               ...updated,
               screening_status: "approved",
@@ -183,25 +186,36 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
             };
           }
 
-          // Low confidence — leave for manual review
-          deferred++;
+          totalDeferred++;
           return {
             ...updated,
             inspect_reason: `AI ${r.predicted_class} ${Math.round((r.confidence ?? 0) * 100)}% — review`,
           };
         })
       );
+    };
 
-      await loadCounts();
+    for (let i = 0; i < allIds.length; i += CHUNK_SIZE) {
+      const chunk = allIds.slice(i, i + CHUNK_SIZE);
+      try {
+        const { results } = await aiScreenBatch(chunk, 0.90);
+        applyResults(results);
+        totalProcessed += results.length;
+      } catch (e) {
+        totalErrors += chunk.length;
+        addToast({
+          message: `AI screening chunk failed: ${e instanceof Error ? e.message : "unknown error"}`,
+          type: "error",
+        });
+      }
+    }
 
+    await loadCounts();
+
+    if (totalProcessed > 0) {
       addToast({
-        message: `AI screened ${results.length}: ${approved} approved, ${rejected} rejected, ${deferred} for review`,
+        message: `AI screened ${totalProcessed}: ${totalApproved} approved, ${totalRejected} rejected, ${totalDeferred} for review${totalErrors > 0 ? `, ${totalErrors} errors` : ""}`,
         type: "success",
-      });
-    } catch (e) {
-      addToast({
-        message: e instanceof Error ? e.message : "AI screening failed",
-        type: "error",
       });
     }
   }, [videos, loadCounts, addToast]);
