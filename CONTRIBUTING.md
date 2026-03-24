@@ -255,7 +255,17 @@ python -m pipeline auto-calibrate --channel @NewChannel --apply
 
 ### Validating AI Screening
 
-The AI screening classifier automates the 3-way video review (overlay / otb_only / reject).
+The AI screening classifier automates the 3-way video review (overlay / otb_only / reject). Vertical videos are auto-rejected. Pre-trained weights are committed in `weights/ai_screening/`.
+
+#### Model versioning
+
+Versions follow the format `v{code}r{revision}` (e.g. `v2r3`):
+- **Code version** (`MODEL_CODE_VERSION` in `ai_classifier.py`): bump when architecture or feature extraction changes
+- **Revision**: auto-incremented on each training run
+
+Weights are saved to `weights/ai_screening/{version}.pt` and should be committed to the repo so the model is always available without retraining.
+
+#### Training workflow
 
 ```bash
 # 1. Run the DB migration first (adds ai_screening_* columns)
@@ -263,35 +273,40 @@ The AI screening classifier automates the 3-way video review (overlay / otb_only
 #    psql $DATABASE_URL -f pipeline/db/migrations/002_add_ai_screening.sql
 
 # 2. Pre-compute DINOv2 features for all labelled videos
-#    This is the slow step (~0.5s per image, 4 images per video)
+#    This is the slow step (~4s/video, network-bound). Resumable — skips cached.
+#    Features are cached in data/ai_screening_cache/ (not committed).
 python -m pipeline ai-extract --device mps  # use 'cuda' on Linux, 'cpu' as fallback
 
-# 3. Train the classifier head (fast — operates on cached features)
+# 3. Train the classifier head (fast, ~30s — operates on cached features)
+#    Saves weights to both data/ (ephemeral) and weights/ai_screening/ (committed)
 python -m pipeline ai-train --epochs 50
 
 # 4. Evaluate and calibrate the confidence threshold
 python -m pipeline ai-eval --target-precision 0.95
-#    Output shows:
-#    - Per-class precision/recall/F1
-#    - Threshold sweep with auto-decision rate at each threshold
-#    - Recommended threshold for your target precision
 
-# 5. Run AI screening on a small batch of unscreened videos
+# 5. Verify in the dev-tools UI
+#    Models > AI Screening > "Sample & Inspect" — runs model on 20 random
+#    labeled videos and shows accuracy, model vs human label per video,
+#    title score, and vertical detection
+
+# 6. Run AI screening on unscreened videos
 python -m pipeline ai-screen --limit 10 --threshold 0.90
 
-# 6. Verify in the database:
-psql $DATABASE_URL -c "
-  SELECT video_id, ai_screening_class, ai_screening_confidence, ai_screening_auto_decided
-  FROM youtube_videos
-  WHERE ai_screening_class IS NOT NULL
-  ORDER BY ai_screening_confidence DESC
-  LIMIT 10
-"
+# 7. Commit the new weights
+git add weights/ai_screening/
+git commit -m "ai-screening: train v2r3 (95% accuracy on N samples)"
+```
 
-# 7. Spot-check auto-decided videos in the dev-tools Video Browser
-#    (localhost:3000/videos — filter by status to see approved/rejected)
-#    Open a few auto-decided videos and verify the YouTube thumbnails
-#    match the predicted class (overlay / otb_only / reject)
+#### Running in Docker
+
+```bash
+# Install transformers (needed for DINOv2, not in base image)
+docker exec argus-dev-api pip install transformers -q
+
+# Extract, train, evaluate
+docker exec -it argus-dev-api python3 -m pipeline.cli ai-extract --device cpu
+docker exec -it argus-dev-api python3 -m pipeline.cli ai-train --epochs 50 --device cpu
+docker exec -it argus-dev-api python3 -m pipeline.cli ai-eval
 ```
 
 ### Integration with Dev Tools
@@ -300,7 +315,7 @@ psql $DATABASE_URL -c "
 |---------|------------------------------|
 | **Hard cuts** | `/videos/VIDEO_ID` → run "Detect Moves" → check segment count and per-move confidence in the move list |
 | **Auto-calibration** | `POST /api/calibration/{channel}/propose` → compare returned bboxes with manual calibration. Or use the Calibration Editor page to view/edit proposed values |
-| **AI screening** | `/videos` → filter by status → auto-decided videos appear as approved/rejected. Check `ai_screening_confidence` in video metadata |
+| **AI screening** | Models > AI Screening > "Sample & Inspect" — shows model prediction vs human label per video with accuracy summary. Also available per-video at `/videos/VIDEO_ID` > Info > "Run AI Screen" |
 
 ---
 

@@ -42,6 +42,10 @@ data/
 *.ckpt
 *.safetensors
 
+# Exception: committed model weights (versioned, not ephemeral)
+!weights/**/*.pt
+!weights/**/*.json
+
 # Blender
 *.blend1
 .blender-server.pid
