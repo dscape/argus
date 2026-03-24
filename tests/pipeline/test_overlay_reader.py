@@ -1,11 +1,9 @@
 """Tests for pipeline.overlay.overlay_reader."""
 
 import chess
-import cv2
 import numpy as np
 import pytest
-
-from pipeline.overlay.overlay_reader import OverlayReader, PIECE_CLASSES, PIECE_TO_CLASS
+from pipeline.overlay.overlay_reader import OverlayReader
 
 
 class TestOverlayReaderWithRenderedBoards:
@@ -15,7 +13,9 @@ class TestOverlayReaderWithRenderedBoards:
     def reader(self):
         return OverlayReader(board_theme="lichess_default")
 
-    def _render_test_board(self, board: chess.Board, size: int = 512, flipped: bool = False) -> np.ndarray:
+    def _render_test_board(
+        self, board: chess.Board, size: int = 512, flipped: bool = False
+    ) -> np.ndarray:
         """Render a board using the same renderer as the overlay reader templates."""
         from pipeline.overlay.overlay_reader import _render_board_to_cv2
 

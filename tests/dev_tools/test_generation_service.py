@@ -1,10 +1,8 @@
 """Tests for the generation service start/stop/status lifecycle."""
 
-import time
 from unittest.mock import patch
 
 import pytest
-
 from api.services import generation_service
 
 

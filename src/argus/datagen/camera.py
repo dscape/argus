@@ -18,7 +18,10 @@ class CameraConfig:
 
 
 def compute_camera_trajectory(
-    config: CameraConfig, num_frames: int, fps: float = 5.0, seed: int = 42,
+    config: CameraConfig,
+    num_frames: int,
+    fps: float = 5.0,
+    seed: int = 42,
 ) -> list[dict[str, tuple[float, float, float]]]:
     rng = random.Random(seed)
     trajectory: list[dict[str, tuple[float, float, float]]] = []

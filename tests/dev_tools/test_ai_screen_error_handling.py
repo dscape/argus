@@ -6,8 +6,6 @@ a blanket exception when individual videos fail.
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 class TestAiScreenBatchErrorHandling:
     """Verify that individual video failures don't crash the whole batch."""
@@ -15,9 +13,7 @@ class TestAiScreenBatchErrorHandling:
     @patch("api.services.models_service.get_conn")
     @patch("api.services.models_service.fetch_youtube_frames")
     @patch("api.services.models_service.score_title")
-    def test_single_video_failure_returns_error_entry(
-        self, mock_score, mock_frames, mock_conn
-    ):
+    def test_single_video_failure_returns_error_entry(self, mock_score, mock_frames, mock_conn):
         """If fetch_youtube_frames raises for one video, the batch should
         return an error entry for that video, not raise an exception."""
         from api.services.models_service import ai_screen_batch
@@ -50,9 +46,7 @@ class TestAiScreenBatchErrorHandling:
     @patch("api.services.models_service.get_conn")
     @patch("api.services.models_service.fetch_youtube_frames")
     @patch("api.services.models_service.score_title")
-    def test_fetch_returns_none_gives_thumbnail_error(
-        self, mock_score, mock_frames, mock_conn
-    ):
+    def test_fetch_returns_none_gives_thumbnail_error(self, mock_score, mock_frames, mock_conn):
         """If fetch_youtube_frames returns empty, should get a descriptive error."""
         from api.services.models_service import ai_screen_batch
 

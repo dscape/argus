@@ -7,6 +7,7 @@ import torch.nn as nn
 
 try:
     from mamba_ssm import Mamba2
+
     MAMBA_AVAILABLE = True
 except ImportError:
     MAMBA_AVAILABLE = False
@@ -41,7 +42,9 @@ class MambaTemporalModule(nn.Module):
                 self.norms.append(nn.LayerNorm(d_model))
         else:
             for _ in range(n_layers):
-                self.layers.append(nn.GRU(input_size=d_model, hidden_size=d_model, batch_first=True))
+                self.layers.append(
+                    nn.GRU(input_size=d_model, hidden_size=d_model, batch_first=True)
+                )
                 self.norms.append(nn.LayerNorm(d_model))
 
         self.final_norm = nn.LayerNorm(d_model)

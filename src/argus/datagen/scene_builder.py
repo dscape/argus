@@ -51,7 +51,9 @@ def build_scene_blender(config: SceneConfig) -> None:
         raise RuntimeError("Must run inside Blender's Python environment.")
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete()
-    bpy.ops.mesh.primitive_plane_add(size=max(config.hall_width, config.hall_depth) * 1.5, location=(0, 0, 0))
+    bpy.ops.mesh.primitive_plane_add(
+        size=max(config.hall_width, config.hall_depth) * 1.5, location=(0, 0, 0)
+    )
     bpy.context.active_object.name = "Floor"
     tables = compute_table_layout(config)
     for table in tables:

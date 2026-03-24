@@ -35,22 +35,32 @@ class ArgusModel(nn.Module):
         super().__init__()
         self.use_detector = use_detector
         self.vision_encoder = VisionEncoder(
-            model_name=vision_encoder_name, frozen=frozen_vision, embed_dim=vision_embed_dim,
+            model_name=vision_encoder_name,
+            frozen=frozen_vision,
+            embed_dim=vision_embed_dim,
         )
         self.temporal = MambaTemporalModule(
-            d_model=temporal_d_model, n_layers=temporal_n_layers,
-            d_state=temporal_d_state, expand=temporal_expand, input_dim=vision_embed_dim,
+            d_model=temporal_d_model,
+            n_layers=temporal_n_layers,
+            d_state=temporal_d_state,
+            expand=temporal_expand,
+            input_dim=vision_embed_dim,
         )
         self.move_head = MoveHead(hidden_dim=temporal_d_model, vocab_size=move_vocab_size)
         if use_detector:
             self.board_detector = BoardDetector(
-                num_queries=num_board_queries, hidden_dim=detector_hidden_dim,
-                num_heads=detector_num_heads, num_decoder_layers=detector_num_layers,
-                identity_dim=identity_dim, input_dim=vision_embed_dim,
+                num_queries=num_board_queries,
+                hidden_dim=detector_hidden_dim,
+                num_heads=detector_num_heads,
+                num_decoder_layers=detector_num_layers,
+                identity_dim=identity_dim,
+                input_dim=vision_embed_dim,
             )
 
     def forward_single_board(
-        self, crops: torch.Tensor, legal_masks: torch.Tensor | None = None,
+        self,
+        crops: torch.Tensor,
+        legal_masks: torch.Tensor | None = None,
     ) -> ModelOutput:
         B, T, C, H, W = crops.shape
         flat_crops = crops.reshape(B * T, C, H, W)
@@ -65,8 +75,11 @@ class ArgusModel(nn.Module):
         )
 
     def forward_multi_board(
-        self, frames: torch.Tensor, board_crops: torch.Tensor | None = None,
-        board_ids: torch.Tensor | None = None, legal_masks: torch.Tensor | None = None,
+        self,
+        frames: torch.Tensor,
+        board_crops: torch.Tensor | None = None,
+        board_ids: torch.Tensor | None = None,
+        legal_masks: torch.Tensor | None = None,
     ) -> ModelOutput:
         B, T, C, H, W = frames.shape
         flat_frames = frames.reshape(B * T, C, H, W)
@@ -98,13 +111,20 @@ class ArgusModel(nn.Module):
             raise NotImplementedError("ROI pooling from detected bboxes not yet implemented.")
 
         return ModelOutput(
-            move_logits=move_logits, move_probs=move_probs, detect_logits=detect_logits,
-            board_bboxes=bboxes, board_confidence=confidences, board_identity=identities,
+            move_logits=move_logits,
+            move_probs=move_probs,
+            detect_logits=detect_logits,
+            board_bboxes=bboxes,
+            board_confidence=confidences,
+            board_identity=identities,
         )
 
     def forward(
-        self, crops: torch.Tensor | None = None, frames: torch.Tensor | None = None,
-        legal_masks: torch.Tensor | None = None, board_crops: torch.Tensor | None = None,
+        self,
+        crops: torch.Tensor | None = None,
+        frames: torch.Tensor | None = None,
+        legal_masks: torch.Tensor | None = None,
+        board_crops: torch.Tensor | None = None,
         board_ids: torch.Tensor | None = None,
     ) -> ModelOutput:
         if crops is not None:

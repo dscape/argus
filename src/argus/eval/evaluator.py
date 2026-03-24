@@ -117,12 +117,14 @@ class Evaluator:
                 all_ped.append(ped)
                 all_pa.append(pa)
 
-                per_game.append({
-                    "pgn_edit_distance": ped,
-                    "prefix_accuracy": pa,
-                    "num_predicted_moves": len(pred_moves),
-                    "num_gt_moves": len(gt_moves),
-                })
+                per_game.append(
+                    {
+                        "pgn_edit_distance": ped,
+                        "prefix_accuracy": pa,
+                        "num_predicted_moves": len(pred_moves),
+                        "num_gt_moves": len(gt_moves),
+                    }
+                )
 
         def safe_mean(lst: list[float]) -> float:
             return sum(lst) / max(len(lst), 1)

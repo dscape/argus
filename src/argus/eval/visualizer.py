@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
+from argus.chess.move_vocabulary import get_vocabulary
 
 
 def overlay_predictions_on_frames(
@@ -51,8 +51,13 @@ def overlay_predictions_on_frames(
 
         # Frame number
         cv2.putText(
-            frame, f"t={t}", (5, int(15 * scale)),
-            cv2.FONT_HERSHEY_SIMPLEX, scale * 0.4, (255, 255, 255), thickness
+            frame,
+            f"t={t}",
+            (5, int(15 * scale)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            scale * 0.4,
+            (255, 255, 255),
+            thickness,
         )
 
         # Detection probability bar
@@ -77,8 +82,13 @@ def overlay_predictions_on_frames(
 
             text = f"GT:{gt_uci} Pred:{pred_uci}"
             cv2.putText(
-                frame, text, (5, H - int(5 * scale)),
-                cv2.FONT_HERSHEY_SIMPLEX, scale * 0.35, color, thickness
+                frame,
+                text,
+                (5, H - int(5 * scale)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                scale * 0.35,
+                color,
+                thickness,
             )
 
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

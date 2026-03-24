@@ -3,8 +3,6 @@
 import subprocess
 import sys
 
-import pytest
-
 
 class TestSmokeTestCommand:
     """Test the smoke-test CLI command."""
@@ -55,7 +53,14 @@ class TestInspectCalibrationCommand:
 
     def test_missing_channel_reports_not_found(self):
         result = subprocess.run(
-            [sys.executable, "-m", "pipeline.cli", "inspect-calibration", "--channel", "@NonExistentChannel12345"],
+            [
+                sys.executable,
+                "-m",
+                "pipeline.cli",
+                "inspect-calibration",
+                "--channel",
+                "@NonExistentChannel12345",
+            ],
             capture_output=True,
             text=True,
             timeout=10,

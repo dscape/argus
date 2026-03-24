@@ -48,11 +48,16 @@ class ClipAnnotation:
 
 
 def generate_clip_annotations(
-    scene_config: SceneConfig, num_frames: int = 500, fps: float = 5.0, seed: int = 42,
+    scene_config: SceneConfig,
+    num_frames: int = 500,
+    fps: float = 5.0,
+    seed: int = 42,
 ) -> ClipAnnotation:
-    import chess
     import random
-    rng = random.Random(seed)
+
+    import chess
+
+    _rng = random.Random(seed)
     tables = compute_table_layout(scene_config)
     games = generate_game_dataset(num_games=len(tables), min_moves=20, max_moves=80, seed=seed)
     boards: list[BoardAnnotation] = []
@@ -71,7 +76,11 @@ def generate_clip_annotations(
                     if m in board.legal_moves:
                         fb = board.fen()
                         board.push(m)
-                        move_anns.append(MoveAnnotation(move_uci=uci, frame_idx=frame, fen_before=fb, fen_after=board.fen()))
+                        move_anns.append(
+                            MoveAnnotation(
+                                move_uci=uci, frame_idx=frame, fen_before=fb, fen_after=board.fen()
+                            )
+                        )
                 except (ValueError, chess.InvalidMoveError):
                     pass
                 move_idx += 1
@@ -80,8 +89,21 @@ def generate_clip_annotations(
         cx, cy = (x / hw + 1) / 2, (y / hd + 1) / 2
         bh = 0.03
         bbox = (max(0, cx - bh), max(0, cy - bh), min(1, cx + bh), min(1, cy + bh))
-        boards.append(BoardAnnotation(board_id=table.board_id, bbox_per_frame=[bbox] * num_frames, fen_per_frame=fens, moves=move_anns))
-    return ClipAnnotation(clip_id=f"clip_{seed:06d}", num_frames=num_frames, fps=fps, resolution=(1920, 1080), boards=boards)
+        boards.append(
+            BoardAnnotation(
+                board_id=table.board_id,
+                bbox_per_frame=[bbox] * num_frames,
+                fen_per_frame=fens,
+                moves=move_anns,
+            )
+        )
+    return ClipAnnotation(
+        clip_id=f"clip_{seed:06d}",
+        num_frames=num_frames,
+        fps=fps,
+        resolution=(1920, 1080),
+        boards=boards,
+    )
 
 
 def save_annotations(annotation: ClipAnnotation, output_dir: str | Path) -> Path:
@@ -89,10 +111,27 @@ def save_annotations(annotation: ClipAnnotation, output_dir: str | Path) -> Path
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"{annotation.clip_id}_annotation.json"
     data = {
-        "clip_id": annotation.clip_id, "num_frames": annotation.num_frames,
-        "fps": annotation.fps, "resolution": annotation.resolution,
-        "boards": [{"board_id": b.board_id, "bbox_per_frame": b.bbox_per_frame, "fen_per_frame": b.fen_per_frame,
-                     "moves": [{"move_uci": m.move_uci, "frame_idx": m.frame_idx, "fen_before": m.fen_before, "fen_after": m.fen_after} for m in b.moves]} for b in annotation.boards],
+        "clip_id": annotation.clip_id,
+        "num_frames": annotation.num_frames,
+        "fps": annotation.fps,
+        "resolution": annotation.resolution,
+        "boards": [
+            {
+                "board_id": b.board_id,
+                "bbox_per_frame": b.bbox_per_frame,
+                "fen_per_frame": b.fen_per_frame,
+                "moves": [
+                    {
+                        "move_uci": m.move_uci,
+                        "frame_idx": m.frame_idx,
+                        "fen_before": m.fen_before,
+                        "fen_after": m.fen_after,
+                    }
+                    for m in b.moves
+                ],
+            }
+            for b in annotation.boards
+        ],
     }
     with open(path, "w") as f:
         json.dump(data, f, indent=2)

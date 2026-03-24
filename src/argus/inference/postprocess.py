@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-import chess
-
 from argus.chess.state_machine import GameStateMachine
 from argus.types import GameTrack, MoveEvent
 
@@ -91,15 +89,17 @@ def validate_and_repair_pgn(
 
     for ev in events:
         if sm.push_move(ev.move_uci):
-            valid.append(MoveEvent(
-                board_id=ev.board_id,
-                move_uci=ev.move_uci,
-                fen_before=ev.fen_before,
-                fen_after=sm.get_fen(),
-                confidence=ev.confidence,
-                frame_idx=ev.frame_idx,
-                is_legal=True,
-            ))
+            valid.append(
+                MoveEvent(
+                    board_id=ev.board_id,
+                    move_uci=ev.move_uci,
+                    fen_before=ev.fen_before,
+                    fen_after=sm.get_fen(),
+                    confidence=ev.confidence,
+                    frame_idx=ev.frame_idx,
+                    is_legal=True,
+                )
+            )
         # Skip illegal moves silently
 
     return valid

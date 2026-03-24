@@ -21,7 +21,7 @@ def kelvin_to_rgb(kelvin: int) -> tuple[float, float, float]:
     temp = kelvin / 100.0
     r = 1.0 if temp <= 66 else max(0.0, min(1.0, 1.292936 * ((temp - 60) ** -0.1332047592)))
     if temp <= 66:
-        g = max(0.0, min(1.0, (0.3900815 * (temp ** 0.5) - 0.6318414) / 2.5))
+        g = max(0.0, min(1.0, (0.3900815 * (temp**0.5) - 0.6318414) / 2.5))
     else:
         g = max(0.0, min(1.0, 1.129891 * ((temp - 60) ** -0.0755148492)))
     if temp >= 66:

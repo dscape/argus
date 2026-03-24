@@ -8,7 +8,6 @@ from pathlib import Path
 import torch
 
 from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
-from argus.chess.pgn_writer import PGNWriter
 from argus.inference.tracker import MultiGameTracker
 from argus.model.argus_model import ArgusModel
 from argus.types import GameTrack
@@ -75,7 +74,7 @@ class InferencePipeline:
         detect_probs = torch.sigmoid(detect_logits)
 
         # Extract moves
-        game = self.tracker.get_or_create_game(0)
+        _game = self.tracker.get_or_create_game(0)
 
         for t in range(T):
             if detect_probs[t] > self.detect_threshold:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import torch
 
-from argus.chess.move_vocabulary import VOCAB_SIZE
 from argus.chess.state_machine import GameStateMachine
 from argus.types import GameTrack, MoveEvent
 
@@ -96,15 +95,17 @@ class MultiGameTracker:
             fen_before = sm.get_fen()
             if sm.push_move(uci):
                 fen_after = sm.get_fen()
-                self._move_events[board_id].append(MoveEvent(
-                    board_id=board_id,
-                    move_uci=uci,
-                    fen_before=fen_before,
-                    fen_after=fen_after,
-                    confidence=confidence,
-                    frame_idx=frame_idx,
-                    is_legal=True,
-                ))
+                self._move_events[board_id].append(
+                    MoveEvent(
+                        board_id=board_id,
+                        move_uci=uci,
+                        fen_before=fen_before,
+                        fen_after=fen_after,
+                        confidence=confidence,
+                        frame_idx=frame_idx,
+                        is_legal=True,
+                    )
+                )
                 accepted = True
         else:
             # Beam search: try the move on all hypotheses
@@ -123,15 +124,17 @@ class MultiGameTracker:
 
             if any(conf > 0 for conf, _ in new_beams):
                 top_sm = self._games[board_id][0]
-                self._move_events[board_id].append(MoveEvent(
-                    board_id=board_id,
-                    move_uci=uci,
-                    fen_before="",  # Beam search - FEN tracking is approximate
-                    fen_after=top_sm.get_fen(),
-                    confidence=confidence,
-                    frame_idx=frame_idx,
-                    is_legal=True,
-                ))
+                self._move_events[board_id].append(
+                    MoveEvent(
+                        board_id=board_id,
+                        move_uci=uci,
+                        fen_before="",  # Beam search - FEN tracking is approximate
+                        fen_after=top_sm.get_fen(),
+                        confidence=confidence,
+                        frame_idx=frame_idx,
+                        is_legal=True,
+                    )
+                )
                 accepted = True
 
         self._last_frames[board_id] = frame_idx

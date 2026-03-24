@@ -28,22 +28,30 @@ class BoardDetector(nn.Module):
         else:
             self.input_proj = nn.Identity()
         decoder_layer = nn.TransformerDecoderLayer(
-            d_model=hidden_dim, nhead=num_heads,
-            dim_feedforward=hidden_dim * 4, dropout=0.1,
-            activation="gelu", batch_first=True,
+            d_model=hidden_dim,
+            nhead=num_heads,
+            dim_feedforward=hidden_dim * 4,
+            dropout=0.1,
+            activation="gelu",
+            batch_first=True,
         )
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_decoder_layers)
         self.bbox_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, 4), nn.Sigmoid(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 4),
+            nn.Sigmoid(),
         )
         self.confidence_head = nn.Linear(hidden_dim, 1)
         self.identity_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
             nn.Linear(hidden_dim, identity_dim),
         )
 
-    def forward(self, patch_features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(
+        self, patch_features: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B = patch_features.shape[0]
         memory = self.input_proj(patch_features)
         queries = self.query_embed.weight.unsqueeze(0).expand(B, -1, -1)
