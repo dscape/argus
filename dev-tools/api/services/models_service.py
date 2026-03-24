@@ -1,0 +1,675 @@
+"""Service layer for model inspection and evaluation tracking."""
+
+import base64
+import logging
+import os
+
+import cv2
+import numpy as np
+
+from pipeline.db.connection import get_conn
+from pipeline.overlay.scanner import detect_overlay_in_frame
+from pipeline.screen.dual_region_detector import detect_otb_region
+from pipeline.screen.frame_fetcher import fetch_youtube_frames, is_vertical_video
+from pipeline.screen.title_filter import score_title
+
+logger = logging.getLogger(__name__)
+
+
+# ── AI Screening Inspection ─────────────────────────────────
+
+
+def _get_model_version() -> str | None:
+    """Read model version from metadata.json saved during training."""
+    import json
+    metadata_path = os.path.join("data", "ai_screening_checkpoints", "metadata.json")
+    if os.path.exists(metadata_path):
+        with open(metadata_path) as f:
+            return json.load(f).get("version")
+    return None
+
+
+def _frame_to_base64(frame: np.ndarray, max_width: int = 640) -> str:
+    h, w = frame.shape[:2]
+    if w > max_width:
+        scale = max_width / w
+        frame = cv2.resize(frame, (max_width, int(h * scale)))
+    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+def inspect_ai_screening(video_id: str) -> dict | None:
+    """Inspect AI screening for a single video — all 4 frames + per-frame scores + prediction."""
+    import torch
+    import torch.nn.functional as F
+
+    # Fetch video metadata
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT title, screening_status, layout_type FROM youtube_videos WHERE video_id = %s",
+                (video_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            title, human_status, human_layout = row
+
+    # Compute title score on the fly
+    _, title_score = score_title(title)
+
+    # Fetch all 4 frames
+    frames = fetch_youtube_frames(video_id)
+    if not frames:
+        return {"video_id": video_id, "title": title, "error": "Could not fetch thumbnails"}
+
+    # Detect vertical video
+    vertical = is_vertical_video(frames)
+
+    frame_results = []
+    for frame_bgr, label in frames:
+        h, w = frame_bgr.shape[:2]
+
+        # Overlay scanner
+        det = detect_overlay_in_frame(frame_bgr)
+        overlay_score = det.score if det.found else 0.0
+
+        # OTB detector
+        otb_score = 0.0
+        if det.found and det.bbox:
+            otb_det = detect_otb_region(frame_bgr, det.bbox)
+            otb_score = otb_det.confidence
+
+        frame_results.append({
+            "label": label,
+            "width": w,
+            "height": h,
+            "image_base64": _frame_to_base64(frame_bgr),
+            "overlay_score": round(overlay_score, 3),
+            "otb_score": round(otb_score, 3),
+        })
+
+    # Run the classifier
+    prediction = None
+    checkpoint_path = os.path.join("data", "ai_screening_checkpoints", "best.pt")
+    if os.path.exists(checkpoint_path):
+        try:
+            from pipeline.screen.ai_classifier import (
+                CLASS_NAMES,
+                ScreeningClassifier,
+                ScreeningFeatureExtractor,
+            )
+
+            extractor = ScreeningFeatureExtractor(device="cpu")
+            features = extractor.extract_features(video_id)
+
+            if features is not None:
+                model = ScreeningClassifier()
+                model.load_state_dict(
+                    torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+                )
+                model.eval()
+
+                emb = features["embeddings"].unsqueeze(0)
+                scan = features["scanner_scores"].unsqueeze(0)
+                otb = features["otb_scores"].unsqueeze(0)
+
+                with torch.no_grad():
+                    logits = model(emb, scan, otb)
+                    probs = F.softmax(logits, dim=-1).squeeze(0)
+
+                conf, pred_idx = probs.max(dim=0)
+                prediction = {
+                    "class": CLASS_NAMES[pred_idx.item()],
+                    "confidence": round(conf.item(), 4),
+                    "probabilities": {
+                        CLASS_NAMES[i]: round(probs[i].item(), 4)
+                        for i in range(len(CLASS_NAMES))
+                    },
+                }
+        except Exception as e:
+            logger.warning(f"AI classifier error: {e}")
+
+    return {
+        "video_id": video_id,
+        "title": title,
+        "title_score": title_score,
+        "vertical": vertical,
+        "frames": frame_results,
+        "prediction": prediction,
+        "human_label": human_status,
+        "human_layout_type": human_layout,
+        "model_version": _get_model_version(),
+    }
+
+
+def inspect_ai_screening_batch(
+    video_ids: list[str] | None = None,
+    status: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Batch AI screening inspection. Returns results with thumbnail URLs instead of base64."""
+    if video_ids is None:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if status == "unscreened":
+                    cur.execute(
+                        "SELECT video_id FROM youtube_videos WHERE screening_status IS NULL ORDER BY published_at DESC LIMIT %s",
+                        (limit,),
+                    )
+                elif status == "screened":
+                    cur.execute(
+                        "SELECT video_id FROM youtube_videos WHERE screening_status IN ('approved', 'rejected') ORDER BY random() LIMIT %s",
+                        (limit,),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT video_id FROM youtube_videos ORDER BY published_at DESC LIMIT %s",
+                        (limit,),
+                    )
+                video_ids = [r[0] for r in cur.fetchall()]
+
+    results = []
+    for vid in video_ids:
+        result = inspect_ai_screening(vid)
+        if result:
+            results.append(result)
+    return results
+
+
+def sample_labeled_video_ids(limit: int = 20) -> list[str]:
+    """Return random sample of video IDs from labeled (screened) videos."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT video_id FROM youtube_videos WHERE screening_status IN ('approved', 'rejected') ORDER BY random() LIMIT %s",
+                (limit,),
+            )
+            return [r[0] for r in cur.fetchall()]
+
+
+def save_screening_eval(accuracy: float, sample_size: int, per_class: dict, model_version: str | None) -> dict:
+    """Save a screening evaluation result to the model_evaluations table."""
+    import json
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO model_evaluations
+                    (model_name, sample_size, accuracy, per_class, notes)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id, evaluated_at
+                """,
+                (
+                    "ai_screening",
+                    sample_size,
+                    round(accuracy, 4),
+                    json.dumps(per_class),
+                    model_version,
+                ),
+            )
+            eval_id, evaluated_at = cur.fetchone()
+            conn.commit()
+
+    return {
+        "id": eval_id,
+        "evaluated_at": evaluated_at.isoformat(),
+        "accuracy": round(accuracy, 4),
+        "model_version": model_version,
+    }
+
+
+# ── Auto-Calibration Inspection ──────────────────────────────
+
+
+def inspect_auto_calibration(video_id: str) -> dict | None:
+    """Inspect auto-calibration for a video — overlay detection at multiple timestamps."""
+    from pipeline.overlay.auto_calibration import (
+        _get_video_path,
+        compute_camera_bbox,
+        detect_board_orientation,
+        detect_board_theme,
+    )
+    from pipeline.overlay.calibration import get_calibration
+
+    video_path = _get_video_path(video_id)
+    source = "local_video" if video_path else "thumbnails"
+
+    if video_path:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return {"video_id": video_id, "error": "Cannot open video"}
+
+        all_frames = []
+        timestamps = [60, 120, 300]
+        duration = cap.get(cv2.CAP_PROP_FRAME_COUNT) / max(cap.get(cv2.CAP_PROP_FPS), 1)
+
+        for ts in timestamps:
+            if ts > duration:
+                continue
+            cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000)
+            ret, frame = cap.read()
+            if ret:
+                all_frames.append((frame, ts))
+        cap.release()
+    else:
+        yt_frames = fetch_youtube_frames(video_id)
+        all_frames = [(f, i) for i, (f, _) in enumerate(yt_frames)]
+
+    if not all_frames:
+        return {"video_id": video_id, "error": "No frames available"}
+
+    frame_results = []
+    best_detection = None
+    best_frame = None
+
+    for frame, ts in all_frames:
+        det = detect_overlay_in_frame(frame)
+        fh, fw = frame.shape[:2]
+
+        # Draw bboxes on frame
+        annotated = frame.copy()
+        if det.found and det.bbox:
+            ox, oy, ow, oh = det.bbox
+            cv2.rectangle(annotated, (ox, oy), (ox + ow, oy + oh), (0, 255, 0), 3)
+            if det.seed_bbox:
+                sx, sy, sw, sh = det.seed_bbox
+                cv2.rectangle(annotated, (sx, sy), (sx + sw, sy + sh), (0, 255, 255), 2)
+
+        frame_results.append({
+            "timestamp_sec": ts,
+            "image_base64": _frame_to_base64(annotated),
+            "overlay_detection": {
+                "found": det.found,
+                "bbox": list(det.bbox) if det.bbox else None,
+                "seed_bbox": list(det.seed_bbox) if det.seed_bbox else None,
+                "score": round(det.score, 3),
+            },
+        })
+
+        if det.found:
+            area = det.bbox[2] * det.bbox[3] if det.bbox else 0
+            best_area = best_detection.bbox[2] * best_detection.bbox[3] if best_detection and best_detection.bbox else 0
+            if area > best_area:
+                best_detection = det
+                best_frame = frame
+
+    # Compute proposal from best detection
+    proposal = None
+    camera_heatmap_b64 = None
+    if best_detection and best_frame is not None:
+        fh, fw = best_frame.shape[:2]
+        overlay_crop = best_frame[
+            best_detection.bbox[1] : best_detection.bbox[1] + best_detection.bbox[3],
+            best_detection.bbox[0] : best_detection.bbox[0] + best_detection.bbox[2],
+        ]
+
+        theme, theme_conf = detect_board_theme(overlay_crop)
+        flipped, orient_conf = detect_board_orientation(overlay_crop, theme)
+        camera = compute_camera_bbox(
+            [f for f, _ in all_frames], best_detection.bbox
+        )
+
+        proposal = {
+            "overlay": list(best_detection.bbox),
+            "camera": list(camera),
+            "theme": theme,
+            "theme_confidence": round(theme_conf, 3),
+            "board_flipped": flipped,
+            "orientation_confidence": round(orient_conf, 3),
+        }
+
+        # Generate camera motion heatmap
+        if len(all_frames) >= 2:
+            target_h, target_w = all_frames[0][0].shape[:2]
+            f1 = cv2.cvtColor(all_frames[0][0], cv2.COLOR_BGR2GRAY).astype(np.float32)
+            f2_raw = cv2.cvtColor(all_frames[-1][0], cv2.COLOR_BGR2GRAY).astype(np.float32)
+            # Resize f2 to match f1 if resolutions differ (e.g. mixed-res thumbnails)
+            if f2_raw.shape != f1.shape:
+                f2_raw = cv2.resize(f2_raw, (target_w, target_h)).astype(np.float32)
+            diff = np.abs(f1 - f2_raw)
+            # Zero out overlay
+            ox, oy, ow, oh = best_detection.bbox
+            diff[oy : oy + oh, ox : ox + ow] = 0
+            # Normalize and colorize
+            diff_norm = np.clip(diff / 30.0 * 255, 0, 255).astype(np.uint8)
+            heatmap = cv2.applyColorMap(diff_norm, cv2.COLORMAP_JET)
+            camera_heatmap_b64 = _frame_to_base64(heatmap)
+
+    # Get saved calibration for comparison
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT channel_handle FROM youtube_videos WHERE video_id = %s",
+                (video_id,),
+            )
+            row = cur.fetchone()
+
+    saved_cal = None
+    if row:
+        cal = get_calibration(row[0])
+        if cal:
+            saved_cal = {
+                "overlay": list(cal.overlay),
+                "camera": list(cal.camera),
+                "ref_resolution": list(cal.ref_resolution),
+                "board_flipped": cal.board_flipped,
+                "board_theme": cal.board_theme,
+            }
+
+    return {
+        "video_id": video_id,
+        "source": source,
+        "frames": frame_results,
+        "proposal": proposal,
+        "saved_calibration": saved_cal,
+        "camera_motion_heatmap_base64": camera_heatmap_b64,
+    }
+
+
+# ── Hard Cut Detection Inspection ────────────────────────────
+
+
+def inspect_hard_cuts(video_id: str, sample_fps: float = 2.0) -> dict | None:
+    """Inspect hard cut detection on a video with calibration."""
+    from pipeline.overlay.auto_calibration import _get_video_path
+    from pipeline.overlay.calibration import get_calibration
+    from pipeline.overlay.overlay_move_detector import (
+        count_fen_differences,
+        detect_moves,
+    )
+    from pipeline.overlay.overlay_reader import OverlayReader
+
+    # Get channel for calibration
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT channel_handle FROM youtube_videos WHERE video_id = %s",
+                (video_id,),
+            )
+            row = cur.fetchone()
+
+    if not row:
+        return None
+
+    channel = row[0]
+    cal = get_calibration(channel)
+    if cal is None:
+        return {"video_id": video_id, "error": f"No calibration for {channel}"}
+
+    video_path = _get_video_path(video_id)
+    if not video_path:
+        return {"video_id": video_id, "error": "Video not downloaded"}
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return {"video_id": video_id, "error": "Cannot open video"}
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    scaled_cal = cal.scale_to_resolution(width, height)
+    reader = OverlayReader(board_theme=scaled_cal.board_theme)
+
+    frame_skip = max(1, int(fps / sample_fps))
+    fens = []
+    frame_indices = []
+
+    current_frame = 0
+    while current_frame < total_frames:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        ox, oy, ow, oh = scaled_cal.overlay
+        overlay_crop = frame[oy : oy + oh, ox : ox + ow]
+        fen = reader.read_fen(overlay_crop, flipped=scaled_cal.board_flipped)
+
+        fens.append(fen)
+        frame_indices.append(current_frame)
+        current_frame += frame_skip
+
+    cap.release()
+
+    if len(fens) < 2:
+        return {"video_id": video_id, "error": "Too few frames readable"}
+
+    segments = detect_moves(fens, frame_indices, fps=fps, start_time=0.0)
+
+    # Build response
+    seg_results = []
+    for seg in segments:
+        moves = []
+        for m in seg.moves:
+            squares_changed = 0
+            if m.fen_before and m.fen_after:
+                squares_changed = count_fen_differences(m.fen_before, m.fen_after)
+            moves.append({
+                "move_san": m.move_san,
+                "move_uci": m.move_uci,
+                "frame_idx": m.frame_idx,
+                "timestamp_sec": round(m.timestamp_seconds, 2),
+                "confidence": round(m.confidence, 3),
+                "fen_before": m.fen_before,
+                "fen_after": m.fen_after,
+                "squares_changed": squares_changed,
+            })
+
+        seg_results.append({
+            "game_index": len(seg_results),
+            "start_frame": seg.start_frame,
+            "end_frame": seg.end_frame,
+            "start_time": round(seg.start_time, 2),
+            "end_time": round(seg.end_time, 2),
+            "num_moves": seg.num_moves,
+            "pgn_moves": seg.pgn_moves,
+            "moves": moves,
+        })
+
+    readable = sum(1 for f in fens if f is not None)
+    all_confidences = [m["confidence"] for s in seg_results for m in s["moves"]]
+    avg_conf = sum(all_confidences) / len(all_confidences) if all_confidences else 0.0
+
+    return {
+        "video_id": video_id,
+        "total_frames_sampled": len(fens),
+        "readable_fens": readable,
+        "segments": seg_results,
+        "total_segments": len(seg_results),
+        "total_moves": sum(s["num_moves"] for s in seg_results),
+        "avg_confidence": round(avg_conf, 3),
+    }
+
+
+# ── Model Evaluation History ─────────────────────────────────
+
+
+def run_evaluation(model_name: str, sample_size: int = 500, notes: str | None = None) -> dict:
+    """Run a standardized evaluation and store results."""
+    if model_name == "ai_screening":
+        return _eval_ai_screening(sample_size, notes=notes)
+    else:
+        return {"error": f"Unknown model: {model_name}"}
+
+
+def _eval_ai_screening(sample_size: int, notes: str | None = None) -> dict:
+    """Evaluate AI screening classifier on a channel-stratified sample."""
+    import torch
+    import torch.nn.functional as F
+
+    from pipeline.screen.ai_classifier import (
+        CLASS_NAMES,
+        NUM_CLASSES,
+        ScreeningClassifier,
+    )
+    from pipeline.screen.ai_train import CACHE_DIR, CHECKPOINT_DIR, _get_labelled_videos
+
+    checkpoint_path = os.path.join(CHECKPOINT_DIR, "best.pt")
+    if not os.path.exists(checkpoint_path):
+        return {"error": "No checkpoint found. Run ai-train first."}
+
+    # Get labelled videos and sample
+    videos = _get_labelled_videos()
+    if len(videos) < sample_size:
+        sample_size = len(videos)
+
+    # Channel-stratified sampling
+    import random
+    random.seed(42)
+
+    by_channel: dict[str, list] = {}
+    for vid, ch, label in videos:
+        by_channel.setdefault(ch, []).append((vid, label))
+
+    # Sample proportionally from each channel
+    sampled = []
+    channels = list(by_channel.keys())
+    random.shuffle(channels)
+    per_channel = max(1, sample_size // len(channels))
+    for ch in channels:
+        ch_vids = by_channel[ch]
+        random.shuffle(ch_vids)
+        sampled.extend(ch_vids[:per_channel])
+        if len(sampled) >= sample_size:
+            break
+
+    sampled = sampled[:sample_size]
+
+    # Load model
+    model = ScreeningClassifier()
+    model.load_state_dict(torch.load(checkpoint_path, map_location="cpu", weights_only=True))
+    model.eval()
+
+    # Predict
+    all_preds = []
+    all_labels = []
+
+    for vid, label in sampled:
+        cache_path = os.path.join(CACHE_DIR, f"{vid}.pt")
+        if not os.path.exists(cache_path):
+            continue
+
+        data = torch.load(cache_path, map_location="cpu", weights_only=True)
+        emb = data["embeddings"].unsqueeze(0)
+        scan = data["scanner_scores"].unsqueeze(0)
+        otb = data["otb_scores"].unsqueeze(0)
+
+        with torch.no_grad():
+            logits = model(emb, scan, otb)
+            probs = F.softmax(logits, dim=-1)
+            _, pred = probs.max(dim=-1)
+
+        all_preds.append(pred.item())
+        all_labels.append(label)
+
+    # Compute metrics
+    per_class = {}
+    total_correct = 0
+    for cls_idx in range(NUM_CLASSES):
+        tp = sum(1 for p, l in zip(all_preds, all_labels) if p == cls_idx and l == cls_idx)
+        fp = sum(1 for p, l in zip(all_preds, all_labels) if p == cls_idx and l != cls_idx)
+        fn = sum(1 for p, l in zip(all_preds, all_labels) if p != cls_idx and l == cls_idx)
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        total_correct += tp
+
+        per_class[CLASS_NAMES[cls_idx]] = {
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "f1": round(f1, 4),
+            "tp": tp, "fp": fp, "fn": fn,
+        }
+
+    accuracy = total_correct / len(all_labels) if all_labels else 0.0
+    avg_p = sum(c["precision"] for c in per_class.values()) / NUM_CLASSES
+    avg_r = sum(c["recall"] for c in per_class.values()) / NUM_CLASSES
+    avg_f1 = sum(c["f1"] for c in per_class.values()) / NUM_CLASSES
+
+    # Store in DB
+    import json
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO model_evaluations
+                    (model_name, sample_size, accuracy, precision_avg, recall_avg, f1_avg, per_class, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, evaluated_at
+                """,
+                (
+                    "ai_screening",
+                    len(all_labels),
+                    round(accuracy, 4),
+                    round(avg_p, 4),
+                    round(avg_r, 4),
+                    round(avg_f1, 4),
+                    json.dumps(per_class),
+                    notes,
+                ),
+            )
+            eval_id, evaluated_at = cur.fetchone()
+            conn.commit()
+
+    return {
+        "id": eval_id,
+        "model_name": "ai_screening",
+        "evaluated_at": evaluated_at.isoformat(),
+        "sample_size": len(all_labels),
+        "accuracy": round(accuracy, 4),
+        "precision_avg": round(avg_p, 4),
+        "recall_avg": round(avg_r, 4),
+        "f1_avg": round(avg_f1, 4),
+        "per_class": per_class,
+    }
+
+
+def get_evaluation_history(model_name: str | None = None) -> list[dict]:
+    """Fetch evaluation history from DB."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if model_name:
+                cur.execute(
+                    """
+                    SELECT id, model_name, evaluated_at, sample_size, accuracy,
+                           precision_avg, recall_avg, f1_avg, per_class, threshold, auto_rate, notes
+                    FROM model_evaluations
+                    WHERE model_name = %s
+                    ORDER BY evaluated_at DESC
+                    LIMIT 50
+                    """,
+                    (model_name,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id, model_name, evaluated_at, sample_size, accuracy,
+                           precision_avg, recall_avg, f1_avg, per_class, threshold, auto_rate, notes
+                    FROM model_evaluations
+                    ORDER BY evaluated_at DESC
+                    LIMIT 50
+                    """,
+                )
+            rows = cur.fetchall()
+
+    return [
+        {
+            "id": r[0],
+            "model_name": r[1],
+            "evaluated_at": r[2].isoformat() if r[2] else None,
+            "sample_size": r[3],
+            "accuracy": r[4],
+            "precision_avg": r[5],
+            "recall_avg": r[6],
+            "f1_avg": r[7],
+            "per_class": r[8],
+            "threshold": r[9],
+            "auto_rate": r[10],
+            "notes": r[11],
+        }
+        for r in rows
+    ]

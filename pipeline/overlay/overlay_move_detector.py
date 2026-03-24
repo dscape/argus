@@ -4,6 +4,10 @@ Unlike frame-differencing approaches that detect motion, this module compares
 actual board positions (FENs) extracted from the overlay. When the position
 changes, it finds the legal move that transforms the old position into the new
 one using python-chess.
+
+Hard cuts (abrupt board switches without a reset to starting position) are
+detected by counting how many squares changed simultaneously — a real move
+changes at most 4 squares (castling), anything larger is a cut.
 """
 
 import logging
@@ -17,6 +21,11 @@ logger = logging.getLogger(__name__)
 # the position "stable" (handles move animation frames).
 STABILITY_WINDOW = 2
 
+# Maximum number of squares that can change in a single legal move.
+# Castling changes 4 squares (king src/dst + rook src/dst). Anything
+# above this threshold between consecutive stable FENs is a hard cut.
+MAX_MOVE_CHANGED_SQUARES = 4
+
 
 @dataclass
 class OverlayDetectedMove:
@@ -29,6 +38,7 @@ class OverlayDetectedMove:
     timestamp_seconds: float
     fen_before: str  # Board FEN before the move
     fen_after: str  # Board FEN after the move
+    confidence: float = 1.0  # Stability-based confidence (0.0–1.0)
 
 
 @dataclass
@@ -49,6 +59,24 @@ class GameSegment:
     @property
     def num_moves(self) -> int:
         return len(self.moves)
+
+
+def count_fen_differences(fen_a: str, fen_b: str) -> int:
+    """Count squares where piece placement differs between two board FENs.
+
+    Used to distinguish normal moves (1-4 changed squares) from hard cuts
+    (many squares changed simultaneously).
+    """
+    board_a = chess.Board()
+    board_a.set_board_fen(fen_a)
+    board_b = chess.Board()
+    board_b.set_board_fen(fen_b)
+
+    diff_count = 0
+    for sq in chess.SQUARES:
+        if board_a.piece_at(sq) != board_b.piece_at(sq):
+            diff_count += 1
+    return diff_count
 
 
 def find_move_between_positions(
@@ -143,6 +171,13 @@ def detect_moves(
             continue
 
         # Previous position was stable and now changed to a new position.
+        # Measure how many squares changed to distinguish moves from hard cuts.
+        diff_count = count_fen_differences(stable_fen, current_fen)
+
+        # Compute per-move confidence from FEN stability: how many frames
+        # agreed on the position before this transition.
+        move_confidence = min(stable_count / (2 * stability_window), 1.0)
+
         # Check for new game (reset to starting position).
         if current_fen == starting_fen and ply > 4:
             # New game detected
@@ -161,6 +196,30 @@ def detect_moves(
             ply = 0
             continue
 
+        # Hard cut detection: too many squares changed for a legal move.
+        if diff_count > MAX_MOVE_CHANGED_SQUARES:
+            logger.info(
+                f"Hard cut detected at frame {frame_idx}: "
+                f"{diff_count} squares changed (max for a move is "
+                f"{MAX_MOVE_CHANGED_SQUARES})"
+            )
+            current_segment.end_frame = frame_idx
+            current_segment.end_time = timestamp
+            if current_segment.moves:
+                segments.append(current_segment)
+
+            # Start a new segment from the new position
+            current_segment = GameSegment(
+                start_frame=frame_idx,
+                start_time=timestamp,
+            )
+            board = chess.Board()
+            board.set_board_fen(current_fen)
+            stable_fen = current_fen
+            stable_count = 1
+            ply = 0
+            continue
+
         # Try to find the legal move
         move = find_move_between_positions(board, current_fen)
 
@@ -174,6 +233,7 @@ def detect_moves(
                 timestamp_seconds=timestamp,
                 fen_before=stable_fen,
                 fen_after=current_fen,
+                confidence=move_confidence,
             )
             current_segment.moves.append(detected_move)
             board.push(move)

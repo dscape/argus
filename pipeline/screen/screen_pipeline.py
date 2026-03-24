@@ -3,6 +3,11 @@
 Two-stage screening process:
 1. Title filter (cheap): regex-based keyword matching to identify candidates
 2. Frame sampling (expensive): extract stills and detect overlay + OTB regions
+
+Optional AI screening stage:
+- Uses DINOv2 frozen features + overlay/OTB scanner scores
+- High-confidence predictions are auto-decided
+- Low-confidence predictions are left for manual review
 """
 
 import logging
@@ -128,6 +133,72 @@ def screen_all(
     print(
         f"\nScreening complete: {approved_count} approved, "
         f"{rejected_frame} rejected (frame), {failed} failed"
+    )
+
+
+def screen_with_ai(
+    channel_handle: str | None = None,
+    limit: int | None = None,
+    checkpoint_path: str | None = None,
+    threshold: float = 0.85,
+    device: str = "cpu",
+):
+    """Screen unscreened videos using the AI classifier.
+
+    Runs the trained DINOv2-based classifier on videos that have not yet
+    been screened. High-confidence predictions are auto-decided; low-
+    confidence ones are left for manual review.
+
+    Args:
+        channel_handle: If provided, only screen this channel's videos.
+        limit: Maximum videos to process.
+        checkpoint_path: Path to the trained classifier checkpoint.
+        threshold: Confidence threshold for auto-deciding.
+        device: Torch device for DINOv2 inference.
+    """
+    from pipeline.screen.ai_predict import apply_predictions, predict_batch
+
+    # Fetch unscreened videos
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            query = """
+                SELECT video_id
+                FROM youtube_videos
+                WHERE screening_status IS NULL
+            """
+            params: list = []
+
+            if channel_handle:
+                query += " AND channel_handle = %s"
+                params.append(channel_handle)
+
+            query += " ORDER BY published_at DESC"
+
+            if limit:
+                query += " LIMIT %s"
+                params.append(limit)
+
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+    if not rows:
+        print("No unscreened videos found.")
+        return
+
+    video_ids = [r[0] for r in rows]
+    print(f"AI screening {len(video_ids)} videos (threshold={threshold})...")
+
+    predictions = predict_batch(
+        video_ids,
+        checkpoint_path=checkpoint_path,
+        threshold=threshold,
+        device=device,
+    )
+
+    summary = apply_predictions(predictions)
+    print(
+        f"\nAI screening complete: {summary['auto_decided']} auto-decided, "
+        f"{summary['manual_review']} queued for manual review"
     )
 
 

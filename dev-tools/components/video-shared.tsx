@@ -103,8 +103,11 @@ export function scoreColor(score: number): string {
   return "bg-muted-foreground/30";
 }
 
+const THUMB_URLS = ["0.jpg", "hq1.jpg", "hq2.jpg", "hq3.jpg"];
+
 export function youtubeThumb(videoId: string, index: number): string {
-  return `https://img.youtube.com/vi/${videoId}/${index}.jpg`;
+  const file = THUMB_URLS[index] ?? `${index}.jpg`;
+  return `https://img.youtube.com/vi/${videoId}/${file}`;
 }
 
 export function cardTintClass(status: string | null, layoutType: string | null, inUnscreenedFilter: boolean): string {

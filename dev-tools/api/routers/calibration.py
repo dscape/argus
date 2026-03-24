@@ -43,3 +43,25 @@ def delete_calibration(channel_handle: str):
     if not calibration_service.delete(channel_handle):
         raise HTTPException(404, f"No calibration for {channel_handle}")
     return {"deleted": True}
+
+
+class ProposeInput(BaseModel):
+    video_id: str | None = None
+
+
+@router.post("/{channel_handle}/propose")
+def propose_calibration(channel_handle: str, body: ProposeInput | None = None):
+    """Auto-propose calibration from screening data.
+
+    Analyzes YouTube thumbnails to detect overlay region, theme,
+    and board orientation. Returns a proposal for human review.
+    """
+    video_id = body.video_id if body else None
+    result = calibration_service.propose(channel_handle, video_id=video_id)
+    if result is None:
+        raise HTTPException(
+            404,
+            f"Could not generate calibration proposal for {channel_handle}. "
+            "Ensure the channel has approved overlay videos.",
+        )
+    return result

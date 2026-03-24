@@ -3,9 +3,14 @@
   "configurations": [
     {
       "name": "dev-tools",
-      "runtimeExecutable": "echo",
-      "runtimeArgs": ["Docker services already running via make up"],
-      "port": 3000
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000,
+      "autoPort": true,
+      "cwd": "dev-tools",
+      "env": {
+        "API_URL": "http://localhost:8000"
+      }
     }
   ]
 }

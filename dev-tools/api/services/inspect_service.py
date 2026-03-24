@@ -8,7 +8,6 @@ Background job system for batch inspection with polling support.
 
 import base64
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Thread
 from uuid import uuid4
 
@@ -21,6 +20,7 @@ from pipeline.screen.dual_region_detector import (
     detect_otb_region,
     overlay_bbox_to_json,
 )
+from pipeline.screen.frame_fetcher import fetch_youtube_frames as _fetch_youtube_frames
 
 logger = logging.getLogger(__name__)
 
@@ -33,65 +33,6 @@ _face_cascade = cv2.CascadeClassifier(
 # ── In-memory job store (dev tool only) ────────────────────
 
 _jobs: dict[str, dict] = {}
-
-# YouTube auto-generated frame URLs (publicly accessible, no API quota)
-# 0.jpg = default thumbnail, 1.jpg ≈ 25%, 2.jpg ≈ 50%, 3.jpg ≈ 75%
-_FRAME_URLS = [
-    ("https://img.youtube.com/vi/{video_id}/0.jpg", "thumb"),
-    ("https://img.youtube.com/vi/{video_id}/1.jpg", "25%"),
-    ("https://img.youtube.com/vi/{video_id}/2.jpg", "50%"),
-    ("https://img.youtube.com/vi/{video_id}/3.jpg", "75%"),
-]
-
-# Minimum resolution to accept a frame (YouTube 1/2/3.jpg are 120x90)
-_MIN_FRAME_WIDTH = 100
-
-
-def _fetch_single_frame(url: str) -> np.ndarray | None:
-    """Fetch a single image URL and return as numpy array."""
-    import urllib.request
-    import urllib.error
-
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = resp.read()
-            arr = np.frombuffer(data, dtype=np.uint8)
-            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if frame is not None and frame.shape[1] >= _MIN_FRAME_WIDTH:
-                return frame
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError):
-        pass
-    return None
-
-
-def _fetch_youtube_frames(video_id: str) -> list[tuple[np.ndarray, str]]:
-    """Fetch all 4 YouTube auto-generated frames in parallel.
-
-    Returns list of (frame, label) tuples.
-    """
-    results: list[tuple[np.ndarray, str]] = []
-
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = {
-            executor.submit(
-                _fetch_single_frame, url_template.format(video_id=video_id)
-            ): label
-            for url_template, label in _FRAME_URLS
-        }
-        for future in as_completed(futures):
-            label = futures[future]
-            try:
-                frame = future.result()
-                if frame is not None:
-                    results.append((frame, label))
-            except Exception as e:
-                logger.warning(f"Failed to fetch frame {label}: {e}")
-
-    # Sort to maintain consistent order: thumb, 25%, 50%, 75%
-    label_order = {label: i for i, (_, label) in enumerate(_FRAME_URLS)}
-    results.sort(key=lambda x: label_order.get(x[1], 99))
-    return results
 
 
 def _frame_to_base64(frame: np.ndarray, max_width: int = 640) -> str:
