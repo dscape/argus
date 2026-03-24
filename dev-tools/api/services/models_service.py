@@ -19,10 +19,16 @@ logger = logging.getLogger(__name__)
 # ── AI Screening Inspection ─────────────────────────────────
 
 
+def _get_checkpoint_dir() -> str:
+    """Resolve checkpoint dir with absolute path (API runs from dev-tools/, data is at project root)."""
+    _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    return os.path.join(_root, "data", "ai_screening_checkpoints")
+
+
 def _get_model_version() -> str | None:
     """Read model version from metadata.json saved during training."""
     import json
-    metadata_path = os.path.join("data", "ai_screening_checkpoints", "metadata.json")
+    metadata_path = os.path.join(_get_checkpoint_dir(), "metadata.json")
     if os.path.exists(metadata_path):
         with open(metadata_path) as f:
             return json.load(f).get("version")
@@ -89,10 +95,17 @@ def inspect_ai_screening(video_id: str) -> dict | None:
             "otb_score": round(otb_score, 3),
         })
 
-    # Run the classifier
+    # Auto-reject vertical videos without running the classifier
     prediction = None
-    checkpoint_path = os.path.join("data", "ai_screening_checkpoints", "best.pt")
-    if os.path.exists(checkpoint_path):
+    if vertical:
+        prediction = {
+            "class": "reject",
+            "confidence": 1.0,
+            "probabilities": {"overlay": 0.0, "otb_only": 0.0, "reject": 1.0},
+        }
+
+    checkpoint_path = os.path.join(_get_checkpoint_dir(), "best.pt")
+    if prediction is None and os.path.exists(checkpoint_path):
         try:
             from pipeline.screen.ai_classifier import (
                 CLASS_NAMES,
@@ -296,6 +309,7 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
 
     # Compute proposal from best detection
     proposal = None
+    proposal_frame_b64 = None
     camera_heatmap_b64 = None
     if best_detection and best_frame is not None:
         fh, fw = best_frame.shape[:2]
@@ -319,6 +333,18 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
             "orientation_confidence": round(orient_conf, 3),
         }
 
+        # Draw proposal overlay + camera bboxes on best frame for visual verification
+        proposal_annotated = best_frame.copy()
+        ox, oy, ow, oh = best_detection.bbox
+        cv2.rectangle(proposal_annotated, (ox, oy), (ox + ow, oy + oh), (0, 255, 0), 3)
+        cv2.putText(proposal_annotated, "Overlay", (ox + 6, oy + 28),
+                     cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+        cx, cy, cw, ch = camera
+        cv2.rectangle(proposal_annotated, (cx, cy), (cx + cw, cy + ch), (0, 0, 255), 3)
+        cv2.putText(proposal_annotated, "Camera", (cx + 6, cy + 28),
+                     cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+        proposal_frame_b64 = _frame_to_base64(proposal_annotated)
+
         # Generate camera motion heatmap
         if len(all_frames) >= 2:
             target_h, target_w = all_frames[0][0].shape[:2]
@@ -335,6 +361,14 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
             diff_norm = np.clip(diff / 30.0 * 255, 0, 255).astype(np.uint8)
             heatmap = cv2.applyColorMap(diff_norm, cv2.COLORMAP_JET)
             camera_heatmap_b64 = _frame_to_base64(heatmap)
+
+    # Mark which frame was used for the proposal
+    best_bbox_list = list(best_detection.bbox) if best_detection and best_detection.bbox else None
+    for fr in frame_results:
+        fr["used_for_proposal"] = (
+            fr["overlay_detection"]["bbox"] == best_bbox_list
+            if best_bbox_list else False
+        )
 
     # Get saved calibration for comparison
     with get_conn() as conn:
@@ -362,6 +396,7 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
         "source": source,
         "frames": frame_results,
         "proposal": proposal,
+        "proposal_frame_base64": proposal_frame_b64,
         "saved_calibration": saved_cal,
         "camera_motion_heatmap_base64": camera_heatmap_b64,
     }

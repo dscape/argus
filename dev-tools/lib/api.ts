@@ -545,3 +545,17 @@ export async function inspectSyntheticClip(
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+// ── Auto-Calibration ────────────────────────────────────────
+
+export async function inspectAutoCalibration(
+  videoId: string
+): Promise<any> {
+  const res = await fetch("/api/models/auto-calibration/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ video_id: videoId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}

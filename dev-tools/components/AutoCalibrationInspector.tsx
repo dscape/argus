@@ -13,6 +13,7 @@ interface FrameResult {
   timestamp_sec: number;
   image_base64: string;
   overlay_detection: OverlayDetection;
+  used_for_proposal?: boolean;
 }
 
 interface Proposal {
@@ -29,6 +30,7 @@ interface CalibrationResult {
   source: string;
   frames: FrameResult[];
   proposal: Proposal | null;
+  proposal_frame_base64: string | null;
   saved_calibration: Record<string, any> | null;
   camera_motion_heatmap_base64: string | null;
   error?: string;
@@ -106,11 +108,18 @@ export default function AutoCalibrationInspector() {
             <div className="grid grid-cols-3 gap-3">
               {result.frames.map((frame) => (
                 <div key={frame.timestamp_sec} className="space-y-1">
-                  <img
-                    src={`data:image/jpeg;base64,${frame.image_base64}`}
-                    alt={`${frame.timestamp_sec}s`}
-                    className="w-full rounded border"
-                  />
+                  <div className="relative">
+                    <img
+                      src={`data:image/jpeg;base64,${frame.image_base64}`}
+                      alt={`${frame.timestamp_sec}s`}
+                      className={`w-full rounded border ${frame.used_for_proposal ? "ring-2 ring-green-500" : ""}`}
+                    />
+                    {frame.used_for_proposal && (
+                      <span className="absolute top-1 right-1 bg-green-600 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">
+                        Best
+                      </span>
+                    )}
+                  </div>
                   <div className="text-xs text-muted-foreground">
                     <b>{frame.timestamp_sec}s</b>
                     {frame.overlay_detection.found ? (
@@ -133,6 +142,23 @@ export default function AutoCalibrationInspector() {
               ))}
             </div>
           </div>
+
+          {/* Proposed calibration visualization */}
+          {result.proposal_frame_base64 && (
+            <div>
+              <h3 className="text-sm font-medium mb-2">
+                Proposed Calibration (visual)
+              </h3>
+              <p className="text-xs text-muted-foreground mb-1">
+                Green = Overlay region, Red = Camera region
+              </p>
+              <img
+                src={`data:image/jpeg;base64,${result.proposal_frame_base64}`}
+                alt="Proposal visualization"
+                className="w-full max-w-xl rounded border"
+              />
+            </div>
+          )}
 
           {/* Proposal vs Saved */}
           <div className="grid grid-cols-2 gap-4">
