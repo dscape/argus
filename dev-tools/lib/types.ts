@@ -302,3 +302,12 @@ export interface SyntheticStatsResponse {
   image_size: [number, number] | null;
   clip_length: number | null;
 }
+
+export interface GenerationStatus {
+  status: "idle" | "running" | "done" | "failed" | "stopped" | "no_job_running";
+  job_id?: string;
+  num_clips?: number;
+  completed?: number;
+  output_dir?: string;
+  error?: string | null;
+}

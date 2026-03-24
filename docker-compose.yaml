@@ -31,6 +31,9 @@ services:
       - ./data:/app/data
       - ./weights:/app/weights
       - ./dev-tools/api:/app/dev-tools/api
+      - ./dev-tools/entrypoint.sh:/app/dev-tools/entrypoint.sh
+      - ./blender:/app/blender
+      - ./scripts:/app/scripts
     env_file: .env
     environment:
       - PYTHONPATH=/app/src:/app

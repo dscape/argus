@@ -245,186 +245,250 @@ def save_screening_eval(accuracy: float, sample_size: int, per_class: dict, mode
 
 
 def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]:
-    """Run AI screening classifier on a batch of videos — lightweight, no base64 images.
+    """Run AI screening on a batch of videos.
 
-    Returns per-video: predicted_class, confidence, auto_decided, vertical,
-    title_score, max_ovl_score, max_otb_score.
+    Two modes:
+    1. Inline inference: if ML deps (torch/transformers) are available, runs the
+       DINOv2 classifier directly.
+    2. DB fallback: reads existing ai_screening_* predictions from the database
+       (populated by `pipeline ai-screen` CLI command).
 
-    Also writes ai_screening_* metadata and screening_status (for auto-decided) to DB.
+    In both modes, vertical detection and title scoring always run (only need
+    opencv/numpy). Returns per-video: predicted_class, confidence, auto_decided,
+    vertical, title_score, max_ovl_score, max_otb_score.
     """
-    import torch
-    import torch.nn.functional as F
+    # Check if ML deps are available for inline inference
+    has_ml_deps = True
+    try:
+        import torch
+        import torch.nn.functional as F
+        from pipeline.screen.ai_classifier import (
+            CLASS_NAMES,
+            ScreeningClassifier,
+            ScreeningFeatureExtractor,
+        )
+        from pipeline.screen.ai_train import CACHE_DIR
+    except ImportError:
+        has_ml_deps = False
 
-    from pipeline.screen.ai_classifier import (
-        CLASS_NAMES,
-        ScreeningClassifier,
-        ScreeningFeatureExtractor,
-    )
-    from pipeline.screen.ai_train import CACHE_DIR
-
-    checkpoint_path = os.path.join(_get_checkpoint_dir(), "best.pt")
-    if not os.path.exists(checkpoint_path):
-        return [{"video_id": vid, "error": "No checkpoint found"} for vid in video_ids]
-
-    # Load model once for entire batch
-    model = ScreeningClassifier()
-    model.load_state_dict(torch.load(checkpoint_path, map_location="cpu", weights_only=True))
-    model.eval()
-
-    extractor = ScreeningFeatureExtractor(device="cpu")
-    model_version = _get_model_version()
-
-    # Fetch titles for all videos in one query
-    titles_map: dict[str, str] = {}
+    # Fetch video metadata from DB (title + any existing AI predictions)
+    video_data: dict[str, dict] = {}
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT video_id, title FROM youtube_videos WHERE video_id = ANY(%s)",
+                """
+                SELECT video_id, title, ai_screening_class, ai_screening_confidence,
+                       ai_screening_auto_decided
+                FROM youtube_videos WHERE video_id = ANY(%s)
+                """,
                 (video_ids,),
             )
-            for vid, title in cur.fetchall():
-                titles_map[vid] = title
+            for vid, title, ai_cls, ai_conf, ai_auto in cur.fetchall():
+                video_data[vid] = {
+                    "title": title,
+                    "ai_class": ai_cls,
+                    "ai_confidence": ai_conf,
+                    "ai_auto": ai_auto,
+                }
+
+    # Load model if inline inference is possible
+    model = None
+    extractor = None
+    model_version = _get_model_version()
+    if has_ml_deps:
+        checkpoint_path = os.path.join(_get_checkpoint_dir(), "best.pt")
+        if os.path.exists(checkpoint_path):
+            try:
+                model = ScreeningClassifier()
+                model.load_state_dict(torch.load(checkpoint_path, map_location="cpu", weights_only=True))
+                model.eval()
+                extractor = ScreeningFeatureExtractor(device="cpu")
+            except Exception as e:
+                logger.warning(f"Failed to load AI model (falling back to DB): {type(e).__name__}: {e}")
+                model = None
 
     results = []
-    db_updates = []  # collect DB writes for batch commit
+    db_updates = []
 
     for video_id in video_ids:
-        title = titles_map.get(video_id, "")
-        _, title_score = score_title(title) if title else (False, 0.0)
+        try:
+            vdata = video_data.get(video_id, {})
+            title = vdata.get("title", "")
+            _, title_score = score_title(title) if title else (False, 0.0)
 
-        # Fetch frames and check vertical
-        frames = fetch_youtube_frames(video_id)
-        if not frames:
+            # Always check vertical (only needs opencv/numpy)
+            frames = fetch_youtube_frames(video_id)
+            if not frames:
+                results.append({
+                    "video_id": video_id,
+                    "error": "Could not fetch thumbnails",
+                    "vertical": False,
+                    "title_score": round(title_score, 3),
+                })
+                continue
+
+            vertical = is_vertical_video(frames)
+
+            if vertical:
+                results.append({
+                    "video_id": video_id,
+                    "predicted_class": "reject",
+                    "confidence": 1.0,
+                    "auto_decided": True,
+                    "vertical": True,
+                    "title_score": round(title_score, 3),
+                    "max_ovl_score": 0.0,
+                    "max_otb_score": 0.0,
+                    "model_version": model_version,
+                })
+                db_updates.append({
+                    "video_id": video_id,
+                    "predicted_class": "reject",
+                    "confidence": 1.0,
+                    "auto_decided": True,
+                })
+                continue
+
+            # Compute per-frame heuristic scores (only needs opencv/numpy)
+            ovl_scores = []
+            otb_scores = []
+            for frame_bgr, _ in frames:
+                det = detect_overlay_in_frame(frame_bgr)
+                ovl_scores.append(det.score if det.found else 0.0)
+                otb_score = 0.0
+                if det.found and det.bbox:
+                    otb_det = detect_otb_region(frame_bgr, det.bbox)
+                    otb_score = otb_det.confidence
+                otb_scores.append(otb_score)
+
+            max_ovl = round(max(ovl_scores), 3) if ovl_scores else 0.0
+            max_otb = round(max(otb_scores), 3) if otb_scores else 0.0
+
+            # Try inline inference first, fall back to DB predictions
+            predicted_class = None
+            confidence = 0.0
+
+            if model is not None and extractor is not None:
+                # Inline inference
+                cache_path = os.path.join(CACHE_DIR, f"{video_id}.pt")
+                if os.path.exists(cache_path):
+                    data = torch.load(cache_path, map_location="cpu", weights_only=True)
+                else:
+                    data = extractor.extract_features(video_id)
+                    if data is not None:
+                        os.makedirs(CACHE_DIR, exist_ok=True)
+                        torch.save(data, cache_path)
+
+                if data is not None:
+                    emb = data["embeddings"].unsqueeze(0)
+                    scan = data["scanner_scores"].unsqueeze(0)
+                    otb = data["otb_scores"].unsqueeze(0)
+
+                    with torch.no_grad():
+                        logits = model(emb, scan, otb)
+                        probs = F.softmax(logits, dim=-1).squeeze(0)
+
+                    conf, pred_idx = probs.max(dim=0)
+                    confidence = round(conf.item(), 4)
+                    predicted_class = CLASS_NAMES[pred_idx.item()]
+
+                    # Use cached feature scores for consistency
+                    max_ovl = round(float(data["scanner_scores"].max()), 3)
+                    max_otb = round(float(data["otb_scores"].max()), 3)
+
+            elif vdata.get("ai_class"):
+                # DB fallback — use existing predictions from `pipeline ai-screen`
+                predicted_class = vdata["ai_class"]
+                confidence = round(vdata["ai_confidence"] or 0.0, 4)
+
+            if predicted_class is None:
+                # No prediction available
+                results.append({
+                    "video_id": video_id,
+                    "error": "No AI prediction — run `pipeline ai-screen` first" if not has_ml_deps else "Feature extraction failed",
+                    "vertical": False,
+                    "title_score": round(title_score, 3),
+                    "max_ovl_score": max_ovl,
+                    "max_otb_score": max_otb,
+                })
+                continue
+
+            auto_decided = confidence >= threshold
             results.append({
                 "video_id": video_id,
-                "error": "Could not fetch thumbnails",
+                "predicted_class": predicted_class,
+                "confidence": confidence,
+                "auto_decided": auto_decided,
                 "vertical": False,
                 "title_score": round(title_score, 3),
-            })
-            continue
-
-        vertical = is_vertical_video(frames)
-
-        if vertical:
-            results.append({
-                "video_id": video_id,
-                "predicted_class": "reject",
-                "confidence": 1.0,
-                "auto_decided": True,
-                "vertical": True,
-                "title_score": round(title_score, 3),
-                "max_ovl_score": 0.0,
-                "max_otb_score": 0.0,
+                "max_ovl_score": max_ovl,
+                "max_otb_score": max_otb,
                 "model_version": model_version,
             })
             db_updates.append({
                 "video_id": video_id,
-                "predicted_class": "reject",
-                "confidence": 1.0,
-                "auto_decided": True,
+                "predicted_class": predicted_class,
+                "confidence": confidence,
+                "auto_decided": auto_decided,
             })
-            continue
-
-        # Extract features (uses cache if available)
-        cache_path = os.path.join(CACHE_DIR, f"{video_id}.pt")
-        if os.path.exists(cache_path):
-            data = torch.load(cache_path, map_location="cpu", weights_only=True)
-        else:
-            data = extractor.extract_features(video_id)
-            if data is not None:
-                os.makedirs(CACHE_DIR, exist_ok=True)
-                torch.save(data, cache_path)
-
-        if data is None:
+        except Exception as e:
+            logger.warning(f"AI screen failed for {video_id}: {type(e).__name__}: {e}")
             results.append({
                 "video_id": video_id,
-                "error": "Feature extraction failed",
+                "error": f"Processing failed: {type(e).__name__}: {e}",
                 "vertical": False,
-                "title_score": round(title_score, 3),
+                "title_score": 0.0,
             })
             continue
-
-        # Run classifier
-        emb = data["embeddings"].unsqueeze(0)
-        scan = data["scanner_scores"].unsqueeze(0)
-        otb = data["otb_scores"].unsqueeze(0)
-
-        with torch.no_grad():
-            logits = model(emb, scan, otb)
-            probs = F.softmax(logits, dim=-1).squeeze(0)
-
-        conf, pred_idx = probs.max(dim=0)
-        confidence = round(conf.item(), 4)
-        predicted_class = CLASS_NAMES[pred_idx.item()]
-        auto_decided = confidence >= threshold
-
-        # Max per-frame scores for the info icon
-        max_ovl = round(float(data["scanner_scores"].max()), 3)
-        max_otb = round(float(data["otb_scores"].max()), 3)
-
-        results.append({
-            "video_id": video_id,
-            "predicted_class": predicted_class,
-            "confidence": confidence,
-            "auto_decided": auto_decided,
-            "vertical": False,
-            "title_score": round(title_score, 3),
-            "max_ovl_score": max_ovl,
-            "max_otb_score": max_otb,
-            "model_version": model_version,
-        })
-        db_updates.append({
-            "video_id": video_id,
-            "predicted_class": predicted_class,
-            "confidence": confidence,
-            "auto_decided": auto_decided,
-        })
 
     # Batch write to DB
     if db_updates:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                for pred in db_updates:
-                    vid = pred["video_id"]
-                    cls = pred["predicted_class"]
-                    conf = pred["confidence"]
-                    auto = pred["auto_decided"]
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    for pred in db_updates:
+                        vid = pred["video_id"]
+                        cls = pred["predicted_class"]
+                        conf = pred["confidence"]
+                        auto = pred["auto_decided"]
 
-                    # Always write AI metadata
-                    cur.execute(
-                        """
-                        UPDATE youtube_videos
-                        SET ai_screening_class = %s,
-                            ai_screening_confidence = %s,
-                            ai_screening_auto_decided = %s,
-                            updated_at = now()
-                        WHERE video_id = %s
-                        """,
-                        (cls, conf, auto, vid),
-                    )
-
-                    # For auto-decided, also update screening status
-                    if auto:
-                        if cls == "overlay":
-                            status, layout = "approved", "overlay"
-                        elif cls == "otb_only":
-                            status, layout = "approved", "otb_only"
-                        else:
-                            status, layout = "rejected", None
-
+                        # Always write AI metadata
                         cur.execute(
                             """
                             UPDATE youtube_videos
-                            SET screening_status = %s,
-                                screening_confidence = %s,
-                                layout_type = COALESCE(%s, layout_type),
+                            SET ai_screening_class = %s,
+                                ai_screening_confidence = %s,
+                                ai_screening_auto_decided = %s,
                                 updated_at = now()
                             WHERE video_id = %s
-                              AND screening_status IS NULL
                             """,
-                            (status, conf, layout, vid),
+                            (cls, conf, auto, vid),
                         )
-                conn.commit()
+
+                        # For auto-decided, also update screening status
+                        if auto:
+                            if cls == "overlay":
+                                status, layout = "approved", "overlay"
+                            elif cls == "otb_only":
+                                status, layout = "approved", "otb_only"
+                            else:
+                                status, layout = "rejected", None
+
+                            cur.execute(
+                                """
+                                UPDATE youtube_videos
+                                SET screening_status = %s,
+                                    screening_confidence = %s,
+                                    layout_type = COALESCE(%s, layout_type),
+                                    updated_at = now()
+                                WHERE video_id = %s
+                                  AND screening_status IS NULL
+                                """,
+                                (status, conf, layout, vid),
+                            )
+                    conn.commit()
+        except Exception as e:
+            logger.warning(f"DB update for AI screening failed: {type(e).__name__}: {e}")
 
     return results
 

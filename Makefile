@@ -1,7 +1,9 @@
 .PHONY: install dev test lint typecheck format train eval datagen infer clean \
        db-up db-down pipeline-install seed-channels crawl screen inspect download generate-clips pipeline-stats \
        dev-tools dev-tools-down blender-server blender-server-stop \
-       up down
+       up down \
+       docker-ai-extract docker-ai-train docker-ai-eval docker-ai-screen \
+       docker-ai-extract-status docker-smoke-test
 
 # ── Use venv Python/pip so targets work without activation ──
 
@@ -135,3 +137,23 @@ blender-server:
 
 blender-server-stop:
 	@lsof -ti tcp:$(BLENDER_PORT) | xargs kill 2>/dev/null && echo "Blender server stopped" || echo "No server running on port $(BLENDER_PORT)"
+
+# ── Docker-wrapped pipeline targets ────────────────────────
+
+docker-ai-extract:
+	docker exec -it argus-dev-api python3 -m pipeline.cli ai-extract $(ARGS)
+
+docker-ai-train:
+	docker exec -it argus-dev-api python3 -m pipeline.cli ai-train $(ARGS)
+
+docker-ai-eval:
+	docker exec -it argus-dev-api python3 -m pipeline.cli ai-eval $(ARGS)
+
+docker-ai-screen:
+	docker exec -it argus-dev-api python3 -m pipeline.cli ai-screen $(ARGS)
+
+docker-ai-extract-status:
+	docker exec argus-dev-api python3 -m pipeline.cli ai-extract-status
+
+docker-smoke-test:
+	docker exec argus-dev-api python3 -m pipeline.cli smoke-test

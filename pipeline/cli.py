@@ -370,6 +370,126 @@ def cmd_auto_calibrate(args):
         print("\n  Run with --apply to save this calibration.")
 
 
+def cmd_smoke_test(args):
+    """Run quick smoke tests (no DB required)."""
+    import chess
+
+    print("=== Smoke Test: Hard Cut Detection ===")
+    from pipeline.overlay.overlay_move_detector import count_fen_differences
+
+    full_reset = count_fen_differences(chess.STARTING_BOARD_FEN, "8/8/8/8/8/8/8/8")
+    print(f"  Full reset (expect 32): {full_reset}")
+    e2e4 = count_fen_differences(
+        chess.STARTING_BOARD_FEN,
+        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR",
+    )
+    print(f"  e2e4 (expect 2): {e2e4}")
+    assert full_reset == 32, f"FAIL: expected 32, got {full_reset}"
+    assert e2e4 == 2, f"FAIL: expected 2, got {e2e4}"
+    print("  PASS")
+
+    print("\n=== Smoke Test: AI Classifier ===")
+    import torch
+    from pipeline.screen.ai_classifier import ScreeningClassifier
+
+    model = ScreeningClassifier()
+    emb = torch.randn(1, 4, 768)
+    scan = torch.randn(1, 4)
+    otb = torch.randn(1, 4)
+    logits = model(emb, scan, otb)
+    assert logits.shape == (1, 3), f"FAIL: expected (1, 3), got {logits.shape}"
+    print(f"  Logits shape: {logits.shape} (overlay, otb_only, reject)")
+    print("  PASS")
+
+    print("\nAll smoke tests passed.")
+
+
+def cmd_inspect_calibration(args):
+    """Inspect saved calibration for a channel."""
+    from pipeline.overlay.calibration import get_calibration
+
+    cal = get_calibration(args.channel)
+    if cal is None:
+        print(f"No calibration found for {args.channel}")
+        return
+
+    print(f"Calibration for {args.channel}:")
+    print(f"  Overlay:      {cal.overlay}")
+    print(f"  Camera:       {cal.camera}")
+    print(f"  Resolution:   {cal.ref_resolution}")
+    print(f"  Theme:        {cal.board_theme}")
+    print(f"  Flipped:      {cal.board_flipped}")
+    print(f"  Move delay:   {cal.move_delay_seconds}s")
+
+
+def cmd_ai_extract_status(args):
+    """Report progress of DINOv2 feature caching."""
+    import os
+
+    cache_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data",
+        "ai_screening_cache",
+    )
+
+    labels = {0: 0, 1: 0, 2: 0}
+    vertical = 0
+    errors = 0
+
+    if os.path.isdir(cache_dir):
+        import torch
+
+        for f in os.listdir(cache_dir):
+            if not f.endswith(".pt"):
+                continue
+            try:
+                data = torch.load(
+                    os.path.join(cache_dir, f), map_location="cpu", weights_only=True
+                )
+                if data.get("vertical"):
+                    vertical += 1
+                else:
+                    lbl = data.get("label", -1)
+                    if lbl in labels:
+                        labels[lbl] += 1
+                    else:
+                        errors += 1
+            except Exception:
+                errors += 1
+
+    cached = sum(labels.values()) + vertical
+
+    # Count labelled videos in DB
+    total = 0
+    try:
+        from pipeline.db.connection import get_conn
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM youtube_videos "
+                    "WHERE screening_status IN ('approved', 'rejected')"
+                )
+                total = cur.fetchone()[0]
+    except Exception as e:
+        print(f"  (Could not query DB: {e})")
+
+    pct = round(100 * cached / total, 1) if total > 0 else 0
+    remaining = max(0, total - cached)
+
+    print(f"\nAI feature extraction progress:")
+    print(f"  {cached}/{total} ({pct}%) — overlay={labels[0]}, otb={labels[1]}, "
+          f"reject={labels[2]}, vertical={vertical}")
+    if errors:
+        print(f"  Errors: {errors} files could not be loaded")
+    print(f"  Cache dir: {cache_dir}")
+
+    if remaining > 0:
+        print(f"\n  ~{remaining} videos remaining (~{remaining * 4}s at ~4s/video)")
+    else:
+        print(f"\n  All videos cached.")
+
+
 def cmd_stats(args):
     """Print pipeline statistics."""
     from pipeline.db.connection import get_conn
@@ -543,6 +663,16 @@ def main():
     p.add_argument("--video-id", type=str, default=None, help="Use a specific video instead of multi-video consensus")
     p.add_argument("--apply", action="store_true", help="Save the proposed calibration (otherwise just print)")
 
+    # smoke-test
+    subparsers.add_parser("smoke-test", help="Run quick smoke tests (no DB required)")
+
+    # inspect-calibration
+    p = subparsers.add_parser("inspect-calibration", help="Inspect saved calibration for a channel")
+    p.add_argument("--channel", type=str, required=True, help="Channel handle (e.g. @STLChessClub)")
+
+    # ai-extract-status
+    subparsers.add_parser("ai-extract-status", help="Report AI feature extraction cache progress")
+
     # stats
     subparsers.add_parser("stats", help="Print pipeline statistics")
 
@@ -575,6 +705,9 @@ def main():
         "ai-eval": cmd_ai_eval,
         "ai-screen": cmd_ai_screen,
         "auto-calibrate": cmd_auto_calibrate,
+        "smoke-test": cmd_smoke_test,
+        "inspect-calibration": cmd_inspect_calibration,
+        "ai-extract-status": cmd_ai_extract_status,
         "stats": cmd_stats,
     }
 
