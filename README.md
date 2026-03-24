@@ -171,10 +171,13 @@ make crawl             # Fetch video metadata from YouTube
 make screen            # Title filter + frame sampling for overlay/OTB detection
 
 # AI-assisted screening (optional — train once, then auto-screen)
-python -m pipeline ai-extract --device mps   # Pre-compute DINOv2 features for labelled videos
-python -m pipeline ai-train                  # Train classifier on existing labels
+python -m pipeline ai-extract --device mps   # Pre-compute DINOv2 features (~4s/video)
+python -m pipeline ai-train                  # Train classifier (saves to weights/ai_screening/)
 python -m pipeline ai-eval                   # Evaluate accuracy + calibrate threshold
 python -m pipeline ai-screen --threshold 0.90  # Auto-screen new videos
+
+# Pre-trained weights are committed in weights/ai_screening/ with versioned
+# filenames (e.g. v2r1.pt). See weights/ai_screening/metadata.json for details.
 
 # Auto-calibrate new channels (instead of manual bbox drawing)
 python -m pipeline auto-calibrate --channel @NewChannel --apply
@@ -262,7 +265,7 @@ Videos are screened in up to three passes:
 2. **Dual-region detection** — frame sampling to detect both:
    - **2D overlay** — rendered board overlay (lichess, chess.com streams) via pixel regularity analysis
    - **OTB footage** — over-the-board camera footage
-3. **AI classifier** (optional) — a frozen DINOv2 encoder extracts features from 4 YouTube thumbnails per video, concatenated with overlay scanner and OTB detector scores, then a small MLP head classifies into overlay / otb_only / reject with a confidence score. High-confidence predictions are auto-decided; low-confidence videos are queued for manual review.
+3. **AI classifier** (optional) — a frozen DINOv2 encoder extracts features from 4 YouTube thumbnails (480x360 hq variants) per video, concatenated with overlay scanner and OTB detector scores, then a small MLP head classifies into overlay / otb_only / reject with a confidence score. Vertical videos are auto-rejected. High-confidence predictions are auto-decided; low-confidence videos are queued for manual review. Model weights are committed in `weights/ai_screening/` with versioned filenames (e.g. `v2r1.pt`).
 
 Screening results are stored on `youtube_videos` as `screening_status`, `screening_confidence`, `overlay_bbox`, `has_otb_footage`, plus AI metadata in `ai_screening_class`, `ai_screening_confidence`, and `ai_screening_auto_decided`.
 
@@ -888,6 +891,11 @@ erDiagram
 
 ```
 argus/
+├── weights/                                    # Committed model weights (versioned)
+│   └── ai_screening/                           #   AI screening classifier
+│       ├── best.pt                             #     Current best checkpoint
+│       ├── v2r1.pt                             #     Versioned: code v2, training revision 1
+│       └── metadata.json                       #     Version, accuracy, training details
 ├── configs/                                    # Configuration
 │   ├── config.yaml                             # Hydra root (Training only)
 │   ├── model/                                  # Training: model architecture configs

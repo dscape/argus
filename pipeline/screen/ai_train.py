@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE_DIR = os.path.join(_PROJECT_ROOT, "data", "ai_screening_cache")
 CHECKPOINT_DIR = os.path.join(_PROJECT_ROOT, "data", "ai_screening_checkpoints")
+WEIGHTS_DIR = os.path.join(_PROJECT_ROOT, "weights", "ai_screening")
 
 
 def _get_labelled_videos() -> list[tuple[str, str, int]]:
@@ -328,9 +329,21 @@ def train(
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
 
+    # Also save to weights/ with versioned filename (committed to repo)
+    os.makedirs(WEIGHTS_DIR, exist_ok=True)
+    version_str = metadata["version"]
+    versioned_path = os.path.join(WEIGHTS_DIR, f"{version_str}.pt")
+    torch.save(model.state_dict(), versioned_path)
+    # Always keep a "best.pt" symlink/copy in weights/ for easy loading
+    import shutil
+    weights_best = os.path.join(WEIGHTS_DIR, "best.pt")
+    shutil.copy2(best_path, weights_best)
+    weights_meta = os.path.join(WEIGHTS_DIR, "metadata.json")
+    shutil.copy2(metadata_path, weights_meta)
+
     print(f"\nTraining complete. Best val accuracy: {best_val_acc:.3f}")
     print(f"  Model version: {metadata['version']}")
+    print(f"  Weights: {versioned_path}")
     print(f"  Best checkpoint: {best_path}")
-    print(f"  Final checkpoint: {final_path}")
 
     return best_path

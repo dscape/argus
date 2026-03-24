@@ -20,8 +20,11 @@ logger = logging.getLogger(__name__)
 
 
 def _get_checkpoint_dir() -> str:
-    """Resolve checkpoint dir with absolute path (API runs from dev-tools/, data is at project root)."""
+    """Resolve checkpoint dir — prefers weights/ (committed), falls back to data/ (ephemeral)."""
     _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    weights_dir = os.path.join(_root, "weights", "ai_screening")
+    if os.path.exists(os.path.join(weights_dir, "best.pt")):
+        return weights_dir
     return os.path.join(_root, "data", "ai_screening_checkpoints")
 
 
