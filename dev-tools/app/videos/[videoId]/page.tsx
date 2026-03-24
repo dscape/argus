@@ -38,6 +38,7 @@ import type {
 import { BboxDrawer, type Bbox } from "@/components/BboxDrawer";
 import { ChessBoard } from "@/components/ChessBoard";
 import { statusBadge, scoreColor, youtubeThumb } from "@/components/video-shared";
+import VideoCard, { type InspectResult } from "@/components/VideoCard";
 
 // ── Step definitions ────────────────────────────────────────
 
@@ -137,6 +138,8 @@ export default function VideoWorkbenchPage() {
 
 function InfoStep({ video }: { video: CrawlVideo }) {
   const [dlStatus, setDlStatus] = useState<DownloadStatus | null>(null);
+  const [aiResult, setAiResult] = useState<InspectResult | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
 
   useEffect(() => {
     getDownloadStatus(video.video_id).then(setDlStatus);
@@ -147,6 +150,23 @@ function InfoStep({ video }: { video: CrawlVideo }) {
     const s = Math.floor(secs % 60);
     return `${m}:${s.toString().padStart(2, "0")}`;
   };
+
+  async function inspectAi() {
+    setAiLoading(true);
+    try {
+      const res = await fetch("/api/models/ai-screening/inspect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ video_id: video.video_id }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setAiResult(await res.json());
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setAiLoading(false);
+    }
+  }
 
   return (
     <div className="space-y-4 pt-2 max-w-4xl">
@@ -181,6 +201,21 @@ function InfoStep({ video }: { video: CrawlVideo }) {
             />
           ))}
         </div>
+      </div>
+
+      {/* AI Screening */}
+      <div className="border-t pt-4">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-medium">AI Screening</h3>
+          <button
+            onClick={inspectAi}
+            disabled={aiLoading}
+            className="px-3 py-1 bg-foreground text-background rounded text-xs disabled:opacity-50"
+          >
+            {aiLoading ? "Running..." : aiResult ? "Re-run" : "Run AI Screen"}
+          </button>
+        </div>
+        {aiResult && <VideoCard result={aiResult} />}
       </div>
     </div>
   );

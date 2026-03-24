@@ -62,11 +62,15 @@ BOARD_THEMES = {
 TEMPLATE_SIZE = 64
 
 
-def _hex_to_bgr(hex_color: str) -> tuple[int, int, int]:
+def hex_to_bgr(hex_color: str) -> tuple[int, int, int]:
     """Convert hex color string to BGR tuple."""
     hex_color = hex_color.lstrip("#")
     r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
     return (b, g, r)
+
+
+# Keep private alias for internal use.
+_hex_to_bgr = hex_to_bgr
 
 
 def _crop_svg_margin(img: np.ndarray) -> np.ndarray:

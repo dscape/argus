@@ -266,6 +266,7 @@ class OverlayClipGenerator:
         detect_targets = torch.zeros(num_frames, dtype=torch.float32)
         legal_masks = torch.zeros(num_frames, vocab_size, dtype=torch.bool)
         move_mask = torch.ones(num_frames, dtype=torch.float32)
+        move_confidence = torch.ones(num_frames, dtype=torch.float32)
 
         # Build a map from frame index to move.
         # Apply move delay: shift overlay-detected move timestamps backward
@@ -292,6 +293,7 @@ class OverlayClipGenerator:
                 if idx is not None:
                     move_targets[i] = idx
                     detect_targets[i] = 1.0
+                    move_confidence[i] = m.confidence
 
                 # Push the move on the board
                 try:
@@ -309,6 +311,7 @@ class OverlayClipGenerator:
             "detect_targets": detect_targets,
             "legal_masks": legal_masks,
             "move_mask": move_mask,
+            "move_confidence": move_confidence,
         }
 
 

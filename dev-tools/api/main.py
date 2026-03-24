@@ -9,7 +9,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import calibration, clips, crawl, overlay, synthetic, video
+from api.routers import calibration, clips, crawl, models, overlay, synthetic, video
 from pipeline.db.connection import migrate
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ app.include_router(clips.router, prefix="/api/clips", tags=["clips"])
 app.include_router(video.router, prefix="/api/video", tags=["video"])
 app.include_router(synthetic.router, prefix="/api/synthetic", tags=["synthetic"])
 app.include_router(crawl.router, prefix="/api/crawl", tags=["crawl"])
+app.include_router(models.router, prefix="/api/models", tags=["models"])
 
 
 @app.get("/api/health")

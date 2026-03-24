@@ -10,7 +10,15 @@ const navItems = [
     href: "/synthetic",
     label: "Synthetic",
     icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="w-5 h-5"
+      >
         <path d="M12 3l7 4v6.5a2 2 0 01-1 1.73L12 19l-6-3.77A2 2 0 015 13.5V7l7-4z" />
         <path d="M12 12L5 7.5" />
         <path d="M12 12l7-4.5" />
@@ -19,11 +27,38 @@ const navItems = [
     ),
   },
   {
+    href: "/models",
+    label: "Models",
+    icon: (
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="w-5 h-5"
+      >
+        <path d="M9.5 2A2.5 2.5 0 0112 4.5V6a2 2 0 002 2h1.5A2.5 2.5 0 0118 10.5v0a2.5 2.5 0 01-2.5 2.5H14a2 2 0 00-2 2v1.5a2.5 2.5 0 01-5 0V15a2 2 0 00-2-2H3.5A2.5 2.5 0 011 10.5v0A2.5 2.5 0 013.5 8H5a2 2 0 002-2V4.5A2.5 2.5 0 019.5 2z" />
+        <circle cx="17.5" cy="17.5" r="3.5" />
+        <path d="M22 22l-1.5-1.5" />
+      </svg>
+    ),
+  },
+  {
     href: "/screen",
     label: "Screen",
     hasBadge: true,
     icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="w-5 h-5"
+      >
         <rect x="2" y="3" width="20" height="14" rx="2" />
         <line x1="8" y1="21" x2="16" y2="21" />
         <line x1="12" y1="17" x2="12" y2="21" />
@@ -34,7 +69,15 @@ const navItems = [
     href: "/crawl",
     label: "Crawl",
     icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="w-5 h-5"
+      >
         {/* Spider body */}
         <ellipse cx="12" cy="11" rx="3" ry="3.5" />
         <circle cx="12" cy="7" r="1.5" />
@@ -55,7 +98,15 @@ const navItems = [
     href: "/videos",
     label: "Videos",
     icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="w-5 h-5"
+      >
         <rect x="2" y="4" width="20" height="16" rx="2" />
         <line x1="2" y1="8" x2="22" y2="8" />
         <line x1="8" y1="4" x2="8" y2="8" />

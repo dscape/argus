@@ -55,10 +55,10 @@ graph LR
 graph LR
     subgraph "Data Pipeline"
         A[YouTube Channels] --> B[Crawl]
-        B --> C[Screen — title filter + frame sampling]
+        B --> C[Screen — title filter + AI classifier]
         C --> D[Download Videos]
-        D --> E[Calibrate Overlay Layout]
-        E --> F[Generate Training Clips]
+        D --> E[Auto-Calibrate or Manual Calibrate]
+        E --> F[Generate Training Clips — with hard cut detection]
     end
 
     subgraph "Data Generation"
@@ -169,6 +169,16 @@ cp .env.example .env  # Fill in DATABASE_URL, YOUTUBE_API_KEY
 make seed-channels     # Load YouTube channels from channels.yaml
 make crawl             # Fetch video metadata from YouTube
 make screen            # Title filter + frame sampling for overlay/OTB detection
+
+# AI-assisted screening (optional — train once, then auto-screen)
+python -m pipeline ai-extract --device mps   # Pre-compute DINOv2 features for labelled videos
+python -m pipeline ai-train                  # Train classifier on existing labels
+python -m pipeline ai-eval                   # Evaluate accuracy + calibrate threshold
+python -m pipeline ai-screen --threshold 0.90  # Auto-screen new videos
+
+# Auto-calibrate new channels (instead of manual bbox drawing)
+python -m pipeline auto-calibrate --channel @NewChannel --apply
+
 make download          # Fetch approved videos via yt-dlp
 make generate-clips    # Overlay FEN reading + move detection → .pt training clips
 ```
@@ -212,7 +222,8 @@ graph TD
     subgraph "3. Screen"
         DB_V -->|title_filter| TF[Title keyword filter]
         TF -->|dual_region_detector| DRD["Frame sampling: overlay + OTB detection"]
-        DRD --> DB_S["youtube_videos (screening_status, overlay_bbox, has_otb_footage)"]
+        DRD -->|ai_classifier| AI["AI classifier: DINOv2 + scanner scores"]
+        AI --> DB_S["youtube_videos (screening_status, ai_screening_*, overlay_bbox)"]
     end
 
     subgraph "4. Download"
@@ -220,13 +231,13 @@ graph TD
     end
 
     subgraph "5. Calibrate"
-        VID --> CAL["Per-channel overlay/camera crop regions"]
+        VID --> CAL["Auto-calibrate or manual: overlay/camera crop regions"]
     end
 
     subgraph "6. Generate Clips"
         CAL --> READ["OverlayReader: frame to FEN"]
-        READ --> MOVE["OverlayMoveDetector: FEN diffs to legal moves"]
-        MOVE --> CLIP["OverlayClipGenerator: camera frames + moves to .pt"]
+        READ --> MOVE["OverlayMoveDetector: FEN diffs + hard cut detection"]
+        MOVE --> CLIP["OverlayClipGenerator: frames + moves + confidence to .pt"]
         CLIP --> PT[.pt training clips]
     end
 ```
@@ -238,30 +249,33 @@ graph TD
 | 1 | Seed | `make seed-channels` | Load YouTube channels from `configs/pipeline/channels.yaml` into PostgreSQL |
 | 2 | Crawl | `make crawl` | Fetch video metadata from ~40 YouTube channels via playlistItems API |
 | 3 | Screen | `make screen` | Title keyword filter + frame sampling to detect 2D overlay and OTB camera footage |
+| 3b | AI Screen | `python -m pipeline ai-screen` | DINOv2-based 3-way classifier (overlay / otb_only / reject). High-confidence auto-decides; low-confidence queued for manual review |
 | 4 | Download | `make download` | Fetch approved videos via yt-dlp to `data/videos/{channel}/` |
-| 5 | Calibrate | `python -m pipeline.cli calibrate` | Set per-channel overlay/camera crop regions |
-| 6 | Clips | `make generate-clips` | Overlay FEN reading + move detection, produces `.pt` training clips with move synchronization (broadcast delay compensation) |
+| 5 | Calibrate | `python -m pipeline auto-calibrate` | Auto-propose calibration from screening data (theme, orientation, crop regions). Falls back to manual `calibrate` for adjustments |
+| 6 | Clips | `make generate-clips` | Overlay FEN reading + move detection with hard cut detection + per-move confidence, produces `.pt` training clips |
 
 ### How Screening Works
 
-Videos are screened in two passes:
+Videos are screened in up to three passes:
 
 1. **Title filter** — keyword matching against the video title to identify chess commentary content
 2. **Dual-region detection** — frame sampling to detect both:
    - **2D overlay** — rendered board overlay (lichess, chess.com streams) via pixel regularity analysis
    - **OTB footage** — over-the-board camera footage
+3. **AI classifier** (optional) — a frozen DINOv2 encoder extracts features from 4 YouTube thumbnails per video, concatenated with overlay scanner and OTB detector scores, then a small MLP head classifies into overlay / otb_only / reject with a confidence score. High-confidence predictions are auto-decided; low-confidence videos are queued for manual review.
 
-Screening results are stored on `youtube_videos` as `screening_status`, `screening_confidence`, `overlay_bbox`, and `has_otb_footage`.
+Screening results are stored on `youtube_videos` as `screening_status`, `screening_confidence`, `overlay_bbox`, `has_otb_footage`, plus AI metadata in `ai_screening_class`, `ai_screening_confidence`, and `ai_screening_auto_decided`.
 
 ### How Overlay Clip Generation Works
 
 For videos with a 2D board overlay:
 
-1. **Calibration** — per-channel layout config defines overlay crop, camera crop, reference resolution, board flip, and board theme
+1. **Calibration** — per-channel layout config defines overlay crop, camera crop, reference resolution, board flip, and board theme. Can be auto-proposed via `auto-calibrate` or set manually.
 2. **FEN reading** — `OverlayReader` template-matches each of the 64 squares against piece libraries per theme to produce a FEN string
-3. **Move detection** — `OverlayMoveDetector` compares FENs across frames with a stability window, using python-chess to find the legal move transforming old FEN to new FEN. Detects game resets.
-4. **Move synchronization** — broadcast delay compensation aligns overlay moves to camera footage timestamps
-5. **Clip output** — `.pt` file with `frames` (T, 3, 224, 224), `move_targets`, `detect_targets`, `legal_masks`, `move_mask`
+3. **Move detection with hard cut detection** — `OverlayMoveDetector` compares FENs across frames with a stability window, using python-chess to find the legal move transforming old FEN to new FEN. Detects game resets AND hard cuts (when >4 squares change simultaneously, indicating a board switch rather than a legal move).
+4. **Per-move confidence scoring** — each detected move receives a confidence score based on how many consecutive frames agreed on the FEN before and after the transition. Higher stability = higher confidence. Moves found via resync (no legal move path) get confidence 0.0.
+5. **Move synchronization** — broadcast delay compensation aligns overlay moves to camera footage timestamps
+6. **Clip output** — `.pt` file with `frames` (T, 3, 224, 224), `move_targets`, `detect_targets`, `legal_masks`, `move_mask`, `move_confidence`
 
 ### Overlay Components
 
@@ -269,10 +283,24 @@ For videos with a 2D board overlay:
 |--------|-------------|
 | `scanner.py` | Detects rendered 2D boards via pixel regularity (low intra-square variance, alternating light/dark). Sliding window at multiple scales. |
 | `overlay_reader.py` | Template-matches each of the 64 squares against piece libraries per theme. Returns FEN. Supports `lichess_default`, `chess_com_green`, `chess_com_brown`. |
-| `overlay_move_detector.py` | Compares FENs across frames with a stability window. Uses python-chess to find the legal move transforming old FEN to new FEN. Detects game resets. |
+| `overlay_move_detector.py` | Compares FENs across frames with a stability window. Uses python-chess to find the legal move transforming old FEN to new FEN. Detects game resets and hard cuts (>4 squares changed = board switch). Assigns per-move confidence scores. |
 | `calibration.py` | Stores per-channel layout configs: overlay crop, camera crop, reference resolution, board flip, board theme. Persisted in `configs/pipeline/overlay_layouts.yaml`. |
-| `overlay_clip_generator.py` | Combines camera crops with overlay-detected moves to produce `.pt` files. Includes broadcast delay compensation for move synchronization. |
+| `auto_calibration.py` | Auto-proposes calibration from YouTube thumbnails: detects board theme (color sampling), orientation (piece distribution), and camera region (largest non-overlay area). |
+| `overlay_clip_generator.py` | Combines camera crops with overlay-detected moves to produce `.pt` files. Includes broadcast delay compensation, per-move confidence scores. |
 | `diagnostics.py` | `test_image()`, `test_reader()`, `inspect_clip()` — inspection and debugging tools. |
+
+### Screen Module Components
+
+| Module | What it does |
+|--------|-------------|
+| `title_filter.py` | Keyword filter on video titles to identify chess commentary content. |
+| `dual_region_detector.py` | Frame sampling: detects overlay + OTB regions in video frames. |
+| `screen_pipeline.py` | Orchestrates title filtering, frame detection, and AI screening. |
+| `frame_fetcher.py` | Fetches 4 YouTube auto-generated thumbnails per video (no API quota). Shared by inspection and AI classification. |
+| `ai_classifier.py` | DINOv2-based 3-way screening classifier (overlay / otb_only / reject). Frozen DINOv2 features + overlay/OTB scanner scores → MLP head. |
+| `ai_train.py` | Feature caching + classifier training with channel-stratified train/val split. |
+| `ai_eval.py` | Per-class precision/recall/F1 evaluation + confidence threshold calibration. |
+| `ai_predict.py` | Batch prediction + auto-decide logic. Writes high-confidence results to DB. |
 
 ---
 
@@ -446,8 +474,10 @@ The dev-tools services are thin REST wrappers — they directly import from `pip
 | **Synthetic Monitor** | Synthetic | `argus.datagen.synth`, filesystem scanner | `datagen` |
 | **Clip Inspector** | Synthetic | `argus.chess.move_vocabulary`, PyTorch tensors | `inspect-clip` |
 | **Overlay Tester** | Video | `pipeline.overlay.scanner`, `overlay_reader` | `overlay-test` |
-| **Calibration Editor** | Video | `pipeline.overlay.calibration` | `calibrate` |
+| **Calibration Editor** | Video | `pipeline.overlay.calibration`, `auto_calibration` | `calibrate`, `auto-calibrate` |
 | **Video Annotator** | Video | `pipeline.overlay.overlay_reader`, `overlay_move_detector` | `overlay-test`, `generate-clips` |
+| **Video Browser** | Crawl | `pipeline.screen`, `inspect_service`, `ai_predict` | `screen`, `ai-screen` |
+| **Channel Manager** | Crawl | `pipeline.crawl`, `channel_seeder` | `crawl`, `seed-channels` |
 
 ### Dev Tools Architecture
 
@@ -459,6 +489,8 @@ graph LR
         OT[Overlay Tester]
         CE[Calibration Editor]
         VA[Video Annotator]
+        VB[Video Browser]
+        CM[Channel Manager]
     end
 
     subgraph "FastAPI — localhost:8000"
@@ -467,14 +499,16 @@ graph LR
         R1["/api/overlay/*"]
         R3["/api/calibration/*"]
         R4["/api/video/*"]
+        R5["/api/crawl/*"]
     end
 
     subgraph "Pipeline Modules"
         S0["synth, filesystem"]
         S2["move_vocabulary, clip tensors"]
         S1["scanner, overlay_reader"]
-        S3["calibration YAML"]
+        S3["calibration, auto_calibration"]
         S4["overlay_reader, overlay_move_detector"]
+        S5["screen_pipeline, ai_classifier, inspect_service"]
     end
 
     SM --> R0 --> S0
@@ -482,6 +516,8 @@ graph LR
     OT --> R1 --> S1
     CE --> R3 --> S3
     VA --> R4 --> S4
+    VB --> R5 --> S5
+    CM --> R5
 ```
 
 ### Starting Dev Tools
@@ -576,6 +612,11 @@ The FastAPI backend at `localhost:8000` exposes these endpoints. The Next.js fro
 | `GET` | `/api/calibration/{channel_handle}` | Get calibration for a channel |
 | `PUT` | `/api/calibration/{channel_handle}` | Create or update calibration |
 | `DELETE` | `/api/calibration/{channel_handle}` | Delete calibration |
+| `POST` | `/api/calibration/{channel_handle}/propose` | Auto-propose calibration from YouTube thumbnails (theme, orientation, crop regions) |
+
+**`POST /api/calibration/{channel_handle}/propose`**: `{ "video_id": "optional_specific_video" }`
+
+**Response**: JSON with proposed overlay/camera bboxes, detected theme + confidence, detected orientation + confidence.
 
 **`PUT` request body**:
 ```json
@@ -602,7 +643,7 @@ The FastAPI backend at `localhost:8000` exposes these endpoints. The Next.js fro
 
 **`POST /api/video/{session_id}/detect-moves`**: `{ "sample_fps": 2.0 }`
 
-**Response**: JSON with game segments, each containing moves (UCI + SAN), frame indices, timestamps, FEN before/after.
+**Response**: JSON with game segments, each containing moves (UCI + SAN), frame indices, timestamps, FEN before/after, and per-move confidence scores.
 
 ### Health Check
 
@@ -695,7 +736,17 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 | `screen` | `make screen` | Screen videos for overlay + OTB | `--channel @Handle`, `--limit N` |
 | `download` | `make download` | Download approved videos | `--limit N` |
 | `calibrate` | — | Set overlay layout calibration for a channel | `--channel` (required), `--overlay x,y,w,h`, `--camera x,y,w,h`, `--resolution WxH`, `--flipped`, `--theme` |
-| `generate-clips` | `make generate-clips` | Generate .pt training clips | `--limit N` |
+| `auto-calibrate` | — | Auto-propose calibration from screening data | `--channel` (required), `--video-id ID`, `--apply` |
+| `generate-clips` | `make generate-clips` | Generate .pt training clips (with hard cut detection) | `--channel @Handle`, `--limit N` |
+
+### Pipeline Domain — AI Screening
+
+| Command | Description | Key Options |
+|---------|-------------|-------------|
+| `ai-extract` | Pre-compute DINOv2 embeddings for all labelled videos | `--device cpu\|cuda\|mps` |
+| `ai-train` | Train the screening classifier head | `--epochs N`, `--lr FLOAT`, `--batch-size N`, `--device` |
+| `ai-eval` | Evaluate classifier + calibrate confidence threshold | `--checkpoint PATH`, `--target-precision 0.95` |
+| `ai-screen` | Run AI screening on unscreened videos | `--channel @Handle`, `--limit N`, `--threshold 0.85`, `--checkpoint PATH`, `--device` |
 
 ### Pipeline Domain — Inspection
 
@@ -889,7 +940,9 @@ argus/
 │   ├── cli.py                                  #   Unified CLI entry point
 │   ├── db/                                     #   Database
 │   │   ├── schema.sql                          #     Full DDL
-│   │   ├── migrate_001_remove_fide.sql         #     Migration: remove FIDE tables
+│   │   ├── migrations/                         #     Incremental migrations
+│   │   │   ├── 001_add_video_clips.sql         #       Clip segmentation support
+│   │   │   └── 002_add_ai_screening.sql        #       AI screening metadata columns
 │   │   └── connection.py                       #     psycopg3 pool from DATABASE_URL
 │   ├── setup/                                  #   Channel seeding
 │   │   └── channel_seeder.py                   #     channels.yaml to crawl_channels
@@ -901,28 +954,34 @@ argus/
 │   ├── screen/                                 #   Stage 3: video screening
 │   │   ├── title_filter.py                     #     Keyword filter on video titles
 │   │   ├── dual_region_detector.py             #     Frame sampling: overlay + OTB detection
-│   │   └── screen_pipeline.py                  #     Orchestrator
+│   │   ├── screen_pipeline.py                  #     Orchestrator (manual + AI screening)
+│   │   ├── frame_fetcher.py                    #     YouTube thumbnail fetching (shared)
+│   │   ├── ai_classifier.py                    #     DINOv2 + MLP screening classifier
+│   │   ├── ai_train.py                         #     Feature caching + classifier training
+│   │   ├── ai_eval.py                          #     Evaluation + threshold calibration
+│   │   └── ai_predict.py                       #     Batch prediction + auto-decide
 │   ├── download/                               #   Stage 4: video download
 │   │   └── video_downloader.py                 #     yt-dlp with rate limiting
 │   └── overlay/                                #   Stage 5-6: overlay clip generation
 │       ├── scanner.py                          #     Detect 2D board overlays
 │       ├── overlay_reader.py                   #     Template match to FEN
-│       ├── overlay_move_detector.py            #     FEN diffs to legal moves
-│       ├── overlay_clip_generator.py           #     Camera frames + moves to .pt
+│       ├── overlay_move_detector.py            #     FEN diffs to legal moves + hard cut detection
+│       ├── overlay_clip_generator.py           #     Camera frames + moves + confidence to .pt
 │       ├── calibration.py                      #     Per-channel layout config
+│       ├── auto_calibration.py                 #     Auto-propose calibration (theme, orientation, camera)
 │       └── diagnostics.py                      #     test_image, test_reader, inspect_clip
 ├── dev-tools/                                  # Dev Tools: inspection web UI
 │   ├── Dockerfile.api                          #   FastAPI container
 │   ├── Dockerfile.ui                           #   Next.js container
 │   ├── api/                                    #   FastAPI backend (localhost:8000)
 │   │   ├── main.py                             #     App + CORS + router registration
-│   │   ├── routers/                            #     overlay, calibration, clips, video
+│   │   ├── routers/                            #     overlay, calibration, clips, video, crawl
 │   │   └── services/                           #     Thin wrappers over pipeline modules
 │   ├── app/                                    #   Next.js 14 pages (localhost:3000)
-│   │   ├── overlay-tester/
-│   │   ├── clip-inspector/
-│   │   ├── calibration/
-│   │   └── video-annotator/
+│   │   ├── synthetic/                          #     Synthetic data monitor
+│   │   ├── videos/                             #     Video browser + screening
+│   │   ├── videos/[videoId]/                   #     Video detail + annotation
+│   │   └── crawl/                              #     Channel management
 │   ├── components/                             #   Reusable React components
 │   │   ├── BboxDrawer.tsx                      #     Interactive bounding box canvas
 │   │   ├── ChessBoard.tsx                      #     FEN to SVG board renderer

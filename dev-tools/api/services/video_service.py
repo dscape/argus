@@ -255,6 +255,7 @@ def detect_moves(session_id: str, sample_fps: float = 2.0, clip_id: int | None =
                 "timestamp_seconds": round(m.timestamp_seconds, 3),
                 "fen_before": m.fen_before,
                 "fen_after": m.fen_after,
+                "confidence": round(m.confidence, 3),
             })
         result_segments.append({
             "game_index": i,

@@ -296,6 +296,80 @@ def cmd_inspect_clip(args):
     )
 
 
+def cmd_ai_extract(args):
+    """Pre-compute DINOv2 features for labelled videos."""
+    from pipeline.screen.ai_train import extract_and_cache_features
+    extract_and_cache_features(device=args.device)
+
+
+def cmd_ai_train(args):
+    """Train the AI screening classifier."""
+    from pipeline.screen.ai_train import train
+    train(epochs=args.epochs, lr=args.lr, batch_size=args.batch_size, device=args.device)
+
+
+def cmd_ai_eval(args):
+    """Evaluate the AI screening classifier."""
+    from pipeline.screen.ai_eval import evaluate, calibrate_threshold
+    evaluate(checkpoint_path=args.checkpoint)
+    print()
+    calibrate_threshold(
+        checkpoint_path=args.checkpoint,
+        target_precision=args.target_precision,
+    )
+
+
+def cmd_ai_screen(args):
+    """Run AI screening on unscreened videos."""
+    from pipeline.screen.screen_pipeline import screen_with_ai
+    screen_with_ai(
+        channel_handle=args.channel,
+        limit=args.limit,
+        checkpoint_path=args.checkpoint,
+        threshold=args.threshold,
+        device=args.device,
+    )
+
+
+def cmd_auto_calibrate(args):
+    """Auto-propose calibration for a channel from screening data."""
+    from pipeline.overlay.auto_calibration import (
+        propose_calibration,
+        propose_calibration_for_channel,
+    )
+    from pipeline.overlay.calibration import LayoutCalibration, set_calibration
+
+    if args.video_id:
+        proposal = propose_calibration(args.video_id)
+    else:
+        proposal = propose_calibration_for_channel(args.channel)
+
+    if proposal is None:
+        print("Could not generate calibration proposal.")
+        print("Ensure the channel has approved overlay videos with detected bounding boxes.")
+        return
+
+    print(f"\nCalibration proposal for {args.channel}:")
+    print(f"  Overlay:      {proposal.overlay}")
+    print(f"  Camera:       {proposal.camera}")
+    print(f"  Resolution:   {proposal.ref_resolution}")
+    print(f"  Theme:        {proposal.board_theme} (confidence={proposal.theme_confidence:.2f})")
+    print(f"  Flipped:      {proposal.board_flipped} (confidence={proposal.orientation_confidence:.2f})")
+
+    if args.apply:
+        cal = LayoutCalibration(
+            overlay=proposal.overlay,
+            camera=proposal.camera,
+            ref_resolution=proposal.ref_resolution,
+            board_flipped=proposal.board_flipped,
+            board_theme=proposal.board_theme,
+        )
+        set_calibration(args.channel, cal)
+        print(f"\n  Calibration saved for {args.channel}")
+    else:
+        print("\n  Run with --apply to save this calibration.")
+
+
 def cmd_stats(args):
     """Print pipeline statistics."""
     from pipeline.db.connection import get_conn
@@ -439,6 +513,36 @@ def main():
     p.add_argument("--save-frames", action="store_true", help="Save individual frames as images")
     p.add_argument("--output-dir", type=str, default=None, help="Directory for saved frames")
 
+    # ai-extract
+    p = subparsers.add_parser("ai-extract", help="Pre-compute DINOv2 features for labelled videos")
+    p.add_argument("--device", type=str, default="cpu", help="Torch device (cpu, cuda, mps)")
+
+    # ai-train
+    p = subparsers.add_parser("ai-train", help="Train the AI screening classifier")
+    p.add_argument("--epochs", type=int, default=50, help="Training epochs")
+    p.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    p.add_argument("--batch-size", type=int, default=32, help="Batch size")
+    p.add_argument("--device", type=str, default="cpu", help="Torch device")
+
+    # ai-eval
+    p = subparsers.add_parser("ai-eval", help="Evaluate AI screening classifier and calibrate threshold")
+    p.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint (default: best.pt)")
+    p.add_argument("--target-precision", type=float, default=0.95, help="Target precision for threshold")
+
+    # ai-screen
+    p = subparsers.add_parser("ai-screen", help="Run AI screening on unscreened videos")
+    p.add_argument("--channel", type=str, default=None, help="Screen specific channel")
+    p.add_argument("--limit", type=int, default=None, help="Max videos to screen")
+    p.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint")
+    p.add_argument("--threshold", type=float, default=0.85, help="Confidence threshold for auto-deciding")
+    p.add_argument("--device", type=str, default="cpu", help="Torch device")
+
+    # auto-calibrate
+    p = subparsers.add_parser("auto-calibrate", help="Auto-propose calibration for a channel")
+    p.add_argument("--channel", type=str, required=True, help="Channel handle (e.g. @STLChessClub)")
+    p.add_argument("--video-id", type=str, default=None, help="Use a specific video instead of multi-video consensus")
+    p.add_argument("--apply", action="store_true", help="Save the proposed calibration (otherwise just print)")
+
     # stats
     subparsers.add_parser("stats", help="Print pipeline statistics")
 
@@ -466,6 +570,11 @@ def main():
         "overlay-test": cmd_overlay_test,
         "overlay-test-reader": cmd_overlay_test_reader,
         "inspect-clip": cmd_inspect_clip,
+        "ai-extract": cmd_ai_extract,
+        "ai-train": cmd_ai_train,
+        "ai-eval": cmd_ai_eval,
+        "ai-screen": cmd_ai_screen,
+        "auto-calibrate": cmd_auto_calibrate,
         "stats": cmd_stats,
     }
 

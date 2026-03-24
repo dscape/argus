@@ -36,13 +36,15 @@ SAMPLE_TIMESTAMPS = [30, 120, 300]
 
 # Minimum board size as fraction of frame dimension.
 MIN_BOARD_FRACTION = 0.10
-MAX_BOARD_FRACTION = 0.60
+MAX_BOARD_FRACTION = 0.95
 
 # Step size for sliding window (fraction of window size).
 SCAN_STEP_FRACTION = 0.15
 
 # Scales to try for the sliding window (fraction of frame height).
-SCAN_SCALES = [0.20, 0.25, 0.30, 0.35, 0.40, 0.50]
+# Many tournament overlays occupy 50-95% of frame height, so we scan
+# all the way up to 0.95.
+SCAN_SCALES = [0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
 
 
 @dataclass
@@ -50,7 +52,8 @@ class OverlayDetection:
     """Result of overlay detection on a single frame."""
 
     found: bool
-    bbox: tuple[int, int, int, int] | None = None  # x, y, w, h
+    bbox: tuple[int, int, int, int] | None = None  # x, y, w, h (expanded)
+    seed_bbox: tuple[int, int, int, int] | None = None  # x, y, w, h (initial seed before expansion)
     score: float = 0.0
     frame_resolution: tuple[int, int] | None = None  # width, height
 
@@ -143,11 +146,183 @@ def check_alternating_pattern(region: np.ndarray) -> bool:
     return alternation_count / total_pairs > 0.35 if total_pairs > 0 else False
 
 
+def _expand_bbox(
+    frame: np.ndarray,
+    seed_bbox: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    """Expand a detected overlay bbox to cover the full board.
+
+    The scanner finds a small high-confidence seed inside the board.
+    This estimates the square size from the seed region and extrapolates
+    to the full 8x8 board.
+
+    Strategy: the seed's 8x8 grid gives us the approximate square size.
+    From that we infer the full board size (8 * square_size) and position
+    (align to the nearest grid boundary).
+    """
+    h, w = frame.shape[:2]
+    sx, sy, sw, sh = seed_bbox
+
+    # The seed was scored as a valid 8x8 grid, so each cell is sw/8.
+    cell_size = sw / 8.0
+
+    # Sample colors from the seed to find the board's light/dark palette.
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Expand outward from the seed center. Walk left/right/up/down along
+    # the board's grid pattern. At each step, check that the alternating
+    # light/dark color pattern continues.
+    cx = sx + sw // 2
+    cy = sy + sh // 2
+
+    # Measure light and dark square mean brightness from the seed.
+    seed_gray = gray[sy : sy + sh, sx : sx + sw]
+    cs = int(cell_size)
+    light_vals, dark_vals = [], []
+    for r in range(8):
+        for c in range(8):
+            y1, y2 = r * cs, (r + 1) * cs
+            x1, x2 = c * cs, (c + 1) * cs
+            cell = seed_gray[y1:y2, x1:x2]
+            if cell.size == 0:
+                continue
+            m = float(np.mean(cell))
+            if (r + c) % 2 == 0:
+                light_vals.append(m)
+            else:
+                dark_vals.append(m)
+
+    if not light_vals or not dark_vals:
+        return seed_bbox
+
+    light_mean = np.median(light_vals)
+    dark_mean = np.median(dark_vals)
+    # Board squares should have a clear contrast between light and dark.
+    if abs(light_mean - dark_mean) < 20:
+        return seed_bbox
+
+    mid_brightness = (light_mean + dark_mean) / 2
+    tolerance = abs(light_mean - dark_mean) * 0.8
+
+    def _is_board_pixel(px_y: int, px_x: int) -> bool:
+        """Check if a pixel's brightness is within the board's color range."""
+        if px_y < 0 or px_y >= h or px_x < 0 or px_x >= w:
+            return False
+        val = float(gray[px_y, px_x])
+        return abs(val - light_mean) < tolerance or abs(val - dark_mean) < tolerance
+
+    # Expand in each direction by scanning columns/rows.
+    # Walk left from seed left edge until we hit non-board pixels.
+    def _scan_edge(start: int, delta: int, axis: str, limit: int) -> int:
+        """Scan outward from start in direction delta until board pattern stops."""
+        pos = start
+        consecutive_misses = 0
+        while 0 <= pos + delta <= limit:
+            pos += delta
+            # Sample several points along this line
+            hits = 0
+            samples = 10
+            for i in range(samples):
+                if axis == "x":
+                    py = sy + int(sh * i / samples)
+                    px = pos
+                else:
+                    py = pos
+                    px = sx + int(sw * i / samples)
+                if _is_board_pixel(py, px):
+                    hits += 1
+            if hits < samples * 0.4:
+                consecutive_misses += 1
+                if consecutive_misses > int(cell_size * 0.5):
+                    return pos - delta * consecutive_misses
+            else:
+                consecutive_misses = 0
+        return pos
+
+    left = _scan_edge(sx, -1, "x", w - 1)
+    right = _scan_edge(sx + sw, 1, "x", w - 1)
+    top = _scan_edge(sy, -1, "y", h - 1)
+    bottom = _scan_edge(sy + sh, 1, "y", h - 1)
+
+    # The board is square, so use the larger dimension.
+    bw = right - left
+    bh = bottom - top
+    board_size = max(bw, bh)
+
+    # Keep it square and centered on the detected region.
+    bcx = (left + right) // 2
+    bcy = (top + bottom) // 2
+    half = board_size // 2
+    ex = max(0, min(bcx - half, w - board_size))
+    ey = max(0, min(bcy - half, h - board_size))
+    board_size = min(board_size, w - ex, h - ey)
+
+    # Only use the expanded bbox if it's meaningfully larger than the seed.
+    if board_size < sw * 1.3:
+        return seed_bbox
+
+    # Trim uniform-color borders (rank/file label strips, separator bars).
+    # Walk inward from each edge, skipping columns/rows with near-zero variance.
+    expanded = frame[ey : ey + board_size, ex : ex + board_size]
+    exp_gray = cv2.cvtColor(expanded, cv2.COLOR_BGR2GRAY) if len(expanded.shape) == 3 else expanded
+    trim_l = trim_t = 0
+    trim_r = trim_b = 0
+    bs = board_size
+
+    # Trim left
+    for col_x in range(bs // 8):
+        col = exp_gray[bs // 4 : 3 * bs // 4, col_x]
+        if float(np.var(col)) < 100:
+            trim_l = col_x + 1
+        else:
+            break
+
+    # Trim right
+    for col_x in range(bs - 1, bs - bs // 8, -1):
+        col = exp_gray[bs // 4 : 3 * bs // 4, col_x]
+        if float(np.var(col)) < 100:
+            trim_r = bs - col_x
+        else:
+            break
+
+    # Trim top
+    for row_y in range(bs // 8):
+        row = exp_gray[row_y, bs // 4 : 3 * bs // 4]
+        if float(np.var(row)) < 100:
+            trim_t = row_y + 1
+        else:
+            break
+
+    # Trim bottom
+    for row_y in range(bs - 1, bs - bs // 8, -1):
+        row = exp_gray[row_y, bs // 4 : 3 * bs // 4]
+        if float(np.var(row)) < 100:
+            trim_b = bs - row_y
+        else:
+            break
+
+    # Apply trim, keep square by using the max trim and adjusting center
+    total_trim = max(trim_l + trim_r, trim_t + trim_b)
+    if total_trim > 0 and total_trim < bs // 4:
+        new_ex = ex + trim_l
+        new_ey = ey + trim_t
+        new_w = board_size - trim_l - trim_r
+        new_h = board_size - trim_t - trim_b
+        # Keep it square
+        new_size = min(new_w, new_h)
+        return (new_ex, new_ey, new_size, new_size)
+
+    return (ex, ey, board_size, board_size)
+
+
 def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
     """Detect a 2D chess board overlay in a video frame.
 
     Slides a square window across the frame at multiple scales,
     scoring each candidate region for rendered-board properties.
+    Then expands the best detection outward to cover the full board
+    (the initial scan may find a sub-region if the board has labels
+    or coordinates around the edges).
     """
     h, w = frame.shape[:2]
     resolution = (w, h)
@@ -176,9 +351,12 @@ def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
                         best_bbox = (x, y, win_size, win_size)
 
     if best_bbox is not None and best_score > MIN_LOW_VARIANCE_RATIO:
+        # Expand the seed detection to cover the full board.
+        expanded = _expand_bbox(frame, best_bbox)
         return OverlayDetection(
             found=True,
-            bbox=best_bbox,
+            bbox=expanded,
+            seed_bbox=best_bbox,
             score=best_score,
             frame_resolution=resolution,
         )
