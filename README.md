@@ -120,7 +120,7 @@ make pipeline-install   # install pipeline dependencies (if working on pipeline)
 
 ### Start all services
 
-Bring up PostgreSQL, the dev-tools API, the dev-tools UI, and the Blender render server — all in the background:
+Bring up PostgreSQL, the dev-tools API, and the dev-tools UI via Docker, plus the native Blender render server:
 
 ```bash
 make up       # start everything

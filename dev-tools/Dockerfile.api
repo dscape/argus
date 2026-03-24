@@ -2,28 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System dependencies: Cairo, OpenCV, ffmpeg, and Blender headless rendering libs
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 \
     libgl1 \
     libglib2.0-0 \
     ffmpeg \
-    wget \
-    xz-utils \
-    libxrender1 \
-    libxi6 \
-    libxxf86vm1 \
-    libxfixes3 \
-    libxkbcommon0 \
-    libsm6 \
-    libxext6 \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Blender 4.2 LTS (headless)
-RUN wget -q https://mirror.clarkson.edu/blender/release/Blender4.2/blender-4.2.0-linux-x64.tar.xz \
-    && tar xf blender-4.2.0-linux-x64.tar.xz -C /opt/ \
-    && ln -s /opt/blender-4.2.0-linux-x64/blender /usr/local/bin/blender \
-    && rm blender-4.2.0-linux-x64.tar.xz
 
 COPY pipeline/requirements.txt /tmp/pipeline-requirements.txt
 COPY dev-tools/api/requirements.txt /tmp/api-requirements.txt
@@ -33,7 +17,4 @@ RUN pip install --no-cache-dir \
 
 ENV PYTHONPATH=/app/src:/app
 
-COPY dev-tools/entrypoint.sh /app/dev-tools/entrypoint.sh
-RUN chmod +x /app/dev-tools/entrypoint.sh
-
-CMD ["/app/dev-tools/entrypoint.sh"]
+CMD ["sh", "-c", "cd /app/dev-tools && uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload"]

@@ -73,7 +73,7 @@ python3 -m venv .venv && source .venv/bin/activate
 make dev
 ```
 
-Start all services (PostgreSQL, dev-tools API, dev-tools UI, Blender) in the background:
+Start all services (PostgreSQL, dev-tools API, dev-tools UI via Docker; Blender natively) in the background:
 
 ```bash
 make up       # start everything
