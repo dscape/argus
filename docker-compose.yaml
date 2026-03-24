@@ -36,6 +36,7 @@ services:
     environment:
       - PYTHONPATH=/app/src:/app
       - DATABASE_URL=postgresql://argus:${POSTGRES_PASSWORD:-argus_dev}@postgres:5432/argus
+      - BLENDER_SERVER_HOST=host.docker.internal
     depends_on:
       - postgres
     profiles:

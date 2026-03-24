@@ -227,8 +227,10 @@ def _get_render_script() -> Path:
 PIECE_SETS = ["staunton"]
 
 
-def _select_piece_set(rng: random.Random) -> str:
+def _select_piece_set(rng: random.Random, skip_fs_check: bool = False) -> str:
     """Select a random piece set from available sets."""
+    if skip_fs_check:
+        return rng.choice(PIECE_SETS)
     available = []
     models_dir = _get_models_dir()
     for ps in PIECE_SETS:
@@ -430,7 +432,7 @@ def generate_clip(
     board_theme = theme_base.with_perturbation(rng) if augment else theme_base
     mat_base = select_random_material(rng)
     piece_material = mat_base.with_perturbation(rng) if augment else mat_base
-    piece_set = _select_piece_set(rng)
+    piece_set = _select_piece_set(rng, skip_fs_check=server is not None)
     lighting = randomize_lighting(LightingConfig(), seed=rng.randint(0, 2**31))
 
     elevation = rng.uniform(30.0, 75.0) if augment else 55.0
