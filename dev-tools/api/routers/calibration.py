@@ -16,6 +16,7 @@ class CalibrationInput(BaseModel):
     board_theme: str = "lichess_default"
 
 
+@router.get("")
 @router.get("/")
 def list_calibrations():
     """List all saved calibrations."""

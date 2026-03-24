@@ -149,11 +149,12 @@ export function videoFrameUrl(sessionId: string, index: number): string {
 
 export async function readOverlayFrame(
   sessionId: string,
-  index: number
+  index: number,
+  clipId?: number
 ): Promise<FrameOverlayResponse> {
-  const res = await fetch(
-    `/api/video/${sessionId}/overlay-read?index=${index}`
-  );
+  let url = `/api/video/${sessionId}/overlay-read?index=${index}`;
+  if (clipId !== undefined) url += `&clip_id=${clipId}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

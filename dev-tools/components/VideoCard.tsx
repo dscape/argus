@@ -70,7 +70,7 @@ export default function VideoCard({ result }: { result: InspectResult }) {
         <div className="min-w-0">
           <p className="text-sm font-medium truncate">{result.title}</p>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span>{result.video_id}</span>
+            <a href={`/videos/${result.video_id}`} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-foreground">{result.video_id}</a>
             {result.title_score != null && (
               <span
                 className={`px-1 rounded ${

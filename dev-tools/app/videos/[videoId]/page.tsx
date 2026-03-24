@@ -23,6 +23,7 @@ import {
   updateVideoClip,
   deleteVideoClip,
   inspectAutoCalibration,
+  updateVideoStatus,
 } from "@/lib/api";
 import type {
   CrawlVideo,
@@ -38,7 +39,8 @@ import type {
 } from "@/lib/types";
 import { BboxDrawer, type Bbox } from "@/components/BboxDrawer";
 import { ChessBoard } from "@/components/ChessBoard";
-import { statusBadge, scoreColor, youtubeThumb } from "@/components/video-shared";
+import { statusBadge, scoreColor, youtubeThumb, StatusDropdown } from "@/components/video-shared";
+import type { VideoWithReason } from "@/components/video-shared";
 import VideoCard, { type InspectResult } from "@/components/VideoCard";
 
 // ── Step definitions ────────────────────────────────────────
@@ -61,6 +63,24 @@ export default function VideoWorkbenchPage() {
   const router = useRouter();
   const videoId = params.videoId as string;
 
+  const goBack = () => {
+    try {
+      const saved = sessionStorage.getItem("videoBrowserState");
+      if (saved) {
+        const s = JSON.parse(saved);
+        const params = new URLSearchParams();
+        if (s.status && s.status !== "approved:!otb_only") params.set("status", s.status);
+        if (s.sort && s.sort !== "published_at_desc") params.set("sort", s.sort);
+        if (s.channel) params.set("channel", s.channel);
+        if (s.page > 0) params.set("page", String(s.page));
+        const qs = params.toString();
+        router.push(`/videos${qs ? `?${qs}` : ""}`);
+        return;
+      }
+    } catch { /* ignore */ }
+    router.push("/videos");
+  };
+
   const [video, setVideo] = useState<CrawlVideo | null>(null);
   const [step, setStep] = useState<StepId>("info");
   const [error, setError] = useState<string | null>(null);
@@ -71,10 +91,15 @@ export default function VideoWorkbenchPage() {
       .catch((e) => setError(e.message));
   }, [videoId]);
 
+  const handleStatusChange = async (vid: string, status: string | null, layoutType?: string) => {
+    await updateVideoStatus(vid, status, layoutType);
+    setVideo((prev) => prev ? { ...prev, screening_status: status, layout_type: layoutType ?? null } : prev);
+  };
+
   if (error) {
     return (
       <div className="p-6">
-        <button onClick={() => router.push("/videos")} className="text-sm text-primary hover:underline mb-4 block">
+        <button onClick={() => goBack()} className="text-sm text-primary hover:underline mb-4 block">
           &larr; Back to Videos
         </button>
         <p className="text-destructive">{error}</p>
@@ -90,7 +115,7 @@ export default function VideoWorkbenchPage() {
     <div className="h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
       {/* Header */}
       <div className="flex-shrink-0 px-4 pt-3 pb-2">
-        <button onClick={() => router.push("/videos")} className="text-xs text-muted-foreground hover:text-foreground mb-1 block">
+        <button onClick={() => goBack()} className="text-xs text-muted-foreground hover:text-foreground mb-1 block">
           &larr; Videos
         </button>
         <div className="flex items-center gap-2 mb-3">
@@ -98,7 +123,7 @@ export default function VideoWorkbenchPage() {
           <span
             className={`w-2 h-2 rounded-full flex-shrink-0 ${scoreColor(video.title_score)}`}
           />
-          {statusBadge(video.screening_status, video.layout_type)}
+          <StatusDropdown video={video as VideoWithReason} onStatusChange={handleStatusChange} />
         </div>
 
         {/* Step indicator */}
@@ -805,7 +830,7 @@ function ExtractStep({ video }: { video: CrawlVideo }) {
     setReadingFrame(true);
     setError(null);
     try {
-      const result = await readOverlayFrame(session.session_id, frameIdx);
+      const result = await readOverlayFrame(session.session_id, frameIdx, clips[0]?.id);
       setOverlayResult(result);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to read overlay");
