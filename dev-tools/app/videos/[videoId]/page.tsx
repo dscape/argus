@@ -22,6 +22,7 @@ import {
   createVideoClip,
   updateVideoClip,
   deleteVideoClip,
+  inspectAutoCalibration,
 } from "@/lib/api";
 import type {
   CrawlVideo,
@@ -354,6 +355,8 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [autoCalLoading, setAutoCalLoading] = useState(false);
+  const [autoCalResult, setAutoCalResult] = useState<any>(null);
 
   const channelHandle = video.channel_handle;
 
@@ -480,6 +483,30 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
     }
   };
 
+  const handleAutoCalibrate = async () => {
+    setAutoCalLoading(true);
+    setError(null);
+    try {
+      const result = await inspectAutoCalibration(video.video_id);
+      setAutoCalResult(result);
+      if (result.proposal) {
+        const p = result.proposal;
+        setOverlayBbox({ x: p.overlay[0], y: p.overlay[1], w: p.overlay[2], h: p.overlay[3] });
+        setCameraBbox({ x: p.camera[0], y: p.camera[1], w: p.camera[2], h: p.camera[3] });
+        setBoardTheme(p.theme);
+        setBoardFlipped(p.board_flipped);
+        setSuccess("Auto-calibration applied");
+        setTimeout(() => setSuccess(null), 3000);
+      } else {
+        setError("No overlay detected — could not auto-calibrate");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Auto-calibration failed");
+    } finally {
+      setAutoCalLoading(false);
+    }
+  };
+
   if (!downloadStatus?.downloaded) {
     return <p className="text-sm text-muted-foreground pt-2">Video must be downloaded first. Go to the Download step.</p>;
   }
@@ -504,6 +531,13 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
           className="w-full px-3 py-2 rounded-lg border border-dashed text-xs font-medium text-muted-foreground hover:border-primary hover:text-foreground transition-colors"
         >
           + Add Clip
+        </button>
+        <button
+          onClick={handleAutoCalibrate}
+          disabled={autoCalLoading}
+          className="w-full px-3 py-2 rounded-lg border text-xs font-medium bg-green-500/10 border-green-500/30 text-green-700 hover:bg-green-500/20 transition-colors disabled:opacity-50"
+        >
+          {autoCalLoading ? "Auto-Calibrating..." : "Auto-Calibrate"}
         </button>
 
         {clips.length === 0 && (
@@ -687,6 +721,37 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
                 </select>
               </div>
             </div>
+
+            {/* Auto-calibration preview */}
+            {autoCalResult && !autoCalResult.error && (
+              <div className="space-y-3 border rounded-lg p-3">
+                <h4 className="text-xs font-medium text-muted-foreground">Auto-Calibration Preview</h4>
+                {autoCalResult.proposal_frame_base64 && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">
+                      Green = Overlay, Red = Camera
+                    </p>
+                    <img
+                      src={`data:image/jpeg;base64,${autoCalResult.proposal_frame_base64}`}
+                      alt="Proposal"
+                      className="w-full max-w-lg rounded border"
+                    />
+                  </div>
+                )}
+                {autoCalResult.camera_motion_heatmap_base64 && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">
+                      Camera Motion Heatmap — Red = motion (camera), Blue = static
+                    </p>
+                    <img
+                      src={`data:image/jpeg;base64,${autoCalResult.camera_motion_heatmap_base64}`}
+                      alt="Heatmap"
+                      className="w-full max-w-lg rounded border"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Save */}
             <div className="flex items-center gap-2">

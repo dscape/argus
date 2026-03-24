@@ -315,6 +315,41 @@ def _expand_bbox(
     return (ex, ey, board_size, board_size)
 
 
+def _refine_alignment(
+    frame: np.ndarray,
+    bbox: tuple[int, int, int, int],
+    max_shift: int = 12,
+) -> tuple[int, int, int, int]:
+    """Fine-tune bbox position by maximizing grid regularity.
+
+    The expansion step can leave the bbox a few pixels off from the true
+    8x8 grid. This tries small shifts in each direction and picks the
+    position that best aligns with the rendered board grid.
+
+    Uses a precomputed grayscale frame to avoid repeated BGR->gray conversion.
+    """
+    x, y, w, h = bbox
+    fh, fw = frame.shape[:2]
+
+    # Precompute grayscale once — compute_grid_regularity skips cvtColor for 2D input
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+    best_score = compute_grid_regularity(gray[y : y + h, x : x + w])
+    best = bbox
+
+    step = 4
+    for dx in range(-max_shift, max_shift + 1, step):
+        for dy in range(-max_shift, max_shift + 1, step):
+            nx, ny = x + dx, y + dy
+            if nx < 0 or ny < 0 or nx + w > fw or ny + h > fh:
+                continue
+            score = compute_grid_regularity(gray[ny : ny + h, nx : nx + w])
+            if score > best_score:
+                best_score = score
+                best = (nx, ny, w, h)
+
+    return best
+
+
 def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
     """Detect a 2D chess board overlay in a video frame.
 
@@ -353,6 +388,8 @@ def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
     if best_bbox is not None and best_score > MIN_LOW_VARIANCE_RATIO:
         # Expand the seed detection to cover the full board.
         expanded = _expand_bbox(frame, best_bbox)
+        # Fine-tune alignment so the 8x8 grid lines up precisely.
+        expanded = _refine_alignment(frame, expanded)
         return OverlayDetection(
             found=True,
             bbox=expanded,

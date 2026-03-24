@@ -27,8 +27,9 @@ from pipeline.screen.frame_fetcher import fetch_youtube_frames, is_vertical_vide
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = os.path.join("data", "ai_screening_cache")
-CHECKPOINT_DIR = os.path.join("data", "ai_screening_checkpoints")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+CACHE_DIR = os.path.join(_PROJECT_ROOT, "data", "ai_screening_cache")
+CHECKPOINT_DIR = os.path.join(_PROJECT_ROOT, "data", "ai_screening_checkpoints")
 
 
 def _get_labelled_videos() -> list[tuple[str, str, int]]:
