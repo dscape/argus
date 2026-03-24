@@ -750,14 +750,17 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 | `ai-train` | Train the screening classifier head | `--epochs N`, `--lr FLOAT`, `--batch-size N`, `--device` |
 | `ai-eval` | Evaluate classifier + calibrate confidence threshold | `--checkpoint PATH`, `--target-precision 0.95` |
 | `ai-screen` | Run AI screening on unscreened videos | `--channel @Handle`, `--limit N`, `--threshold 0.85`, `--checkpoint PATH`, `--device` |
+| `ai-extract-status` | Report DINOv2 feature extraction cache progress | |
 
-### Pipeline Domain — Inspection
+### Pipeline Domain — Inspection & Diagnostics
 
 | Command | Description | Key Options |
 |---------|-------------|-------------|
 | `overlay-test` | Test overlay detection on a screenshot | `--image PATH` (required), `--overlay x,y,w,h`, `--flipped`, `--theme`, `--output PATH` |
 | `overlay-test-reader` | Test reader on a specific region | `--image PATH`, `--overlay x,y,w,h` (both required), `--flipped`, `--theme` |
 | `inspect-clip` | Inspect a `.pt` training clip | `--file PATH` (required), `--save-frames`, `--output-dir DIR` |
+| `inspect-calibration` | Inspect saved calibration for a channel | `--channel @Handle` (required) |
+| `smoke-test` | Run quick smoke tests (no DB required) | |
 | `stats` | Print pipeline statistics (row counts per table) | |
 
 ### Training / Inference / Data Generation (via Makefile)
@@ -768,6 +771,19 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 | `make train` | Training | Train model (Hydra config) | `ARGS="training=phase1_detection data.data_dir=data"` |
 | `make eval` | Training | Evaluate model | `ARGS="--checkpoint outputs/ckpt.pt --num-clips 200"` |
 | `make infer` | Inference | Run inference on video | `ARGS="--video file.mp4 --checkpoint ckpt.pt --output-dir pgns/"` |
+
+### Docker-Wrapped Pipeline Targets
+
+These run pipeline CLI commands inside the `argus-dev-api` Docker container:
+
+| Target | Description | Example |
+|--------|-------------|---------|
+| `make docker-ai-extract` | Pre-compute DINOv2 features in Docker | `ARGS="--device cpu"` |
+| `make docker-ai-train` | Train screening classifier in Docker | `ARGS="--epochs 50 --device cpu"` |
+| `make docker-ai-eval` | Evaluate classifier in Docker | |
+| `make docker-ai-screen` | Run AI screening in Docker | `ARGS="--limit 10"` |
+| `make docker-ai-extract-status` | Check feature extraction progress | |
+| `make docker-smoke-test` | Run smoke tests in Docker | |
 
 ---
 

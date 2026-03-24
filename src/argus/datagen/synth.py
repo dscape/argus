@@ -589,6 +589,7 @@ def generate_dataset(
     on_progress: Callable[[int, int], None] | None = None,
     quality: str = "training",
     num_workers: int = 1,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Generate a dataset of training clips with Blender 3D rendering.
 
@@ -607,6 +608,7 @@ def generate_dataset(
         on_progress: Optional callback(completed, total).
         quality: Render quality preset ('training' or 'high').
         num_workers: Number of parallel Blender render workers.
+        cancel_check: Optional callable returning True to stop generation early.
     """
     from argus.datagen.blender_server import BlenderServerClient
 
@@ -655,6 +657,9 @@ def generate_dataset(
             )
 
     for i, moves, start_move, game_seed in clip_params:
+        if cancel_check is not None and cancel_check():
+            break
+
         clip = generate_clip(
             moves=moves,
             clip_length=clip_length,

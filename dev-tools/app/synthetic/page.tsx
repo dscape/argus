@@ -8,9 +8,19 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getSyntheticStats } from "@/lib/api";
-import type { SyntheticStatsResponse, ClipInspectResponse } from "@/lib/types";
+import {
+  getSyntheticStats,
+  startGeneration,
+  getGenerationStatus,
+  stopGeneration,
+} from "@/lib/api";
+import type {
+  SyntheticStatsResponse,
+  ClipInspectResponse,
+  GenerationStatus,
+} from "@/lib/types";
 import { ClipGallery } from "@/components/ClipGallery";
 import { ClipInspector } from "@/components/ClipInspector";
 import { usePolledScan } from "@/hooks/usePolledScan";
@@ -98,6 +108,9 @@ export default function SyntheticPage() {
       {scanError && (
         <p className="text-sm text-destructive mb-4">{scanError}</p>
       )}
+
+      {/* Generation Controls */}
+      <GenerationControls />
 
       {/* Stats — always visible */}
       <div className="mb-6">
@@ -215,6 +228,218 @@ export default function SyntheticPage() {
     </div>
   );
 }
+
+// ── Generation Controls ──────────────────────────────────────
+
+function GenerationControls() {
+  const [status, setStatus] = useState<GenerationStatus>({ status: "idle" });
+  const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [params, setParams] = useState({
+    num_clips: 100,
+    output_dir: "data/train",
+    image_size: 224,
+    clip_length: 16,
+    frames_per_move: 4,
+    seed: 42,
+    quality: "training",
+  });
+
+  // Fetch initial status
+  useEffect(() => {
+    getGenerationStatus().then(setStatus).catch(() => {});
+  }, []);
+
+  // Poll status while running
+  useEffect(() => {
+    if (status.status !== "running") return;
+    const id = setInterval(async () => {
+      try {
+        const s = await getGenerationStatus();
+        setStatus(s);
+      } catch {
+        // ignore poll errors
+      }
+    }, 2000);
+    return () => clearInterval(id);
+  }, [status.status]);
+
+  const handleStart = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const s = await startGeneration(params);
+      setStatus(s);
+      setShowForm(false);
+    } catch (e: any) {
+      setError(e.message || "Failed to start generation");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleStop = async () => {
+    setLoading(true);
+    try {
+      const s = await stopGeneration();
+      setStatus(s);
+    } catch (e: any) {
+      setError(e.message || "Failed to stop generation");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const isRunning = status.status === "running";
+  const completed = status.completed ?? 0;
+  const total = status.num_clips ?? 0;
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  return (
+    <Card className="mb-6">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base">Generation</CardTitle>
+          {!isRunning && status.status !== "running" && (
+            <Button
+              size="sm"
+              onClick={() => setShowForm(!showForm)}
+              variant={showForm ? "outline" : "default"}
+            >
+              {showForm ? "Cancel" : "Generate"}
+            </Button>
+          )}
+          {isRunning && (
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={handleStop}
+              disabled={loading}
+            >
+              Stop
+            </Button>
+          )}
+        </div>
+        {status.status !== "idle" && status.status !== "no_job_running" && (
+          <CardDescription className="text-xs mt-1">
+            {isRunning
+              ? `Generating: ${completed}/${total} clips (${pct}%)`
+              : status.status === "done"
+              ? `Completed: ${completed} clips generated`
+              : status.status === "stopped"
+              ? `Stopped at ${completed}/${total} clips`
+              : status.status === "failed"
+              ? `Failed: ${status.error}`
+              : null}
+          </CardDescription>
+        )}
+      </CardHeader>
+
+      {/* Progress bar */}
+      {isRunning && total > 0 && (
+        <CardContent className="pt-0 pb-3">
+          <div className="h-2 rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full bg-primary rounded-full transition-all duration-500"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        </CardContent>
+      )}
+
+      {/* Parameters form */}
+      {showForm && !isRunning && (
+        <CardContent className="pt-0">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+            <FormField
+              label="Clips"
+              value={params.num_clips}
+              onChange={(v) => setParams({ ...params, num_clips: Number(v) })}
+              type="number"
+            />
+            <FormField
+              label="Output dir"
+              value={params.output_dir}
+              onChange={(v) => setParams({ ...params, output_dir: v })}
+            />
+            <FormField
+              label="Image size"
+              value={params.image_size}
+              onChange={(v) => setParams({ ...params, image_size: Number(v) })}
+              type="number"
+            />
+            <FormField
+              label="Clip length"
+              value={params.clip_length}
+              onChange={(v) => setParams({ ...params, clip_length: Number(v) })}
+              type="number"
+            />
+            <FormField
+              label="Frames/move"
+              value={params.frames_per_move}
+              onChange={(v) =>
+                setParams({ ...params, frames_per_move: Number(v) })
+              }
+              type="number"
+            />
+            <FormField
+              label="Seed"
+              value={params.seed}
+              onChange={(v) => setParams({ ...params, seed: Number(v) })}
+              type="number"
+            />
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Quality</label>
+              <select
+                className="w-full rounded-md border bg-background px-3 py-1.5 text-sm"
+                value={params.quality}
+                onChange={(e) =>
+                  setParams({ ...params, quality: e.target.value })
+                }
+              >
+                <option value="training">Training</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+          </div>
+          <Button onClick={handleStart} disabled={loading} size="sm">
+            {loading ? "Starting..." : "Start Generation"}
+          </Button>
+          {error && (
+            <p className="text-xs text-destructive mt-2">{error}</p>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+function FormField({
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  label: string;
+  value: string | number;
+  onChange: (value: string) => void;
+  type?: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="text-xs text-muted-foreground">{label}</label>
+      <input
+        type={type}
+        className="w-full rounded-md border bg-background px-3 py-1.5 text-sm"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
+}
+
+// ── Stat Cards ────────────────────────────────────────────────
 
 function StatCard({
   label,

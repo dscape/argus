@@ -133,29 +133,11 @@ cd dev-tools && npm install && npm run dev
 ### Quick Smoke Tests (no DB required)
 
 ```bash
-# Verify hard cut detection logic
-python -c "
-from pipeline.overlay.overlay_move_detector import count_fen_differences
-import chess
-# Starting position vs empty board — should be 32 (all pieces changed)
-print('Full reset:', count_fen_differences(chess.STARTING_BOARD_FEN, '8/8/8/8/8/8/8/8'))
-# e2e4 — should be 2 (pawn moved from e2 to e4)
-print('e2e4:', count_fen_differences(chess.STARTING_BOARD_FEN, 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR'))
-"
+# Run all smoke tests (hard cut detection + AI classifier)
+python -m pipeline smoke-test
 
-# Verify AI classifier model can be instantiated
-python -c "
-from pipeline.screen.ai_classifier import ScreeningClassifier
-import torch
-model = ScreeningClassifier()
-# Fake input: 1 video, 4 frames, 768-dim embeddings + scores
-emb = torch.randn(1, 4, 768)
-scan = torch.randn(1, 4)
-otb = torch.randn(1, 4)
-logits = model(emb, scan, otb)
-print('Logits shape:', logits.shape)  # Should be (1, 3)
-print('Classes: overlay, otb_only, reject')
-"
+# Or in Docker:
+make docker-smoke-test
 ```
 
 ### Linting & Type Checking
@@ -209,14 +191,7 @@ Hard cut detection splits clip segments when a video abruptly changes between ga
 python -m pipeline generate-clips --channel @STLChessClub --limit 1 -v
 
 # 3. Inspect a generated clip — verify move_confidence is present
-python -c "
-import torch
-clip = torch.load('data/training_clips/overlay_VIDEO_ID_0.pt', weights_only=True)
-print('Keys:', list(clip.keys()))
-print('move_confidence shape:', clip['move_confidence'].shape)
-print('move_confidence range:', clip['move_confidence'].min().item(), '-', clip['move_confidence'].max().item())
-print('Low-confidence moves:', (clip['move_confidence'] < 1.0).sum().item())
-"
+python -m pipeline inspect-clip --file data/training_clips/overlay_VIDEO_ID_0.pt
 
 # 4. Use the dev-tools Video Annotator (localhost:3000/videos/VIDEO_ID):
 #    - Open the video and run "Detect Moves"
@@ -233,14 +208,7 @@ Auto-calibration proposes overlay/camera crop regions, theme, and board orientat
 python -m pipeline auto-calibrate --channel @STLChessClub
 
 # 2. Compare the proposed values against the manual calibration:
-python -c "
-from pipeline.overlay.calibration import get_calibration
-cal = get_calibration('@STLChessClub')
-print('Manual overlay:', cal.overlay)
-print('Manual camera:', cal.camera)
-print('Manual theme:', cal.board_theme)
-print('Manual flipped:', cal.board_flipped)
-"
+python -m pipeline inspect-calibration --channel @STLChessClub
 
 # 3. Overlay/camera bboxes should be within ~10% of manual values
 #    Theme and orientation should match exactly
@@ -300,13 +268,13 @@ git commit -m "ai-screening: train v2r3 (95% accuracy on N samples)"
 #### Running in Docker
 
 ```bash
-# Install transformers (needed for DINOv2, not in base image)
-docker exec argus-dev-api pip install transformers -q
+# Extract, train, evaluate (transformers is pre-installed in the Docker image)
+make docker-ai-extract ARGS="--device cpu"
+make docker-ai-train ARGS="--epochs 50 --device cpu"
+make docker-ai-eval
 
-# Extract, train, evaluate
-docker exec -it argus-dev-api python3 -m pipeline.cli ai-extract --device cpu
-docker exec -it argus-dev-api python3 -m pipeline.cli ai-train --epochs 50 --device cpu
-docker exec -it argus-dev-api python3 -m pipeline.cli ai-eval
+# Check extraction progress
+make docker-ai-extract-status
 ```
 
 ### Integration with Dev Tools

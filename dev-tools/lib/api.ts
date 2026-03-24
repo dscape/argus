@@ -20,6 +20,7 @@ import type {
   DownloadResult,
   GenerateClipsResponse,
   AiScreenResult,
+  GenerationStatus,
 } from "./types";
 
 // ── Overlay ─────────────────────────────────────────────────
@@ -560,6 +561,38 @@ export async function inspectSyntheticClip(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ filepath }),
   });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── Synthetic Generation Control ─────────────────────────────
+
+export async function startGeneration(params: {
+  num_clips?: number;
+  output_dir?: string;
+  image_size?: number;
+  clip_length?: number;
+  frames_per_move?: number;
+  seed?: number;
+  quality?: string;
+}): Promise<GenerationStatus> {
+  const res = await fetch("/api/synthetic/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getGenerationStatus(): Promise<GenerationStatus> {
+  const res = await fetch("/api/synthetic/generate/status");
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function stopGeneration(): Promise<GenerationStatus> {
+  const res = await fetch("/api/synthetic/generate/stop", { method: "POST" });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

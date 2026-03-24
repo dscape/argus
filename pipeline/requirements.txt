@@ -10,3 +10,4 @@ tqdm>=4.65
 opencv-python>=4.8
 numpy>=1.24
 torch>=2.2
+transformers>=4.40

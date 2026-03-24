@@ -250,13 +250,16 @@ async def classify_titles(body: ClassifyRequest):
 @router.post("/ai-screen")
 async def ai_screen(body: AiScreenRequest):
     """Run lightweight AI screening on a batch of videos for the screening page."""
+    import logging
+    _logger = logging.getLogger(__name__)
     try:
         results = await run_in_threadpool(
             models_service.ai_screen_batch, body.video_ids, body.threshold
         )
         return {"results": results}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        _logger.exception("ai-screen batch failed")
+        raise HTTPException(500, f"AI screening failed: {type(e).__name__}: {e}")
 
 
 # ── Annotations ──────────────────────────────────────────
