@@ -1,22 +1,15 @@
 """Tests for pipeline.overlay.overlay_clip_generator."""
 
-import os
-import tempfile
-
 import chess
 import numpy as np
 import pytest
 import torch
-
 from pipeline.overlay.overlay_clip_generator import OverlayClipGenerator
 from pipeline.overlay.overlay_move_detector import GameSegment, OverlayDetectedMove
-from pipeline.overlay.calibration import LayoutCalibration
-
 
 # Try to import argus vocabulary
 try:
-    from argus.chess.constraint_mask import get_legal_mask
-    from argus.chess.move_vocabulary import get_vocabulary, NO_MOVE_IDX
+    from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
 
     VOCAB = get_vocabulary()
     HAS_ARGUS = True
@@ -56,15 +49,17 @@ def _make_game_segment(
         board.push(move)
         fen_after = board.board_fen()
 
-        detected_moves.append(OverlayDetectedMove(
-            move_index=len(detected_moves),
-            move_uci=uci,
-            move_san=san,
-            frame_idx=frame_idx,
-            timestamp_seconds=frame_idx / 30.0,
-            fen_before=fen_before,
-            fen_after=fen_after,
-        ))
+        detected_moves.append(
+            OverlayDetectedMove(
+                move_index=len(detected_moves),
+                move_uci=uci,
+                move_san=san,
+                frame_idx=frame_idx,
+                timestamp_seconds=frame_idx / 30.0,
+                fen_before=fen_before,
+                fen_after=fen_after,
+            )
+        )
 
         new_frames = list(range(frame_idx, frame_idx + frames_per_move))
         all_frame_indices.extend(new_frames)

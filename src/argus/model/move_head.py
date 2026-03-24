@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from argus.chess.constraint_mask import apply_constraint_mask
-from argus.chess.move_vocabulary import NO_MOVE_IDX, VOCAB_SIZE
+from argus.chess.move_vocabulary import VOCAB_SIZE
 
 
 class MoveHead(nn.Module):

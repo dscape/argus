@@ -1,31 +1,37 @@
 #!/usr/bin/env python3
 """Training entry point for Argus."""
 
-import logging
-import sys
-
 # Python 3.14 compatibility: Hydra's LazyCompletionHelp breaks argparse's new
 # _check_help validation. Patch argparse to tolerate non-string help objects.
 import argparse
+import logging
+import sys
+
 _orig_check_help = getattr(argparse.ArgumentParser, "_check_help", None)
 if _orig_check_help is not None:
+
     def _patched_check_help(self, action):  # type: ignore[no-untyped-def]
         if not isinstance(action.help, str):
             return
         _orig_check_help(self, action)
+
     argparse.ArgumentParser._check_help = _patched_check_help  # type: ignore[attr-defined]
 
-import hydra
-import torch
-from omegaconf import DictConfig
-from torch.utils.data import DataLoader, random_split
+import hydra  # noqa: E402
+import torch  # noqa: E402
+from omegaconf import DictConfig  # noqa: E402
+from torch.utils.data import DataLoader, random_split  # noqa: E402
 
-from argus.data.collate import argus_collate_fn
-from argus.data.dataset import ArgusDataset, ArgusInMemoryDataset
-from argus.model.argus_model import ArgusModel
-from argus.training.trainer import Trainer
+from argus.data.collate import argus_collate_fn  # noqa: E402
+from argus.data.dataset import ArgusDataset, ArgusInMemoryDataset  # noqa: E402
+from argus.model.argus_model import ArgusModel  # noqa: E402
+from argus.training.trainer import Trainer  # noqa: E402
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 logger = logging.getLogger(__name__)
 
 
@@ -42,6 +48,7 @@ def main(cfg: DictConfig) -> None:
     if data_dir is not None:
         # Load pre-generated data from disk (use make datagen first)
         from pathlib import Path
+
         train_dir = Path(data_dir) / "train"
         val_dir = Path(data_dir) / "val"
         if not train_dir.exists():
@@ -59,12 +66,16 @@ def main(cfg: DictConfig) -> None:
     else:
         # Generate synthetic data on-the-fly
         from argus.datagen.synth import generate_dataset
+
         num_train_clips = cfg.data.get("num_train_clips", 1000)
         num_val_clips = cfg.data.get("num_val_clips", 100)
         total_clips = num_train_clips + num_val_clips
         image_size = cfg.data.get("image_size", 224)
 
-        logger.info(f"Generating {total_clips} synthetic clips ({num_train_clips} train, {num_val_clips} val)...")
+        logger.info(
+            f"Generating {total_clips} synthetic clips "
+            f"({num_train_clips} train, {num_val_clips} val)..."
+        )
         clips = generate_dataset(
             num_clips=total_clips,
             clip_length=clip_length,
@@ -76,8 +87,22 @@ def main(cfg: DictConfig) -> None:
         dataset = ArgusInMemoryDataset(clips=clips, clip_length=clip_length)
         train_ds, val_ds = random_split(dataset, [num_train_clips, num_val_clips])
 
-    train_loader = DataLoader(train_ds, batch_size=cfg.training.batch_size, shuffle=True, collate_fn=argus_collate_fn, num_workers=0, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=cfg.training.batch_size, shuffle=False, collate_fn=argus_collate_fn, num_workers=0, pin_memory=True)
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=cfg.training.batch_size,
+        shuffle=True,
+        collate_fn=argus_collate_fn,
+        num_workers=0,
+        pin_memory=True,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=cfg.training.batch_size,
+        shuffle=False,
+        collate_fn=argus_collate_fn,
+        num_workers=0,
+        pin_memory=True,
+    )
 
     model = ArgusModel(
         vision_encoder_name=cfg.model.vision_encoder.model_name,
@@ -98,15 +123,22 @@ def main(cfg: DictConfig) -> None:
     total_steps = len(train_loader) * cfg.training.epochs // cfg.training.gradient_accumulation
 
     trainer = Trainer(
-        model=model, train_loader=train_loader, val_loader=val_loader,
-        lr=cfg.training.optimizer.lr, weight_decay=cfg.training.optimizer.weight_decay,
-        warmup_steps=cfg.training.scheduler.warmup_steps, total_steps=total_steps,
-        min_lr=cfg.training.scheduler.min_lr, clip_grad_norm=cfg.training.clip_grad_norm,
-        gradient_accumulation=cfg.training.gradient_accumulation, precision=cfg.training.precision,
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        lr=cfg.training.optimizer.lr,
+        weight_decay=cfg.training.optimizer.weight_decay,
+        warmup_steps=cfg.training.scheduler.warmup_steps,
+        total_steps=total_steps,
+        min_lr=cfg.training.scheduler.min_lr,
+        clip_grad_norm=cfg.training.clip_grad_norm,
+        gradient_accumulation=cfg.training.gradient_accumulation,
+        precision=cfg.training.precision,
         loss_weights=dict(cfg.training.loss_weights),
         output_dir=cfg.get("output_dir", "outputs"),
         save_every=cfg.training.checkpoint.save_every,
-        use_wandb=cfg.training.wandb.get("enabled", False), device=device,
+        use_wandb=cfg.training.wandb.get("enabled", False),
+        device=device,
     )
 
     trainer.fit(epochs=cfg.training.epochs)

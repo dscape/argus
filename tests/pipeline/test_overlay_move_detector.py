@@ -1,11 +1,7 @@
 """Tests for pipeline.overlay.overlay_move_detector."""
 
 import chess
-import pytest
-
 from pipeline.overlay.overlay_move_detector import (
-    GameSegment,
-    OverlayDetectedMove,
     detect_moves,
     find_move_between_positions,
 )
@@ -144,11 +140,7 @@ class TestDetectMoves:
         # The garbage FEN will be None-equivalent since it's treated as unstable
         # Actually in our code, the garbage FEN changes the stable tracking
         # Let's use None instead for unreadable frames
-        fens_with_none = (
-            [fen_start] * 3
-            + [None]
-            + [fen_after] * 3
-        )
+        fens_with_none = [fen_start] * 3 + [None] + [fen_after] * 3
 
         segments = detect_moves(fens_with_none, indices, fps=2.0)
         assert len(segments) == 1

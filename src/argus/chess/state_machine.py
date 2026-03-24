@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import chess
 import chess.pgn
-import io
+import torch
 
 from argus.chess.constraint_mask import get_legal_mask
 from argus.chess.move_vocabulary import VOCAB_SIZE, get_vocabulary
-
-import torch
 
 
 class GameStateMachine:
@@ -89,7 +87,7 @@ class GameStateMachine:
         masked[~mask] = float("-inf")
 
         # Find the best move (excluding NO_MOVE and UNKNOWN)
-        best_idx = int(masked[:VOCAB_SIZE - 2].argmax().item())
+        best_idx = int(masked[: VOCAB_SIZE - 2].argmax().item())
         if masked[best_idx] == float("-inf"):
             return None
 

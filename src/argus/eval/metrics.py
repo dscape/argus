@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import torch
 
-from argus.chess.move_vocabulary import NO_MOVE_IDX
-
 
 def compute_move_metrics(
     predictions: torch.Tensor,
@@ -58,7 +56,7 @@ def compute_move_metrics(
     metrics["move_detection_f1"] = f1
 
     # Illegal Move Rate (should always be 0 with constrained head)
-    total_preds = predictions.numel()
+    _total_preds = predictions.numel()
     # A move prediction at a NO_MOVE frame is not "illegal" per se
     metrics["illegal_move_rate"] = 0.0  # By construction with constrained head
 

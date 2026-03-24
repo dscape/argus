@@ -3,7 +3,6 @@
 import chess
 import numpy as np
 import pytest
-
 from pipeline.overlay.overlay_clip_generator import OverlayClipGenerator
 from pipeline.overlay.overlay_move_detector import GameSegment, OverlayDetectedMove
 
@@ -38,6 +37,7 @@ def _make_segment_with_one_move(move_frame: int, total_frames: int) -> GameSegme
 # Try to import argus vocabulary
 try:
     from argus.chess.move_vocabulary import get_vocabulary
+
     VOCAB = get_vocabulary()
     HAS_ARGUS = True
 except ImportError:

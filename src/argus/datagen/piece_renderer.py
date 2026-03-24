@@ -24,7 +24,6 @@ from scipy.ndimage import gaussian_filter
 
 from argus.datagen.board_themes import _perturb_color
 
-
 # ---------------------------------------------------------------------------
 # Profile curves — real Staunton proportions (King height = 1.0)
 # ---------------------------------------------------------------------------
@@ -57,7 +56,9 @@ class PieceProfile:
         """dr/dy at height(s) y via the interpolator derivative."""
         self._ensure_interp()
         y = np.asarray(y, dtype=np.float64)
-        return np.asarray(self._interp(np.clip(y, self.control_points[0][0], self.control_points[-1][0]), 1))
+        return np.asarray(
+            self._interp(np.clip(y, self.control_points[0][0], self.control_points[-1][0]), 1)
+        )
 
 
 PAWN_PROFILE = PieceProfile(
@@ -278,8 +279,10 @@ class PieceMaterial:
         """Return a copy with small random variation."""
         wc = _perturb_color(self.white_color, rng)
         bc = _perturb_color(self.black_color, rng)
+
         def j(v: float) -> float:
             return v * rng.uniform(0.90, 1.10)
+
         return PieceMaterial(
             name=self.name,
             material_type=self.material_type,
@@ -299,73 +302,105 @@ PIECE_MATERIALS: list[PieceMaterial] = [
     PieceMaterial(
         name="tournament_plastic",
         material_type="plastic",
-        ambient=0.25, diffuse=0.65, specular=0.35, shininess=30.0,
+        ambient=0.25,
+        diffuse=0.65,
+        specular=0.35,
+        shininess=30.0,
         white_color=(235, 225, 210),
         black_color=(55, 45, 35),
-        surface_noise=3.0, grain_intensity=0.0,
+        surface_noise=3.0,
+        grain_intensity=0.0,
         weight=0.30,
     ),
     PieceMaterial(
         name="club_plastic",
         material_type="plastic",
-        ambient=0.25, diffuse=0.60, specular=0.40, shininess=35.0,
+        ambient=0.25,
+        diffuse=0.60,
+        specular=0.40,
+        shininess=35.0,
         white_color=(245, 240, 230),
         black_color=(40, 35, 30),
-        surface_noise=2.5, grain_intensity=0.0,
+        surface_noise=2.5,
+        grain_intensity=0.0,
         weight=0.20,
     ),
     PieceMaterial(
         name="basic_plastic",
         material_type="plastic",
-        ambient=0.28, diffuse=0.60, specular=0.30, shininess=25.0,
+        ambient=0.28,
+        diffuse=0.60,
+        specular=0.30,
+        shininess=25.0,
         white_color=(250, 250, 245),
         black_color=(35, 35, 35),
-        surface_noise=2.0, grain_intensity=0.0,
+        surface_noise=2.0,
+        grain_intensity=0.0,
         weight=0.15,
     ),
     PieceMaterial(
         name="boxwood_ebony",
         material_type="wood",
-        ambient=0.22, diffuse=0.70, specular=0.15, shininess=12.0,
+        ambient=0.22,
+        diffuse=0.70,
+        specular=0.15,
+        shininess=12.0,
         white_color=(220, 195, 150),
         black_color=(70, 45, 25),
-        surface_noise=4.0, grain_intensity=0.6,
+        surface_noise=4.0,
+        grain_intensity=0.6,
         weight=0.12,
     ),
     PieceMaterial(
         name="sheesham_boxwood",
         material_type="wood",
-        ambient=0.22, diffuse=0.70, specular=0.12, shininess=10.0,
+        ambient=0.22,
+        diffuse=0.70,
+        specular=0.12,
+        shininess=10.0,
         white_color=(225, 200, 160),
         black_color=(100, 60, 30),
-        surface_noise=4.0, grain_intensity=0.5,
+        surface_noise=4.0,
+        grain_intensity=0.5,
         weight=0.08,
     ),
     PieceMaterial(
         name="brushed_steel",
         material_type="metal",
-        ambient=0.18, diffuse=0.45, specular=0.70, shininess=100.0,
+        ambient=0.18,
+        diffuse=0.45,
+        specular=0.70,
+        shininess=100.0,
         white_color=(190, 190, 195),
         black_color=(60, 60, 65),
-        surface_noise=2.0, grain_intensity=0.0,
+        surface_noise=2.0,
+        grain_intensity=0.0,
         weight=0.05,
     ),
     PieceMaterial(
         name="brass_pewter",
         material_type="metal",
-        ambient=0.18, diffuse=0.50, specular=0.65, shininess=80.0,
+        ambient=0.18,
+        diffuse=0.50,
+        specular=0.65,
+        shininess=80.0,
         white_color=(200, 185, 140),
         black_color=(75, 70, 65),
-        surface_noise=2.5, grain_intensity=0.0,
+        surface_noise=2.5,
+        grain_intensity=0.0,
         weight=0.05,
     ),
     PieceMaterial(
         name="weighted_plastic",
         material_type="plastic",
-        ambient=0.24, diffuse=0.65, specular=0.32, shininess=28.0,
+        ambient=0.24,
+        diffuse=0.65,
+        specular=0.32,
+        shininess=28.0,
         white_color=(230, 215, 195),
         black_color=(60, 50, 40),
-        surface_noise=3.5, grain_intensity=0.0,
+        surface_noise=3.5,
+        grain_intensity=0.0,
         weight=0.05,
     ),
 ]
@@ -414,24 +449,24 @@ def _phong_shade(
         return result
 
     n = normals[mask]  # (N, 3)
-    l = light_dir  # (3,)
+    light = light_dir  # (3,)
 
     # Ambient
     ambient = material.ambient * base_color
 
     # Diffuse: max(N·L, 0)
-    n_dot_l = np.clip(np.sum(n * l, axis=1), 0.0, 1.0)  # (N,)
+    n_dot_l = np.clip(np.sum(n * light, axis=1), 0.0, 1.0)  # (N,)
     diffuse = material.diffuse * n_dot_l[:, None] * base_color  # (N, 3)
 
     # Specular: (R·V)^shininess where V = (0, 0, 1) and R = 2(N·L)N - L
     v = np.array([0.0, 0.0, 1.0])
-    r_vec = 2.0 * n_dot_l[:, None] * n - l  # (N, 3)
+    r_vec = 2.0 * n_dot_l[:, None] * n - light  # (N, 3)
     r_dot_v = np.clip(np.sum(r_vec * v, axis=1), 0.0, 1.0)  # (N,)
     spec_color = np.array([255.0, 255.0, 255.0])
     if material.material_type == "metal":
         # Metallic specular is tinted toward base color
         spec_color = base_color * 0.5 + 128.0
-    specular = material.specular * (r_dot_v ** material.shininess)[:, None] * spec_color  # (N, 3)
+    specular = material.specular * (r_dot_v**material.shininess)[:, None] * spec_color  # (N, 3)
 
     result[mask] = ambient + diffuse + specular
     return result
@@ -470,7 +505,7 @@ def render_revolution_piece(
     max_radius = max(p[1] for p in profile.control_points)
     piece_width_px = sq_size * 0.80
     scale = piece_width_px / (2.0 * max_radius) if max_radius > 0 else 1.0
-    piece_height_px = profile.height * scale
+    _piece_height_px = profile.height * scale
 
     # Map pixel coords to world coords
     cx = sq_size / 2.0
@@ -512,13 +547,13 @@ def render_revolution_piece(
 
         # Azimuthal angle (from front)
         cos_phi = np.clip(x_at / (r_at + 1e-12), -1.0, 1.0)
-        sin_phi = np.sqrt(np.clip(1.0 - cos_phi ** 2, 0.0, 1.0))
+        sin_phi = np.sqrt(np.clip(1.0 - cos_phi**2, 0.0, 1.0))
 
         # Profile derivative dr/dy
         dr_dy = profile.radius_derivative(y_at)
 
         # Normal components
-        norm_factor = np.sqrt(1.0 + dr_dy ** 2)
+        norm_factor = np.sqrt(1.0 + dr_dy**2)
         nx = cos_phi / norm_factor
         ny = -dr_dy / norm_factor
         nz = sin_phi / norm_factor
@@ -540,7 +575,7 @@ def render_revolution_piece(
             grain *= material.grain_intensity * 12.0
             fine = rs.normal(0, material.surface_noise, (sq_size, sq_size))
             for c in range(3):
-                rgb[:, :, c][mask] += (grain[mask] + fine[mask])
+                rgb[:, :, c][mask] += grain[mask] + fine[mask]
         elif material.material_type == "metal":
             noise = rs.normal(0, 1, (sq_size, sq_size))
             brushed = gaussian_filter(noise, sigma=(0.3, sq_size * 0.08))
@@ -586,8 +621,12 @@ def _build_knight_heightmap(sq_size: int) -> tuple[np.ndarray, np.ndarray]:
     heightmap = np.zeros((sq_size, sq_size), dtype=np.float64)
 
     def add_ellipsoid(
-        cx: float, cy: float, rx: float, ry: float,
-        depth: float, rotation: float = 0.0,
+        cx: float,
+        cy: float,
+        rx: float,
+        ry: float,
+        depth: float,
+        rotation: float = 0.0,
     ) -> None:
         """Add an ellipsoidal blob to the heightmap."""
         dx = x - cx
@@ -740,7 +779,12 @@ class PieceRenderCache:
         key = (piece_type, is_white, material.name, sq_size)
         if key not in self._cache:
             self._cache[key] = render_piece_sprite(
-                piece_type, is_white, material, sq_size, light_dir, rng,
+                piece_type,
+                is_white,
+                material,
+                sq_size,
+                light_dir,
+                rng,
             )
         return self._cache[key]
 

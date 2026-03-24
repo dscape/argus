@@ -19,7 +19,9 @@ class BoardIdentityTracker:
         self._frames_since_seen: dict[int, int] = {}
 
     def update(
-        self, embeddings: torch.Tensor, confidences: torch.Tensor,
+        self,
+        embeddings: torch.Tensor,
+        confidences: torch.Tensor,
         confidence_threshold: float = 0.5,
     ) -> list[int]:
         valid_mask = confidences > confidence_threshold
@@ -44,7 +46,10 @@ class BoardIdentityTracker:
 
         known_ids = sorted(self._active_ids)
         known_embs = torch.stack(
-            [F.normalize(self._known_embeddings[bid].unsqueeze(0), dim=-1).squeeze(0) for bid in known_ids]
+            [
+                F.normalize(self._known_embeddings[bid].unsqueeze(0), dim=-1).squeeze(0)
+                for bid in known_ids
+            ]
         )
         sim_matrix = valid_embs @ known_embs.T
         cost_matrix = -sim_matrix.detach().cpu().numpy()
@@ -81,7 +86,11 @@ class BoardIdentityTracker:
         return assigned_ids
 
     def deactivate_stale(self, max_frames: int = 60) -> list[int]:
-        stale = [bid for bid, frames in self._frames_since_seen.items() if frames > max_frames and bid in self._active_ids]
+        stale = [
+            bid
+            for bid, frames in self._frames_since_seen.items()
+            if frames > max_frames and bid in self._active_ids
+        ]
         for bid in stale:
             self._active_ids.discard(bid)
         return stale

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import colorsys
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 from scipy.ndimage import gaussian_filter
@@ -58,9 +58,7 @@ class BoardTheme:
         )
 
 
-def _perturb_color(
-    rgb: tuple[int, int, int], rng: random.Random
-) -> tuple[int, int, int]:
+def _perturb_color(rgb: tuple[int, int, int], rng: random.Random) -> tuple[int, int, int]:
     """Apply small hue/saturation/brightness perturbation to a color."""
     r, g, b = rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0
     h, s, v = colorsys.rgb_to_hsv(r, g, b)
@@ -178,7 +176,7 @@ def generate_wood_grain_texture(
     # Apply anisotropic gaussian blur — high sigma along grain, low across
     sigma_along = size * 0.4
     sigma_across = size * 0.02
-    cos_a, sin_a = np.cos(grain_angle), np.sin(grain_angle)
+    _cos_a, _sin_a = np.cos(grain_angle), np.sin(grain_angle)
 
     # Rotate, blur directionally, rotate back
     # Simpler approach: blur with different sigmas on each axis

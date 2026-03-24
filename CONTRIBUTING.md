@@ -108,7 +108,7 @@ pip install -e ".[cuda,dev]"
 
 Already running via `make up`. For foreground mode with streaming logs: `make dev-tools`.
 
-For manual dev-tools development:
+For manual dev-tools development (docker is preferred):
 
 ```bash
 # Terminal 1:

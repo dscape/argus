@@ -1,10 +1,7 @@
 """Tests for pipeline.screen.dual_region_detector."""
 
 import numpy as np
-import pytest
-
 from pipeline.screen.dual_region_detector import (
-    OTBDetection,
     ScreeningResult,
     detect_otb_region,
 )
@@ -65,8 +62,7 @@ def _make_composite_frame(
         frame = np.full((frame_h, frame_w, 3), 40, dtype=np.uint8)
 
     overlay = _make_overlay_region(overlay_size, overlay_size)
-    frame[overlay_y : overlay_y + overlay_size,
-          overlay_x : overlay_x + overlay_size] = overlay
+    frame[overlay_y : overlay_y + overlay_size, overlay_x : overlay_x + overlay_size] = overlay
 
     bbox = (overlay_x, overlay_y, overlay_size, overlay_size)
     return frame, bbox
@@ -92,8 +88,11 @@ class TestDetectOTBRegion:
         """Overlay covering nearly the entire frame -> found=False."""
         # Overlay takes up most of the frame
         frame, bbox = _make_composite_frame(
-            frame_h=500, frame_w=500,
-            overlay_size=480, overlay_x=10, overlay_y=10,
+            frame_h=500,
+            frame_w=500,
+            overlay_size=480,
+            overlay_x=10,
+            overlay_y=10,
         )
         result = detect_otb_region(frame, bbox)
         # Either the remaining area is too small or has too little variance

@@ -27,7 +27,9 @@ class OcclusionConfig:
 
 
 def compute_hand_trajectory(
-    motion: HandMotion, board_size: float = 0.45, fps: float = 5.0,
+    motion: HandMotion,
+    board_size: float = 0.45,
+    fps: float = 5.0,
 ) -> list[dict[str, tuple[float, float, float]]]:
     sq_size = board_size / 8
     src_x = (motion.source_square[0] - 3.5) * sq_size
@@ -60,21 +62,28 @@ def compute_hand_trajectory(
 
 
 def generate_move_occlusions(
-    move_frames: list[tuple[int, str, str]], fps: float = 5.0, seed: int = 42,
+    move_frames: list[tuple[int, str, str]],
+    fps: float = 5.0,
+    seed: int = 42,
 ) -> list[HandMotion]:
     rng = random.Random(seed)
     motions: list[HandMotion] = []
     is_white_turn = True
     for frame_idx, src_sq, tgt_sq in move_frames:
-        src_file, src_rank = ord(src_sq[0]) - ord('a'), int(src_sq[1]) - 1
-        tgt_file, tgt_rank = ord(tgt_sq[0]) - ord('a'), int(tgt_sq[1]) - 1
+        src_file, src_rank = ord(src_sq[0]) - ord("a"), int(src_sq[1]) - 1
+        tgt_file, tgt_rank = ord(tgt_sq[0]) - ord("a"), int(tgt_sq[1]) - 1
         duration_frames = max(3, int(rng.uniform(0.5, 3.0) * fps))
         start = max(0, frame_idx - duration_frames // 2)
         end = frame_idx + duration_frames // 2
-        motions.append(HandMotion(
-            player_side="white" if is_white_turn else "black",
-            source_square=(src_file, src_rank), target_square=(tgt_file, tgt_rank),
-            start_frame=start, end_frame=end, peak_frame=frame_idx,
-        ))
+        motions.append(
+            HandMotion(
+                player_side="white" if is_white_turn else "black",
+                source_square=(src_file, src_rank),
+                target_square=(tgt_file, tgt_rank),
+                start_frame=start,
+                end_frame=end,
+                peak_frame=frame_idx,
+            )
+        )
         is_white_turn = not is_white_turn
     return motions

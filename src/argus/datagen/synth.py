@@ -57,13 +57,23 @@ class ClipAugmentParams:
     """
 
     __slots__ = (
-        "brightness", "contrast", "noise_sigma", "blur_radius",
-        "apply_blur", "apply_noise", "rotation",
+        "brightness",
+        "contrast",
+        "noise_sigma",
+        "blur_radius",
+        "apply_blur",
+        "apply_noise",
+        "rotation",
     )
 
     def __init__(
-        self, brightness: float, contrast: float, noise_sigma: float,
-        blur_radius: float, apply_blur: bool, apply_noise: bool,
+        self,
+        brightness: float,
+        contrast: float,
+        noise_sigma: float,
+        blur_radius: float,
+        apply_blur: bool,
+        apply_noise: bool,
         rotation: float,
     ):
         self.brightness = brightness
@@ -177,10 +187,12 @@ def add_occlusion(
         rect_h = rng.randint(max(1, int(h * min_frac)), max(2, int(h * max_frac)))
         x0 = rng.randint(0, w - rect_w)
         y0 = rng.randint(0, h - rect_h)
-        color = rng.choice([
-            (rng.randint(180, 230), rng.randint(140, 190), rng.randint(100, 150)),
-            (rng.randint(30, 80), rng.randint(30, 80), rng.randint(30, 80)),
-        ])
+        color = rng.choice(
+            [
+                (rng.randint(180, 230), rng.randint(140, 190), rng.randint(100, 150)),
+                (rng.randint(30, 80), rng.randint(30, 80), rng.randint(30, 80)),
+            ]
+        )
         draw.rectangle([x0, y0, x0 + rect_w, y0 + rect_h], fill=color)
 
     return img
@@ -219,6 +231,7 @@ def _find_blender() -> str:
 # Piece set discovery
 # ---------------------------------------------------------------------------
 
+
 def _get_models_dir() -> Path:
     return Path(__file__).parent.parent.parent.parent / "blender" / "models"
 
@@ -242,8 +255,7 @@ def _select_piece_set(rng: random.Random, skip_fs_check: bool = False) -> str:
             available.append(ps)
     if not available:
         raise FileNotFoundError(
-            f"No piece sets found in {models_dir}. "
-            f"Download STL files to blender/models/staunton/"
+            f"No piece sets found in {models_dir}. Download STL files to blender/models/staunton/"
         )
     return rng.choice(available)
 
@@ -324,12 +336,17 @@ def _render_clip_blender(
     cmd = [
         blender,
         "--background",
-        "--python", render_script,
+        "--python",
+        render_script,
         "--",
-        "--manifest", str(manifest_path),
-        "--output-dir", str(output_dir),
-        "--resolution", str(resolution),
-        "--quality", quality,
+        "--manifest",
+        str(manifest_path),
+        "--output-dir",
+        str(output_dir),
+        "--resolution",
+        str(resolution),
+        "--quality",
+        quality,
     ]
 
     result = subprocess.run(
@@ -341,8 +358,7 @@ def _render_clip_blender(
 
     if result.returncode != 0:
         raise RuntimeError(
-            f"Blender rendering failed (exit {result.returncode}):\n"
-            f"STDERR: {result.stderr[-2000:]}"
+            f"Blender rendering failed (exit {result.returncode}):\nSTDERR: {result.stderr[-2000:]}"
         )
 
     images = []
@@ -384,7 +400,7 @@ def generate_clip(
     illegal_clip_prob: float = 0.2,
     seed: int | None = None,
     quality: str = "training",
-    server: "BlenderServerClient | None" = None,
+    server: BlenderServerClient | None = None,
 ) -> dict[str, Any]:
     """Generate a synthetic training clip using Blender 3D rendering.
 
@@ -461,8 +477,7 @@ def generate_clip(
 
         if is_move_frame:
             inject_illegal = (
-                clip_has_illegal
-                and move_occurrence_count == illegal_at_move_occurrence
+                clip_has_illegal and move_occurrence_count == illegal_at_move_occurrence
             )
             move_occurrence_count += 1
 
@@ -509,11 +524,13 @@ def generate_clip(
         if flipped:
             frame_azim = (frame_azim + 180.0) % 360.0
 
-        frame_data.append({
-            "fen": fen,
-            "elevation": frame_elev,
-            "azimuth": frame_azim,
-        })
+        frame_data.append(
+            {
+                "fen": fen,
+                "elevation": frame_elev,
+                "azimuth": frame_azim,
+            }
+        )
         frame_count += 1
 
     # Second pass: batch render all frames via Blender
@@ -535,12 +552,19 @@ def generate_clip(
             output_dir.mkdir()
 
             _write_manifest(
-                piece_set, piece_material, board_theme,
-                lighting, frame_data, manifest_path,
+                piece_set,
+                piece_material,
+                board_theme,
+                lighting,
+                frame_data,
+                manifest_path,
             )
 
             images = _render_clip_blender(
-                manifest_path, output_dir, image_size, quality=quality,
+                manifest_path,
+                output_dir,
+                image_size,
+                quality=quality,
             )
 
     # Apply augmentations and convert to tensors
@@ -571,9 +595,7 @@ def generate_clip(
 
 def _save_clip(clip: dict[str, Any], out: Path, clip_num: int) -> None:
     """Save a clip dict to disk as a .pt file."""
-    save_dict = {
-        k: v for k, v in clip.items() if isinstance(v, torch.Tensor)
-    }
+    save_dict = {k: v for k, v in clip.items() if isinstance(v, torch.Tensor)}
     if "fens" in clip:
         save_dict["fens"] = clip["fens"]
     torch.save(save_dict, out / f"clip_{clip_num:06d}.pt")
@@ -641,7 +663,9 @@ def generate_dataset(
     for i in range(num_clips):
         game_seed = rng.randint(0, 2**31)
         moves = sample_random_game(
-            min_moves=min_moves, max_moves=max_moves, seed=game_seed,
+            min_moves=min_moves,
+            max_moves=max_moves,
+            seed=game_seed,
         )
         if len(moves) < min_moves:
             continue
@@ -656,6 +680,7 @@ def generate_dataset(
             server = BlenderServerClient.connect()
         except ConnectionError:
             import logging
+
             logging.getLogger(__name__).warning(
                 "BlenderServer not running. Start it with `make blender-server`. "
                 "Falling back to subprocess-per-clip.",

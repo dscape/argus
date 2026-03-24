@@ -10,7 +10,11 @@ import torch
 from argus.inference.pipeline import InferencePipeline
 from argus.model.argus_model import ArgusModel
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 logger = logging.getLogger(__name__)
 
 
@@ -33,8 +37,11 @@ def main() -> None:
     logger.info(f"Loaded model from {args.checkpoint}")
 
     pipeline = InferencePipeline(
-        model=model, device=device, detect_threshold=args.detect_threshold,
-        move_confidence_threshold=args.confidence_threshold, fps=args.fps,
+        model=model,
+        device=device,
+        detect_threshold=args.detect_threshold,
+        move_confidence_threshold=args.confidence_threshold,
+        fps=args.fps,
     )
 
     if args.video:

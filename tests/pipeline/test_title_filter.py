@@ -1,7 +1,5 @@
 """Tests for pipeline.screen.title_filter."""
 
-import pytest
-
 from pipeline.screen.title_filter import score_title
 
 
@@ -162,9 +160,7 @@ class TestFormalTournamentFormat:
         assert ok is True
 
     def test_formal_with_year(self):
-        ok, conf = score_title(
-            "Firouzja vs Caruana || Sinquefield Cup (2023)"
-        )
+        ok, conf = score_title("Firouzja vs Caruana || Sinquefield Cup (2023)")
         assert ok is True
         assert conf >= 0.5
 

@@ -2,10 +2,9 @@
 
 import pytest
 
-
 yt_dlp = pytest.importorskip("yt_dlp", reason="yt-dlp not installed")
 
-from pipeline.download.video_downloader import get_video_path
+from pipeline.download.video_downloader import get_video_path  # noqa: E402
 
 
 class TestGetVideoPath:

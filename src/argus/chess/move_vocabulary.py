@@ -67,9 +67,8 @@ class MoveVocabulary:
                     continue
 
                 # Check if this could be a pawn promotion move
-                is_promotion = (
-                    (dst_rank == 7 and src_rank == 6 and file_diff <= 1)
-                    or (dst_rank == 0 and src_rank == 1 and file_diff <= 1)
+                is_promotion = (dst_rank == 7 and src_rank == 6 and file_diff <= 1) or (
+                    dst_rank == 0 and src_rank == 1 and file_diff <= 1
                 )
 
                 # Base move is always included (queen/rook/bishop can land here)

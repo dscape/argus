@@ -18,7 +18,6 @@ import logging
 import os
 import socket
 import struct
-from pathlib import Path
 from typing import Any
 
 from PIL import Image
@@ -42,7 +41,9 @@ class BlenderServerClient:
 
     @classmethod
     def connect(
-        cls, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
+        cls,
+        host: str = DEFAULT_HOST,
+        port: int = DEFAULT_PORT,
     ) -> BlenderServerClient:
         """Connect to a running Blender server.
 
@@ -60,7 +61,9 @@ class BlenderServerClient:
         return cls(sock)
 
     def render_clip(
-        self, manifest: dict[str, Any], image_size: int = 224,
+        self,
+        manifest: dict[str, Any],
+        image_size: int = 224,
     ) -> list[Image.Image]:
         """Send a rendering job to the Blender server.
 

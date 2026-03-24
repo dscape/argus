@@ -129,9 +129,7 @@ class Trainer:
         if other_params:
             groups.append({"params": other_params, "lr": lr, "weight_decay": weight_decay})
         if vision_params:
-            groups.append(
-                {"params": vision_params, "lr": lr * 0.1, "weight_decay": weight_decay}
-            )
+            groups.append({"params": vision_params, "lr": lr * 0.1, "weight_decay": weight_decay})
         return groups
 
     def train_epoch(self, epoch: int) -> dict[str, float]:
@@ -203,9 +201,7 @@ class Trainer:
                 log_dict["train/lr"] = self.optimizer.param_groups[0]["lr"]
                 self._wandb.log(log_dict, step=self.global_step)
 
-        return {
-            k: sum(v) / max(len(v), 1) for k, v in {**epoch_losses, **epoch_metrics}.items()
-        }
+        return {k: sum(v) / max(len(v), 1) for k, v in {**epoch_losses, **epoch_metrics}.items()}
 
     @torch.no_grad()
     def validate(self) -> dict[str, float]:
@@ -310,7 +306,7 @@ class Trainer:
             # Validate
             if self.val_loader and epoch % 2 == 0:
                 val_metrics = self.validate()
-                val_parts = [f"  Val"]
+                val_parts = ["  Val"]
                 for k, v in val_metrics.items():
                     val_parts.append(f"{k}={v:.4f}")
                 logger.info(" | ".join(val_parts))

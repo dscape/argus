@@ -9,7 +9,7 @@ from argus.chess.constraint_mask import (
     get_legal_mask,
     get_legal_mask_batch,
 )
-from argus.chess.move_vocabulary import NO_MOVE_IDX, UNKNOWN_IDX, VOCAB_SIZE, get_vocabulary
+from argus.chess.move_vocabulary import NO_MOVE_IDX, UNKNOWN_IDX, VOCAB_SIZE
 
 
 class TestGetLegalMask:
