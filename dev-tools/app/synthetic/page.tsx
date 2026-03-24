@@ -22,6 +22,7 @@ import type {
 import { ClipGallery } from "@/components/ClipGallery";
 import { ClipInspector } from "@/components/ClipInspector";
 import { usePolledScan } from "@/hooks/usePolledScan";
+import { toast } from "sonner";
 
 const DIRECTORY = "data/train";
 
@@ -61,6 +62,10 @@ export default function SyntheticPage() {
     onClipCountChange: handleClipCountChange,
   });
 
+  useEffect(() => {
+    if (scanError) toast.error(scanError);
+  }, [scanError]);
+
   const [validCount, setValidCount] = useState(0);
   const [invalidCount, setInvalidCount] = useState(0);
 
@@ -81,7 +86,6 @@ export default function SyntheticPage() {
   // ── Generation state ────────────────────────────────────
   const [genStatus, setGenStatus] = useState<GenerationStatus>({ status: "idle" });
   const [genLoading, setGenLoading] = useState(false);
-  const [genError, setGenError] = useState<string | null>(null);
 
   useEffect(() => {
     getGenerationStatus().then(setGenStatus).catch(() => {});
@@ -96,14 +100,20 @@ export default function SyntheticPage() {
     return () => clearInterval(id);
   }, [genStatus.status]);
 
+  // Toast on generation failure
+  useEffect(() => {
+    if (genStatus.status === "failed") {
+      toast.error(genStatus.error || "Generation failed");
+    }
+  }, [genStatus.status, genStatus.error]);
+
   const handleGenerate10 = async () => {
     setGenLoading(true);
-    setGenError(null);
     try {
       const s = await startGeneration({ num_clips: 10, output_dir: DIRECTORY });
       setGenStatus(s);
     } catch (e: any) {
-      setGenError(e.message || "Generation failed");
+      toast.error(e.message || "Generation failed");
     } finally {
       setGenLoading(false);
     }
@@ -149,14 +159,6 @@ export default function SyntheticPage() {
               {genLoading ? "Starting..." : "Generate 10"}
             </button>
           )}
-          {genStatus.status === "failed" && (
-            <span className="text-xs text-destructive" title={genStatus.error ?? ""}>
-              Failed
-            </span>
-          )}
-          {genError && (
-            <span className="text-xs text-destructive">{genError}</span>
-          )}
           <span className="text-muted-foreground/40">|</span>
           <span
             className={`inline-block w-2 h-2 rounded-full ${
@@ -172,10 +174,6 @@ export default function SyntheticPage() {
           </button>
         </div>
       </div>
-
-      {scanError && (
-        <p className="text-sm text-destructive mb-4">{scanError}</p>
-      )}
 
       {/* Stats — always visible */}
       <div className="mb-6">

@@ -11,8 +11,11 @@ Usage:
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import logging
+import os
 import socket
 import struct
 from pathlib import Path
@@ -21,7 +24,7 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_HOST = "127.0.0.1"
+DEFAULT_HOST = os.environ.get("BLENDER_SERVER_HOST", "127.0.0.1")
 DEFAULT_PORT = 9876
 
 
@@ -79,8 +82,8 @@ class BlenderServerClient:
             raise RuntimeError(f"Blender render error: {error}")
 
         images = []
-        for frame_path in response.get("frames", []):
-            img = Image.open(frame_path).convert("RGB")
+        for b64 in response.get("frames_b64", []):
+            img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
             images.append(img)
 
         return images

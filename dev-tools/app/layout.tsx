@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Toaster } from "sonner";
 import IconSidebar from "@/components/IconSidebar";
 import "./globals.css";
 
@@ -19,6 +20,7 @@ export default function RootLayout({
           <IconSidebar />
           <main className="flex-1 p-6 overflow-auto">{children}</main>
         </div>
+        <Toaster richColors position="top-right" />
       </body>
     </html>
   );

@@ -12,6 +12,7 @@ Or directly:
         --resolution 224 --quality training --port 9876
 """
 
+import base64
 import json
 import math
 import os
@@ -409,7 +410,13 @@ def main():
                             bpy.data.objects.remove(obj, do_unlink=True)
                         piece_objects.clear()
 
-                        response = {"status": "ok", "frames": frames_out}
+                        # Read rendered PNGs and send as base64
+                        frames_b64 = []
+                        for fp in frames_out:
+                            with open(fp, "rb") as f:
+                                frames_b64.append(base64.b64encode(f.read()).decode("ascii"))
+
+                        response = {"status": "ok", "frames_b64": frames_b64}
                         send_msg(conn, json.dumps(response).encode("utf-8"))
 
                     except Exception as e:
