@@ -186,7 +186,7 @@ def inspect_clip(
         print(f"ERROR: File not found: {clip_path}")
         return
 
-    clip = torch.load(clip_path, map_location="cpu", weights_only=False)
+    clip = torch.load(clip_path, map_location="cpu", weights_only=True)
 
     print(f"Clip: {clip_path}")
     print(f"Size: {os.path.getsize(clip_path) / 1024 / 1024:.1f} MB")

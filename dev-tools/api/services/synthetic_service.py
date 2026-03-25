@@ -102,7 +102,7 @@ def get_clip_stats(directory: str) -> dict[str, Any]:
 
     for f in pt_files:
         total_size += f.stat().st_size
-        clip = torch.load(f, map_location="cpu", weights_only=False)
+        clip = torch.load(f, map_location="cpu", weights_only=True)
 
         if "frames" in clip:
             frames = clip["frames"]

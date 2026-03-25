@@ -1,10 +1,10 @@
 {
   "code_version": "v2",
-  "revision": 4,
-  "version": "v2r4",
-  "trained_at": "2026-03-24T16:52:17.886324+00:00",
-  "best_val_accuracy": 0.9865,
-  "epochs": 500,
-  "train_size": 2721,
-  "val_size": 518
+  "revision": 5,
+  "version": "v2r5",
+  "trained_at": "2026-03-25T08:56:54.181999+00:00",
+  "best_val_accuracy": 0.9792,
+  "epochs": 2,
+  "train_size": 2820,
+  "val_size": 530
 }

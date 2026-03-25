@@ -9,12 +9,15 @@ re-extraction and re-training never need to re-download from YouTube.
 
 import logging
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+_VIDEO_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{8,15}$")
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 FRAME_CACHE_DIR = os.path.join(_PROJECT_ROOT, "data", "frame_cache")
@@ -82,6 +85,10 @@ def fetch_youtube_frames(video_id: str) -> list[tuple[np.ndarray, str]]:
     Returns list of (frame_bgr, display_label) tuples sorted in canonical order.
     Frames are cached under data/frame_cache/{video_id}/ on first fetch.
     """
+    if not _VIDEO_ID_RE.match(video_id):
+        logger.warning(f"Invalid video_id format: {video_id!r}")
+        return []
+
     results: list[tuple[np.ndarray, str]] = []
     to_fetch: list[tuple[str, str]] = []  # (url, label) pairs that need downloading
 

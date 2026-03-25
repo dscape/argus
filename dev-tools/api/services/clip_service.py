@@ -30,11 +30,13 @@ def create_session(file_bytes: bytes, filename: str) -> str:
     """Save clip to temp file, load it, and return a session_id."""
     session_id = str(uuid.uuid4())[:8]
     tmp_dir = tempfile.mkdtemp(prefix="argus_clip_")
-    tmp_path = os.path.join(tmp_dir, filename)
+    # Use a safe generated filename to prevent path traversal
+    safe_name = f"clip_{uuid.uuid4().hex}.pt"
+    tmp_path = os.path.join(tmp_dir, safe_name)
     with open(tmp_path, "wb") as f:
         f.write(file_bytes)
 
-    clip = torch.load(tmp_path, map_location="cpu", weights_only=False)
+    clip = torch.load(tmp_path, map_location="cpu", weights_only=True)
     _sessions[session_id] = {"clip": clip, "path": tmp_path}
     return session_id
 

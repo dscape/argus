@@ -112,8 +112,8 @@ export default function SyntheticPage() {
     try {
       const s = await startGeneration({ num_clips: 10, output_dir: DIRECTORY });
       setGenStatus(s);
-    } catch (e: any) {
-      toast.error(e.message || "Generation failed");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Generation failed");
     } finally {
       setGenLoading(false);
     }

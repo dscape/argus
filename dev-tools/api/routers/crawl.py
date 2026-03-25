@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from api.services import crawl_service, inspect_service, models_service
 
@@ -46,7 +46,7 @@ class ClassifyRequest(BaseModel):
 
 class AiScreenRequest(BaseModel):
     video_ids: list[str]
-    threshold: float = 0.90
+    threshold: float = Field(default=0.90, ge=0.0, le=1.0)
 
 
 class BatchInspectRequest(BaseModel):

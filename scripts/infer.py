@@ -32,7 +32,7 @@ def main() -> None:
     device = args.device if torch.cuda.is_available() else "cpu"
 
     model = ArgusModel(use_detector=False)
-    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
+    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])
     logger.info(f"Loaded model from {args.checkpoint}")
 

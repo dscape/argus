@@ -498,12 +498,14 @@ def cmd_stats(args):
         with conn.cursor() as cur:
             stats = {}
 
-            for table in [
+            _ALLOWED_TABLES = frozenset([
                 "crawl_channels", "youtube_videos",
                 "training_clips", "api_quota_log",
-            ]:
+            ])
+            for table in _ALLOWED_TABLES:
                 try:
-                    cur.execute(f"SELECT COUNT(*) FROM {table}")
+                    assert table in _ALLOWED_TABLES, f"Invalid table: {table}"
+                    cur.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608 — table from allowlist
                     stats[table] = cur.fetchone()[0]
                 except Exception:
                     stats[table] = "N/A"
