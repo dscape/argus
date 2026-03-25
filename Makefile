@@ -3,7 +3,8 @@
        dev-tools dev-tools-down blender-server blender-server-stop \
        up down \
        docker-ai-extract docker-ai-train docker-ai-eval docker-ai-screen \
-       docker-ai-extract-status docker-smoke-test
+       docker-ai-extract-status docker-smoke-test \
+       backup check-backup
 
 # ── Use venv Python/pip so targets work without activation ──
 
@@ -13,7 +14,7 @@ PIP := .venv/bin/pip
 install:
 	$(PIP) install -e .
 
-dev:
+dev: check-backup
 	$(PIP) install -e ".[dev]"
 
 test:
@@ -30,10 +31,10 @@ format:
 	$(PYTHON) -m ruff format src/ tests/ scripts/
 	$(PYTHON) -m ruff check --fix src/ tests/ scripts/
 
-train:
+train: check-backup
 	$(PYTHON) scripts/train.py $(ARGS)
 
-eval:
+eval: check-backup
 	$(PYTHON) scripts/evaluate.py $(ARGS)
 
 datagen:
@@ -48,13 +49,19 @@ clean:
 
 # ── Pipeline targets ─────────────────────────────────────────
 
-db-up:
+db-up: check-backup
 	docker compose up -d
 
 db-down:
 	@echo "Stopping database (data is preserved in Docker volume)."
 	@echo "WARNING: 'docker compose down --volumes' will PERMANENTLY DELETE all data."
 	docker compose down
+
+backup:
+	@scripts/backup.sh
+
+check-backup:
+	@scripts/check_backup.sh
 
 db-backup:
 	@mkdir -p backups
@@ -77,7 +84,7 @@ seed-channels:
 crawl:
 	$(PYTHON) -m pipeline.cli crawl $(ARGS)
 
-screen:
+screen: check-backup
 	$(PYTHON) -m pipeline.cli screen $(ARGS)
 
 inspect:
@@ -105,7 +112,7 @@ dev-tools-down:
 BLENDER_PID_FILE := .blender-server.pid
 BLENDER_LOG_FILE := .blender-server.log
 
-up:
+up: check-backup
 	@echo "Starting Docker services (postgres, dev-tools-api, dev-tools-ui)..."
 	@docker compose --profile dev-tools up -d --build
 	@echo ""
