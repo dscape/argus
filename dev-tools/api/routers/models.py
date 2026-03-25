@@ -40,6 +40,20 @@ class SaveEvalRequest(BaseModel):
     model_version: str | None = None
 
 
+class CreateSessionRequest(BaseModel):
+    results: list[dict]
+    accuracy: float | None = None
+    sample_size: int = 0
+    per_class: dict | None = None
+    model_version: str | None = None
+    pin_state: dict | None = None
+    evaluation_id: int | None = None
+
+
+class UpdatePinsRequest(BaseModel):
+    pin_state: dict
+
+
 # ── AI Screening ────────────────────────────────────────────
 
 
@@ -83,6 +97,52 @@ async def batch_ai_screening(body: BatchInspectRequest):
         body.limit,
     )
     return {"results": result, "total": len(result)}
+
+
+# ── Screening Sessions ─────────────────────────────────────
+
+
+@router.post("/ai-screening/sessions")
+async def create_session(body: CreateSessionRequest):
+    """Create a shareable screening session."""
+    result = await run_in_threadpool(
+        models_service.create_screening_session,
+        body.results,
+        body.accuracy,
+        body.sample_size,
+        body.per_class,
+        body.model_version,
+        body.pin_state,
+        body.evaluation_id,
+    )
+    return result
+
+
+@router.get("/ai-screening/sessions")
+async def list_sessions(limit: int = 20):
+    """List recent screening sessions."""
+    sessions = await run_in_threadpool(models_service.list_screening_sessions, limit)
+    return {"sessions": sessions}
+
+
+@router.get("/ai-screening/sessions/{session_id}")
+async def get_session(session_id: str):
+    """Get a screening session by ID."""
+    session = await run_in_threadpool(models_service.get_screening_session, session_id)
+    if session is None:
+        raise HTTPException(404, f"Session {session_id} not found")
+    return session
+
+
+@router.patch("/ai-screening/sessions/{session_id}/pins")
+async def update_pins(session_id: str, body: UpdatePinsRequest):
+    """Update pin state for a screening session."""
+    result = await run_in_threadpool(
+        models_service.update_session_pins, session_id, body.pin_state
+    )
+    if "error" in result:
+        raise HTTPException(404, result["error"])
+    return result
 
 
 # ── Auto-Calibration ────────────────────────────────────────

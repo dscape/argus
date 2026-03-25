@@ -518,6 +518,65 @@ export async function aiScreenBatch(
   return res.json();
 }
 
+// ── Screening Sessions ─────────────────────────────────────
+
+export interface ScreeningSession {
+  id: string;
+  created_at: string;
+  sample_size: number;
+  model_version: string | null;
+  accuracy: number | null;
+  per_class?: Record<string, { correct: number; total: number }> | null;
+  results?: unknown[];
+  pin_state?: Record<string, boolean>;
+  evaluation_id?: number | null;
+}
+
+export async function createScreeningSession(
+  body: {
+    results: unknown[];
+    accuracy?: number | null;
+    sample_size?: number;
+    per_class?: Record<string, { correct: number; total: number }> | null;
+    model_version?: string | null;
+    pin_state?: Record<string, boolean>;
+    evaluation_id?: number | null;
+  }
+): Promise<{ session_id: string; created_at: string }> {
+  const res = await fetch("/api/models/ai-screening/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getScreeningSession(sessionId: string): Promise<ScreeningSession> {
+  const res = await fetch(`/api/models/ai-screening/sessions/${sessionId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listScreeningSessions(limit = 20): Promise<{ sessions: ScreeningSession[] }> {
+  const res = await fetch(`/api/models/ai-screening/sessions?limit=${limit}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateSessionPins(
+  sessionId: string,
+  pinState: Record<string, boolean>
+): Promise<{ pin_state: Record<string, boolean> }> {
+  const res = await fetch(`/api/models/ai-screening/sessions/${sessionId}/pins`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pin_state: pinState }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ── AI Classification ───────────────────────────────────────
 
 export async function classifyTitles(

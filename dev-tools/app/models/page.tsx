@@ -6,7 +6,7 @@ import AutoCalibrationInspector from "@/components/AutoCalibrationInspector";
 import HardCutInspector from "@/components/HardCutInspector";
 
 const TABS = [
-  { id: "screening", label: "AI Screening" },
+  { id: "screening", label: "Screening" },
   { id: "calibration", label: "Auto-Calibration" },
   { id: "hardcuts", label: "Hard Cuts" },
 ] as const;

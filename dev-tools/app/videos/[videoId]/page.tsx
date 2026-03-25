@@ -232,7 +232,7 @@ function InfoStep({ video }: { video: CrawlVideo }) {
       {/* AI Screening */}
       <div className="border-t pt-4">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-medium">AI Screening</h3>
+          <h3 className="text-sm font-medium">Screening</h3>
           <button
             onClick={inspectAi}
             disabled={aiLoading}

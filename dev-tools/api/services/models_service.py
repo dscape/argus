@@ -241,6 +241,140 @@ def save_screening_eval(accuracy: float, sample_size: int, per_class: dict, mode
     }
 
 
+# ── Screening Sessions ──────────────────────────────────────
+
+
+def create_screening_session(
+    results: list[dict],
+    accuracy: float,
+    sample_size: int,
+    per_class: dict,
+    model_version: str | None = None,
+    pin_state: dict | None = None,
+    evaluation_id: int | None = None,
+) -> dict:
+    """Create a shareable screening session. Strips base64 frame images before storing."""
+    import json
+    from uuid import uuid4
+
+    session_id = uuid4().hex[:12]
+
+    # Strip image_base64 from frames to keep storage lean
+    light_results = []
+    for r in results:
+        lr = {k: v for k, v in r.items() if k != "frames"}
+        if "frames" in r:
+            lr["frames"] = [
+                {k: v for k, v in f.items() if k != "image_base64"}
+                for f in r["frames"]
+            ]
+        light_results.append(lr)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO screening_sessions
+                    (id, sample_size, model_version, accuracy, per_class, results, pin_state, evaluation_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING created_at
+                """,
+                (
+                    session_id,
+                    sample_size,
+                    model_version,
+                    round(accuracy, 4) if accuracy is not None else None,
+                    json.dumps(per_class) if per_class else None,
+                    json.dumps(light_results),
+                    json.dumps(pin_state or {}),
+                    evaluation_id,
+                ),
+            )
+            created_at = cur.fetchone()[0]
+            conn.commit()
+
+    return {"session_id": session_id, "created_at": created_at.isoformat()}
+
+
+def get_screening_session(session_id: str) -> dict | None:
+    """Fetch a screening session by ID."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, created_at, sample_size, model_version, accuracy,
+                       per_class, results, pin_state, evaluation_id
+                FROM screening_sessions WHERE id = %s
+                """,
+                (session_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+
+    return {
+        "id": row[0],
+        "created_at": row[1].isoformat() if row[1] else None,
+        "sample_size": row[2],
+        "model_version": row[3],
+        "accuracy": row[4],
+        "per_class": row[5],
+        "results": row[6],
+        "pin_state": row[7] or {},
+        "evaluation_id": row[8],
+    }
+
+
+def update_session_pins(session_id: str, pin_state: dict) -> dict:
+    """Merge pin_state updates into a screening session."""
+    import json
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE screening_sessions
+                SET pin_state = COALESCE(pin_state, '{}'::jsonb) || %s::jsonb
+                WHERE id = %s
+                RETURNING pin_state
+                """,
+                (json.dumps(pin_state), session_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return {"error": "Session not found"}
+            conn.commit()
+
+    return {"pin_state": row[0]}
+
+
+def list_screening_sessions(limit: int = 20) -> list[dict]:
+    """List recent screening sessions (lightweight — no results payload)."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, created_at, sample_size, model_version, accuracy
+                FROM screening_sessions
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+
+    return [
+        {
+            "id": r[0],
+            "created_at": r[1].isoformat() if r[1] else None,
+            "sample_size": r[2],
+            "model_version": r[3],
+            "accuracy": r[4],
+        }
+        for r in rows
+    ]
+
+
 # ── Lightweight AI Screening for Screening Page ──────────────
 
 
