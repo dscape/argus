@@ -65,8 +65,8 @@ export default function HardCutInspector() {
       });
       if (!res.ok) throw new Error(await res.text());
       setResult(await res.json());
-    } catch (e: any) {
-      alert(e.message);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "Hard cut analysis failed");
     } finally {
       setLoading(false);
     }

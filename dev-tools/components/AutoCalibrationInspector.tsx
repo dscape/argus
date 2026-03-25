@@ -60,8 +60,9 @@ export default function AutoCalibrationInspector() {
       });
       if (!res.ok) throw new Error(await res.text());
       setResult(await res.json());
-    } catch (e: any) {
-      alert(e.message);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      alert(msg);
     } finally {
       setLoading(false);
     }

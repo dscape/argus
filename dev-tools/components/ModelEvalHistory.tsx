@@ -186,7 +186,9 @@ export default function ModelEvalHistory() {
         const data = await res.json();
         setEvaluations(data.evaluations);
       }
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to fetch evaluation history:", e);
+    }
   }
 
   useEffect(() => {
@@ -208,8 +210,8 @@ export default function ModelEvalHistory() {
       if (!res.ok) throw new Error(await res.text());
       setNotes("");
       await fetchHistory();
-    } catch (e: any) {
-      alert(e.message);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "Evaluation failed");
     } finally {
       setRunningEval(false);
     }

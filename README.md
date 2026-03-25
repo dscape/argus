@@ -856,7 +856,9 @@ The pipeline crawls YouTube channels organized into 5 tiers in `configs/pipeline
 
 > **Domain: Pipeline** — used only by the data pipeline, not by training or inference.
 
-PostgreSQL 16. Start with `make db-up`.
+PostgreSQL 16. Start with `make db-up`. Back up with `make db-backup`, restore with `make db-restore BACKUP=backups/file.sql`.
+
+> **Warning:** `docker compose down --volumes` permanently deletes all database data including manual screening labels, calibration data, and crawl history. This data cannot be recreated. Always run `make db-backup` before removing volumes.
 
 ```mermaid
 erDiagram

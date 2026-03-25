@@ -316,30 +316,34 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
             title = vdata.get("title", "")
             _, title_score = score_title(title) if title else (False, 0.0)
 
+            # Base result dict — all fields always present for consistent contract
+            base = {
+                "video_id": video_id,
+                "predicted_class": None,
+                "confidence": 0.0,
+                "auto_decided": False,
+                "vertical": False,
+                "title_score": round(title_score, 3),
+                "max_ovl_score": 0.0,
+                "max_otb_score": 0.0,
+                "model_version": model_version,
+                "error": None,
+            }
+
             # Always check vertical (only needs opencv/numpy)
             frames = fetch_youtube_frames(video_id)
             if not frames:
-                results.append({
-                    "video_id": video_id,
-                    "error": "Could not fetch thumbnails",
-                    "vertical": False,
-                    "title_score": round(title_score, 3),
-                })
+                results.append({**base, "error": "Could not fetch thumbnails"})
                 continue
 
             vertical = is_vertical_video(frames)
 
             if vertical:
-                results.append({
-                    "video_id": video_id,
+                results.append({**base,
                     "predicted_class": "reject",
                     "confidence": 1.0,
                     "auto_decided": True,
                     "vertical": True,
-                    "title_score": round(title_score, 3),
-                    "max_ovl_score": 0.0,
-                    "max_otb_score": 0.0,
-                    "model_version": model_version,
                 })
                 db_updates.append({
                     "video_id": video_id,
@@ -403,27 +407,21 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
 
             if predicted_class is None:
                 # No prediction available
-                results.append({
-                    "video_id": video_id,
-                    "error": "No AI prediction — run `pipeline ai-screen` first" if not has_ml_deps else "Feature extraction failed",
-                    "vertical": False,
-                    "title_score": round(title_score, 3),
+                error_msg = "No AI prediction — run `pipeline ai-screen` first" if not has_ml_deps else "Feature extraction failed"
+                results.append({**base,
                     "max_ovl_score": max_ovl,
                     "max_otb_score": max_otb,
+                    "error": error_msg,
                 })
                 continue
 
             auto_decided = confidence >= threshold
-            results.append({
-                "video_id": video_id,
+            results.append({**base,
                 "predicted_class": predicted_class,
                 "confidence": confidence,
                 "auto_decided": auto_decided,
-                "vertical": False,
-                "title_score": round(title_score, 3),
                 "max_ovl_score": max_ovl,
                 "max_otb_score": max_otb,
-                "model_version": model_version,
             })
             db_updates.append({
                 "video_id": video_id,
@@ -435,9 +433,15 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
             logger.warning(f"AI screen failed for {video_id}: {type(e).__name__}: {e}")
             results.append({
                 "video_id": video_id,
-                "error": f"Processing failed: {type(e).__name__}: {e}",
+                "predicted_class": None,
+                "confidence": 0.0,
+                "auto_decided": False,
                 "vertical": False,
                 "title_score": 0.0,
+                "max_ovl_score": 0.0,
+                "max_otb_score": 0.0,
+                "model_version": model_version,
+                "error": f"Processing failed: {type(e).__name__}: {e}",
             })
             continue
 
@@ -488,7 +492,10 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
                             )
                     conn.commit()
         except Exception as e:
-            logger.warning(f"DB update for AI screening failed: {type(e).__name__}: {e}")
+            logger.error(f"DB update for AI screening failed: {type(e).__name__}: {e}")
+            for r in results:
+                if "error" not in r:
+                    r["db_write_failed"] = True
 
     return results
 

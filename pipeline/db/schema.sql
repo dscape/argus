@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS youtube_videos (
     annotations         JSONB,
     -- {"games": [...], "notes": "..."}
 
+    -- AI screening classifier predictions (set by ai_screen_batch)
+    ai_screening_class       VARCHAR(20),
+    ai_screening_confidence  FLOAT,
+    ai_screening_auto_decided BOOLEAN DEFAULT false,
+
     created_at          TIMESTAMPTZ DEFAULT now(),
     updated_at          TIMESTAMPTZ DEFAULT now()
 );
@@ -65,6 +70,8 @@ CREATE INDEX IF NOT EXISTS idx_youtube_videos_published
     ON youtube_videos (published_at);
 CREATE INDEX IF NOT EXISTS idx_youtube_videos_screening
     ON youtube_videos (screening_status);
+CREATE INDEX IF NOT EXISTS idx_youtube_videos_ai_screening
+    ON youtube_videos (ai_screening_class);
 
 -- ============================================================
 -- Video clips (manual time segments with per-clip calibration)
@@ -119,3 +126,24 @@ CREATE TABLE IF NOT EXISTS api_quota_log (
 
 CREATE INDEX IF NOT EXISTS idx_api_quota_log_date
     ON api_quota_log (logged_at);
+
+-- ============================================================
+-- Model evaluation history (regression tracking)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS model_evaluations (
+    id              SERIAL PRIMARY KEY,
+    model_name      VARCHAR(50) NOT NULL,
+    evaluated_at    TIMESTAMPTZ DEFAULT now(),
+    sample_size     INTEGER NOT NULL,
+    accuracy        FLOAT,
+    precision_avg   FLOAT,
+    recall_avg      FLOAT,
+    f1_avg          FLOAT,
+    per_class       JSONB,
+    threshold       FLOAT,
+    auto_rate       FLOAT,
+    notes           TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_evaluations_model
+    ON model_evaluations (model_name, evaluated_at);

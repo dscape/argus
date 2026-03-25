@@ -187,8 +187,8 @@ function InfoStep({ video }: { video: CrawlVideo }) {
       });
       if (!res.ok) throw new Error(await res.text());
       setAiResult(await res.json());
-    } catch (e: any) {
-      alert(e.message);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "AI inspection failed");
     } finally {
       setAiLoading(false);
     }

@@ -1,5 +1,5 @@
 .PHONY: install dev test lint typecheck format train eval datagen infer clean \
-       db-up db-down pipeline-install seed-channels crawl screen inspect download generate-clips pipeline-stats \
+       db-up db-down db-backup db-restore pipeline-install seed-channels crawl screen inspect download generate-clips pipeline-stats \
        dev-tools dev-tools-down blender-server blender-server-stop \
        up down \
        docker-ai-extract docker-ai-train docker-ai-eval docker-ai-screen \
@@ -52,7 +52,21 @@ db-up:
 	docker compose up -d
 
 db-down:
+	@echo "Stopping database (data is preserved in Docker volume)."
+	@echo "WARNING: 'docker compose down --volumes' will PERMANENTLY DELETE all data."
 	docker compose down
+
+db-backup:
+	@mkdir -p backups
+	docker compose exec -T postgres pg_dump -U argus argus > backups/argus_$$(date +%Y%m%d_%H%M%S).sql
+	@echo "Backup saved to backups/"
+	@ls -lh backups/argus_*.sql | tail -1
+
+db-restore:
+	@if [ -z "$(BACKUP)" ]; then echo "Usage: make db-restore BACKUP=backups/argus_YYYYMMDD_HHMMSS.sql"; exit 1; fi
+	@echo "Restoring from $(BACKUP)..."
+	docker compose exec -T postgres psql -U argus argus < $(BACKUP)
+	@echo "Restore complete."
 
 pipeline-install:
 	$(PIP) install -r pipeline/requirements.txt

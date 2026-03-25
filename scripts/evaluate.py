@@ -49,7 +49,7 @@ def main() -> None:
     )
 
     model = ArgusModel(use_detector=False)
-    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
+    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     evaluator = Evaluator(model=model, device=device)

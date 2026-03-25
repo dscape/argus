@@ -279,7 +279,7 @@ class Trainer:
 
     def load_checkpoint(self, path: str | Path) -> int:
         """Load checkpoint and return the epoch number."""
-        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])

@@ -29,6 +29,7 @@ export default function AiScreeningInspector() {
   const [evalHistory, setEvalHistory] = useState<EvalPoint[]>([]);
   const [modelVersion, setModelVersion] = useState<string | null>(null);
   const inspectedIds = useRef<Set<string>>(new Set());
+  const abortRef = useRef<AbortController | null>(null);
 
   // Fetch eval history on mount
   useEffect(() => {
@@ -42,10 +43,16 @@ export default function AiScreeningInspector() {
         const data = await res.json();
         setEvalHistory(data.evaluations);
       }
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to fetch evaluation history:", e);
+    }
   }
 
   async function runBatch() {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     setResults([]);
     setProgress({ current: 0, total: 0 });
@@ -59,7 +66,9 @@ export default function AiScreeningInspector() {
       const excludeParam = inspectedIds.current.size > 0
         ? `&exclude=${Array.from(inspectedIds.current).join(",")}`
         : "";
-      const sampleRes = await fetch(`/api/models/ai-screening/sample?limit=${sampleSize}${excludeParam}`);
+      const sampleRes = await fetch(`/api/models/ai-screening/sample?limit=${sampleSize}${excludeParam}`, {
+        signal: controller.signal,
+      });
       if (!sampleRes.ok) throw new Error(await sampleRes.text());
       const { video_ids } = await sampleRes.json();
 
@@ -67,10 +76,12 @@ export default function AiScreeningInspector() {
 
       // Step 2: inspect each video individually for progress
       for (let i = 0; i < video_ids.length; i++) {
+        if (controller.signal.aborted) break;
         const res = await fetch("/api/models/ai-screening/inspect", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ video_id: video_ids[i] }),
+          signal: controller.signal,
         });
         if (res.ok) {
           const result: InspectResult = await res.json();
@@ -118,8 +129,10 @@ export default function AiScreeningInspector() {
         });
         if (saveRes.ok) await fetchHistory();
       }
-    } catch (e: any) {
-      alert(e.message);
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      alert(msg);
     } finally {
       setLoading(false);
     }
