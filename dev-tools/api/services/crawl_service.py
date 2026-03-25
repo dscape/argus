@@ -282,6 +282,7 @@ def list_videos(
     offset: int = 0,
     order_by: str | None = None,
     layout_type: str | None = None,
+    video_ids: list[str] | None = None,
 ) -> dict:
     """List videos with live title scoring."""
     conditions = []
@@ -307,6 +308,11 @@ def list_videos(
         else:
             conditions.append("layout_type = %s")
             params.append(layout_type)
+
+    if video_ids:
+        placeholders = ", ".join(["%s"] * len(video_ids))
+        conditions.append(f"video_id IN ({placeholders})")
+        params.extend(video_ids)
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 

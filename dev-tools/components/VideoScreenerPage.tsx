@@ -29,15 +29,18 @@ import {
 
 interface VideoScreenerPageProps {
   channels: CrawlChannel[];
+  initialVideoIds?: string[];
 }
 
-export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) {
+export default function VideoScreenerPage({ channels, initialVideoIds }: VideoScreenerPageProps) {
+  const initialVideoIdsRef = useRef(initialVideoIds);
   const [videos, setVideos] = useState<VideoWithReason[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pageSize, setPageSize] = useState(() => computePageSize());
   const [autoRunning, setAutoRunning] = useState(false);
+  const [aiScreenDone, setAiScreenDone] = useState(false);
   const { toasts, addToast, removeToast } = useToasts();
 
   // Recompute page size on resize
@@ -47,8 +50,8 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // Ref to track whether automatic should run after load
-  const shouldAutoRejectRef = useRef(false);
+  // Ref to track whether AI screening should run after load
+  const shouldAutoScreenRef = useRef(false);
 
   const loadCounts = useCallback(async () => {
     try {
@@ -58,90 +61,9 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
     }
   }, []);
 
-  const runAutomaticReject = useCallback(async (vids: VideoWithReason[]) => {
-    const unscreened = vids.filter((v) => v.screening_status === null);
-    if (unscreened.length === 0) return;
-
-    const toReject = unscreened.filter((v) => !v.title_is_candidate);
-    const toKeep = unscreened.filter((v) => v.title_is_candidate);
-
-    if (toReject.length === 0) {
-      for (const v of toKeep) {
-        setVideos((prev) =>
-          prev.map((pv) =>
-            pv.video_id === v.video_id ? { ...pv, inspect_reason: "title \u2713" } : pv
-          )
-        );
-      }
-      return;
-    }
-
-    const rejectIds = toReject.map((v) => v.video_id);
-
-    try {
-      await batchUpdateVideoStatus(rejectIds, "rejected");
-      const idSet = new Set(rejectIds);
-
-      setVideos((prev) =>
-        prev.map((v) => {
-          if (idSet.has(v.video_id)) {
-            return { ...v, screening_status: "rejected", inspect_reason: `title ${v.title_score.toFixed(2)}` };
-          }
-          if (v.screening_status === null && v.title_is_candidate) {
-            return { ...v, inspect_reason: "title \u2713" };
-          }
-          return v;
-        })
-      );
-
-      await loadCounts();
-
-      addToast({
-        message: `Auto-rejected ${toReject.length} by title, ${toKeep.length} kept`,
-        type: "success",
-        undoAction: async () => {
-          await undoAutoReject(rejectIds);
-          setVideos((prev) =>
-            prev.map((v) =>
-              idSet.has(v.video_id) ? { ...v, screening_status: null, inspect_reason: undefined } : v
-            )
-          );
-          loadCounts();
-        },
-      });
-    } catch (e) {
-      addToast({
-        message: e instanceof Error ? e.message : "Auto reject failed",
-        type: "error",
-      });
-    }
-  }, [loadCounts, addToast]);
-
   const runAiScreen = useCallback(async () => {
-    // Collect videos to screen: unscreened + title-rejected (re-review)
-    const toScreen = videos.filter(
-      (v) => v.screening_status === null || (v.screening_status === "rejected" && v.inspect_reason?.startsWith("title"))
-    );
+    const toScreen = videos.filter((v) => v.screening_status === null);
     if (toScreen.length === 0) return;
-
-    // Undo title-based rejections first so AI can re-evaluate
-    const titleRejectedIds = toScreen
-      .filter((v) => v.screening_status === "rejected" && v.inspect_reason?.startsWith("title"))
-      .map((v) => v.video_id);
-
-    if (titleRejectedIds.length > 0) {
-      try {
-        await undoAutoReject(titleRejectedIds);
-        const idSet = new Set(titleRejectedIds);
-        setVideos((prev) =>
-          prev.map((v) =>
-            idSet.has(v.video_id) ? { ...v, screening_status: null, inspect_reason: undefined } : v
-          )
-        );
-      } catch {
-        // best-effort undo
-      }
-    }
 
     // Process in small chunks so results appear progressively
     const CHUNK_SIZE = 3;
@@ -223,17 +145,29 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
   const loadVideos = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await listCrawlVideos({
-        status: "unscreened",
-        limit: pageSize,
-        offset: 0,
-      });
+      const ids = initialVideoIdsRef.current;
+      initialVideoIdsRef.current = undefined;
+
+      const data = ids
+        ? await listCrawlVideos({ video_ids: ids })
+        : await listCrawlVideos({ status: "unscreened", limit: pageSize, offset: 0 });
+
       setVideos(data.videos);
       setTotal(data.total);
       setSelected(new Set());
 
+      // Update URL with loaded video IDs
+      const loadedIds = data.videos.map((v: CrawlVideo) => v.video_id);
+      const url = new URL(window.location.href);
+      if (loadedIds.length > 0) {
+        url.searchParams.set("videos", loadedIds.join(","));
+      } else {
+        url.searchParams.delete("videos");
+      }
+      window.history.replaceState({}, "", url.toString());
+
       if (data.videos.some((v: CrawlVideo) => v.screening_status === null)) {
-        shouldAutoRejectRef.current = true;
+        shouldAutoScreenRef.current = true;
       }
     } catch (e) {
       addToast({
@@ -245,14 +179,18 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
     }
   }, [pageSize, addToast]);
 
-  // After videos load, run automatic reject if flagged
+  // After videos load, run AI screening automatically
   useEffect(() => {
-    if (!loading && shouldAutoRejectRef.current && videos.length > 0) {
-      shouldAutoRejectRef.current = false;
+    if (!loading && shouldAutoScreenRef.current && videos.length > 0) {
+      shouldAutoScreenRef.current = false;
       setAutoRunning(true);
-      runAutomaticReject(videos).finally(() => setAutoRunning(false));
+      runAiScreen().finally(() => {
+        setAutoRunning(false);
+        setAiScreenDone(true);
+        setTimeout(() => setAiScreenDone(false), 500);
+      });
     }
-  }, [loading, videos, runAutomaticReject]);
+  }, [loading, videos, runAiScreen]);
 
   useEffect(() => {
     loadVideos();
@@ -399,6 +337,8 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
     setAutoRunning(true);
     await runAiScreen();
     setAutoRunning(false);
+    setAiScreenDone(true);
+    setTimeout(() => setAiScreenDone(false), 500);
   }, [runAiScreen]);
 
   const toggleSelect = (videoId: string) => {
@@ -510,14 +450,16 @@ export default function VideoScreenerPage({ channels }: VideoScreenerPageProps) 
           <button
             onClick={handleManualAutoReject}
             className="flex items-center gap-1.5 px-3 h-8 rounded-xl text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 transition-all duration-150 disabled:opacity-50 disabled:pointer-events-none"
-            disabled={autoRunning || !videos.some((v) => v.screening_status === null || (v.screening_status === "rejected" && v.inspect_reason?.startsWith("title")))}
+            disabled={autoRunning || !videos.some((v) => v.screening_status === null)}
           >
             {autoRunning ? (
               <SpinnerIcon className="w-3.5 h-3.5 animate-spin" />
+            ) : aiScreenDone ? (
+              <CheckIcon className="w-3.5 h-3.5" />
             ) : (
               <RobotIcon className="w-3.5 h-3.5" />
             )}
-            {autoRunning ? "Screening..." : "AI Screen"}
+            {autoRunning ? "Screening..." : aiScreenDone ? "Done" : "AI Screen"}
           </button>
 
           {/* Reject Remaining / Reject Selected (red pill) */}

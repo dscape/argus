@@ -263,6 +263,7 @@ export async function listCrawlVideos(params: {
   order_by?: string;
   limit?: number;
   offset?: number;
+  video_ids?: string[];
 }): Promise<CrawlVideosResponse> {
   const qs = new URLSearchParams();
   if (params.channel_id) qs.set("channel_id", params.channel_id);
@@ -271,6 +272,7 @@ export async function listCrawlVideos(params: {
   if (params.order_by) qs.set("order_by", params.order_by);
   if (params.limit !== undefined) qs.set("limit", String(params.limit));
   if (params.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params.video_ids && params.video_ids.length > 0) qs.set("video_ids", params.video_ids.join(","));
   const res = await fetch(`/api/crawl/videos?${qs}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
