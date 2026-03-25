@@ -1,6 +1,6 @@
 """End-to-end tests for overlay FEN extraction on reference videos.
 
-Each approach must achieve 100% square-level accuracy on all 4 ground truth
+Each test must achieve 100% square-level accuracy on all 4 ground truth
 positions.  The test extracts a frame, detects the grid, classifies all 64
 squares, and compares the resulting FEN against the verified ground truth.
 """
@@ -81,36 +81,8 @@ def _compare_boards(predicted: chess.Board, expected: chess.Board, label: str) -
         )
 
 
-# ---------------------------------------------------------------------------
-# Approach A — self-bootstrap heuristic reader
-# ---------------------------------------------------------------------------
-
-
-class TestApproachA:
-    """Heuristic overlay reader (self-bootstrap templates from video)."""
-
-    @pytest.mark.parametrize("name", ["O8Z", "7Ra", "2wW", "Ov8"])
-    def test_fen_exact_match(self, name: str) -> None:
-        from pipeline.overlay.overlay_reader_v2 import read_fen_from_frame
-
-        info = GROUND_TRUTH[name]
-        frame = _extract_frame(info["video"], info["timestamp"])
-
-        fen = read_fen_from_frame(frame, video_path=info["video"])
-        assert fen is not None, f"{name}: read_fen_from_frame returned None"
-
-        predicted = _fen_to_board(fen)
-        expected = _fen_to_board(info["fen"])
-        _compare_boards(predicted, expected, f"Approach A / {name}")
-
-
-# ---------------------------------------------------------------------------
-# Approach B — CNN piece classifier
-# ---------------------------------------------------------------------------
-
-
-class TestApproachB:
-    """DINOv2-based CNN piece classifier."""
+class TestOverlayFenExtraction:
+    """CNN piece classifier must achieve 100% accuracy on all reference videos."""
 
     @pytest.mark.parametrize("name", ["O8Z", "7Ra", "2wW", "Ov8"])
     def test_fen_exact_match(self, name: str) -> None:
@@ -124,4 +96,4 @@ class TestApproachB:
 
         predicted = _fen_to_board(fen)
         expected = _fen_to_board(info["fen"])
-        _compare_boards(predicted, expected, f"Approach B / {name}")
+        _compare_boards(predicted, expected, name)

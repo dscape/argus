@@ -1,0 +1,11 @@
+{
+  "code_version": "v1",
+  "revision": 1,
+  "version": "v1r1",
+  "trained_at": "2026-03-25T23:41:11.471464+00:00",
+  "best_val_accuracy": 0.9308,
+  "epochs": 3,
+  "train_size": 520,
+  "val_size": 130,
+  "seed": 77
+}

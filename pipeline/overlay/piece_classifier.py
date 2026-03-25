@@ -1,4 +1,4 @@
-"""DINOv2-based per-square piece classifier (Approach B).
+"""DINOv2-based per-square piece classifier for 2D overlay boards.
 
 Architecture: Frozen DINOv2-base → 768D pooled → MLP head → 13 classes.
 Follows the ScreeningClassifier pattern from pipeline/screen/ai_classifier.py.
@@ -8,7 +8,9 @@ Classes: empty, P, N, B, R, Q, K, p, n, b, r, q, k  (indices 0–12).
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from pathlib import Path
 
 import chess
@@ -21,10 +23,18 @@ from pipeline.overlay.grid_detector import find_board_in_frame
 
 logger = logging.getLogger(__name__)
 
+# Bump this when model architecture or feature extraction changes. Format: v{N}
+# v1: DINOv2-base frozen → MLP(768→256→13), trained on synthetic SVG+3D pieces
+MODEL_CODE_VERSION = "v1"
+
 NUM_CLASSES = 13
 INPUT_SIZE = 224
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+
+# Pre-computed normalisation tensors (avoid re-creating on every call)
+_NORM_MEAN = torch.tensor(IMAGENET_MEAN, dtype=torch.float32).view(1, 3, 1, 1)
+_NORM_STD = torch.tensor(IMAGENET_STD, dtype=torch.float32).view(1, 3, 1, 1)
 
 CLASS_TO_PIECE: dict[int, chess.Piece | None] = {
     0: None,
@@ -42,7 +52,8 @@ CLASS_TO_PIECE: dict[int, chess.Piece | None] = {
     12: chess.Piece(chess.KING, chess.BLACK),
 }
 
-WEIGHTS_DIR = Path("weights/piece_classifier")
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "piece_classifier"
 
 
 # ---------------------------------------------------------------------------
@@ -73,18 +84,26 @@ class PieceClassifier(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Preprocessing
+# Preprocessing — batched for performance
 # ---------------------------------------------------------------------------
 
 
-def preprocess_square(square_bgr: np.ndarray) -> torch.Tensor:
-    """Convert a BGR square crop to a normalised DINOv2 input tensor."""
-    rgb = cv2.cvtColor(square_bgr, cv2.COLOR_BGR2RGB)
-    resized = cv2.resize(rgb, (INPUT_SIZE, INPUT_SIZE))
-    tensor = torch.from_numpy(resized).float().permute(2, 0, 1) / 255.0
-    mean = torch.tensor(IMAGENET_MEAN).view(3, 1, 1)
-    std = torch.tensor(IMAGENET_STD).view(3, 1, 1)
-    return (tensor - mean) / std
+def preprocess_squares_batch(squares: list[list[np.ndarray]]) -> torch.Tensor:
+    """Convert an 8×8 grid of BGR square crops to a (64, 3, 224, 224) tensor.
+
+    Batches all conversions and applies normalisation in one vectorised pass.
+    """
+    resized: list[np.ndarray] = []
+    for r in range(8):
+        for c in range(8):
+            rgb = cv2.cvtColor(squares[r][c], cv2.COLOR_BGR2RGB)
+            resized.append(cv2.resize(rgb, (INPUT_SIZE, INPUT_SIZE)))
+
+    # (64, 224, 224, 3) uint8 → (64, 3, 224, 224) float32
+    arr = np.stack(resized)  # (64, H, W, 3)
+    tensor = torch.from_numpy(arr).float().permute(0, 3, 1, 2) / 255.0
+    tensor = (tensor - _NORM_MEAN) / _NORM_STD
+    return tensor
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +124,19 @@ def _get_model(device: str = "cpu") -> PieceClassifier:
     if weights_path.exists():
         state = torch.load(weights_path, map_location=device, weights_only=True)
         model.head.load_state_dict(state["head"])
-        logger.info("Loaded piece classifier weights from %s", weights_path)
+        # Log version if metadata exists
+        meta_path = WEIGHTS_DIR / "metadata.json"
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = json.load(f)
+            logger.info(
+                "Loaded piece classifier %s (val_acc=%.4f) from %s",
+                meta.get("version", "?"),
+                meta.get("best_val_accuracy", 0),
+                weights_path,
+            )
+        else:
+            logger.info("Loaded piece classifier weights from %s", weights_path)
     else:
         logger.warning("No piece classifier weights at %s — using random head", weights_path)
 
@@ -122,20 +153,13 @@ def classify_squares(
 ) -> list[list[int]]:
     """Classify all 64 squares. Returns 8×8 grid of class indices (0–12)."""
     model = _get_model(device)
-    batch: list[torch.Tensor] = []
-    for r in range(8):
-        for c in range(8):
-            batch.append(preprocess_square(squares[r][c]))
+    input_tensor = preprocess_squares_batch(squares).to(device)
 
-    input_tensor = torch.stack(batch).to(device)  # (64, 3, 224, 224)
     with torch.no_grad():
         logits = model(input_tensor)  # (64, 13)
     preds = logits.argmax(dim=1).cpu().tolist()
 
-    result: list[list[int]] = []
-    for r in range(8):
-        result.append(preds[r * 8 : (r + 1) * 8])
-    return result
+    return [preds[r * 8 : (r + 1) * 8] for r in range(8)]
 
 
 # ---------------------------------------------------------------------------

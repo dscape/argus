@@ -13,6 +13,7 @@ With augmentations:
 - Gaussian blur
 - JPEG compression artefacts
 - Random move-highlight tints (yellow, green, blue)
+- Coordinate label overlays
 - Resize noise (render at high-res then down-sample)
 
 Classes (13):
@@ -24,8 +25,11 @@ Classes (13):
 from __future__ import annotations
 
 import io
+import json
 import logging
+import os
 import random
+from datetime import datetime, timezone
 from pathlib import Path
 
 import chess
@@ -38,8 +42,12 @@ logger = logging.getLogger(__name__)
 
 # Class index mapping — matches PIECE_CLASSES in overlay_reader.py
 CLASS_NAMES = ["empty", "P", "N", "B", "R", "Q", "K", "p", "n", "b", "r", "q", "k"]
+NUM_CLASSES = len(CLASS_NAMES)
 
 PIECE_TYPES = [chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING]
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DATASET_DIR = _PROJECT_ROOT / "data" / "piece_classifier_dataset"
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +142,7 @@ def _render_3d_square(
         sprite = cache.get_or_render(piece_type, is_white, material, size, light_dir, rng)
     else:
         from argus.datagen.piece_renderer import render_piece_sprite
+
         sprite = render_piece_sprite(piece_type, material, is_white, size, light_dir, rng)
 
     # Composite sprite onto background
@@ -154,16 +163,16 @@ def _augment(img: np.ndarray, rng: random.Random) -> np.ndarray:
     """Apply random augmentations to a square image."""
     # Brightness / contrast
     alpha = rng.uniform(0.8, 1.2)  # contrast
-    beta = rng.uniform(-20, 20)    # brightness
+    beta = rng.uniform(-20, 20)  # brightness
     img = np.clip(img.astype(float) * alpha + beta, 0, 255).astype(np.uint8)
 
     # Random highlight tint (simulate move highlights)
     if rng.random() < 0.15:
         tint_color = rng.choice([
-            (0, 200, 200),   # yellow-ish
-            (0, 200, 0),     # green
-            (200, 100, 0),   # blue-ish
-            (0, 100, 200),   # orange
+            (0, 200, 200),  # yellow-ish
+            (0, 200, 0),  # green
+            (200, 100, 0),  # blue-ish
+            (0, 100, 200),  # orange
         ])
         tint = np.full_like(img, tint_color, dtype=np.uint8)
         alpha_tint = rng.uniform(0.15, 0.35)
@@ -208,17 +217,76 @@ OVERLAY_THEMES = [
 
 
 # ---------------------------------------------------------------------------
+# Dataset persistence
+# ---------------------------------------------------------------------------
+
+
+def save_dataset(
+    images: np.ndarray,
+    labels: np.ndarray,
+    output_dir: str | Path,
+    *,
+    seed: int,
+    num_samples_per_class: int,
+    size: int,
+) -> None:
+    """Save a generated dataset to disk."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    np.save(output_dir / "images.npy", images)
+    np.save(output_dir / "labels.npy", labels)
+
+    metadata = {
+        "seed": seed,
+        "num_samples_per_class": num_samples_per_class,
+        "size": size,
+        "total_samples": len(images),
+        "num_classes": NUM_CLASSES,
+        "class_names": CLASS_NAMES,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with open(output_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    logger.info(
+        "Saved dataset: %d images (%d/class) to %s",
+        len(images),
+        num_samples_per_class,
+        output_dir,
+    )
+
+
+def load_dataset(data_dir: str | Path) -> tuple[np.ndarray, np.ndarray] | None:
+    """Load a previously saved dataset. Returns (images, labels) or None."""
+    data_dir = Path(data_dir)
+    images_path = data_dir / "images.npy"
+    labels_path = data_dir / "labels.npy"
+
+    if not images_path.exists() or not labels_path.exists():
+        return None
+
+    images = np.load(images_path)
+    labels = np.load(labels_path)
+    logger.info("Loaded dataset: %d images from %s", len(images), data_dir)
+    return images, labels
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
 def generate_dataset(
-    output_dir: str | Path,
     num_samples_per_class: int = 500,
     size: int = 128,
     seed: int = 42,
+    output_dir: str | Path | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generate a balanced dataset of piece square crops.
+
+    If *output_dir* is given, saves the dataset there. Defaults to
+    ``data/piece_classifier_dataset/``.
 
     Returns (images, labels) where:
     - images: (N, size, size, 3) uint8 BGR
@@ -233,16 +301,15 @@ def generate_dataset(
     use_3d = _3D_AVAILABLE and len(PIECE_MATERIALS) > 0
     cache = PieceRenderCache() if use_3d else None
 
-    for class_idx in range(13):
-        for i in range(num_samples_per_class):
+    for class_idx in range(NUM_CLASSES):
+        for _i in range(num_samples_per_class):
             is_light = rng.random() < 0.5
             use_svg = not use_3d or rng.random() < 0.7  # bias toward SVG (overlay-style)
 
             if class_idx == 0:
-                # Empty square
                 piece = None
                 piece_type = None
-                is_white = True  # irrelevant
+                is_white = True
             else:
                 is_white = class_idx <= 6
                 pt_idx = (class_idx - 1) % 6
@@ -265,4 +332,17 @@ def generate_dataset(
 
     # Shuffle
     perm = np_rng.permutation(len(images_arr))
-    return images_arr[perm], labels_arr[perm]
+    images_arr, labels_arr = images_arr[perm], labels_arr[perm]
+
+    # Save to disk
+    save_dir = Path(output_dir) if output_dir else DATASET_DIR
+    save_dataset(
+        images_arr,
+        labels_arr,
+        save_dir,
+        seed=seed,
+        num_samples_per_class=num_samples_per_class,
+        size=size,
+    )
+
+    return images_arr, labels_arr
