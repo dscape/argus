@@ -122,7 +122,20 @@ class ScreeningFeatureExtractor:
         frames = fetch_youtube_frames(video_id)
         if not frames:
             return None
+        return self.extract_features_from_frames(frames)
 
+    def extract_features_from_frames(
+        self,
+        frames: list[tuple[np.ndarray, str]],
+        precomputed_scores: list[tuple[float, float]] | None = None,
+    ) -> dict:
+        """Extract features from already-fetched frames.
+
+        Args:
+            frames: List of (frame_bgr, label) tuples.
+            precomputed_scores: Optional list of (overlay_score, otb_score) per frame.
+                When provided, skips the scanner/OTB calls entirely.
+        """
         embeddings = torch.zeros(NUM_FRAMES, EMBED_DIM)
         scanner_scores = torch.zeros(NUM_FRAMES)
         otb_scores = torch.zeros(NUM_FRAMES)
@@ -137,15 +150,18 @@ class ScreeningFeatureExtractor:
                     emb = self.encoder.forward_pooled(input_tensor)  # (1, 768)
                 embeddings[i] = emb.squeeze(0).cpu()
 
-                # Overlay scanner score
-                detection = detect_overlay_in_frame(frame_bgr)
-                scanner_scores[i] = detection.score if detection.found else 0.0
+                if precomputed_scores is not None and i < len(precomputed_scores):
+                    scanner_scores[i] = precomputed_scores[i][0]
+                    otb_scores[i] = precomputed_scores[i][1]
+                else:
+                    # Overlay scanner score
+                    detection = detect_overlay_in_frame(frame_bgr)
+                    scanner_scores[i] = detection.score if detection.found else 0.0
 
-                # OTB detection score
-                if detection.found and detection.bbox:
-                    otb_det = detect_otb_region(frame_bgr, detection.bbox)
-                    otb_scores[i] = otb_det.confidence
-            # Else: leave as zeros (missing frame)
+                    # OTB detection score
+                    if detection.found and detection.bbox:
+                        otb_det = detect_otb_region(frame_bgr, detection.bbox)
+                        otb_scores[i] = otb_det.confidence
 
         return {
             "embeddings": embeddings,

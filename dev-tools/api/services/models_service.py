@@ -3,6 +3,7 @@
 import base64
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
@@ -75,28 +76,32 @@ def inspect_ai_screening(video_id: str) -> dict | None:
     # Detect vertical video
     vertical = is_vertical_video(frames)
 
-    frame_results = []
-    for frame_bgr, label in frames:
+    # Scan all frames in parallel (numpy/OpenCV release the GIL)
+    def _scan_frame(frame_bgr: np.ndarray, label: str) -> dict:
         h, w = frame_bgr.shape[:2]
-
-        # Overlay scanner
         det = detect_overlay_in_frame(frame_bgr)
         overlay_score = det.score if det.found else 0.0
-
-        # OTB detector
         otb_score = 0.0
         if det.found and det.bbox:
             otb_det = detect_otb_region(frame_bgr, det.bbox)
             otb_score = otb_det.confidence
-
-        frame_results.append({
+        return {
             "label": label,
             "width": w,
             "height": h,
             "image_base64": _frame_to_base64(frame_bgr),
             "overlay_score": round(overlay_score, 3),
             "otb_score": round(otb_score, 3),
-        })
+        }
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(_scan_frame, f, l) for f, l in frames]
+        frame_results = [fut.result() for fut in futures]
+
+    # Pre-computed scores to avoid re-running the scanner in the classifier
+    precomputed_scores = [
+        (fr["overlay_score"], fr["otb_score"]) for fr in frame_results
+    ]
 
     # Auto-reject vertical videos without running the classifier
     prediction = None
@@ -117,7 +122,7 @@ def inspect_ai_screening(video_id: str) -> dict | None:
             )
 
             extractor = ScreeningFeatureExtractor(device="cpu")
-            features = extractor.extract_features(video_id)
+            features = extractor.extract_features_from_frames(frames, precomputed_scores)
 
             if features is not None:
                 model = ScreeningClassifier()

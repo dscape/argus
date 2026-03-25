@@ -2,6 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { useState, useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import {
   getVideo,
@@ -799,82 +800,61 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
 
 // ── Step 4: Extract ─────────────────────────────────────────
 
-function ExtractStep({ video }: { video: CrawlVideo }) {
-  const [downloadStatus, setDownloadStatus] = useState<DownloadStatus | null>(null);
-  const [session, setSession] = useState<VideoSession | null>(null);
-  const [clips, setClips] = useState<VideoClip[]>([]);
-  const [frameIdx, setFrameIdx] = useState(0);
+function ClipExtractCard({
+  clip,
+  session,
+}: {
+  clip: VideoClip;
+  session: VideoSession;
+}) {
+  const fps = session.fps;
+  const startFrame = Math.round(clip.start_time * fps);
+  const endFrame = clip.end_time != null ? Math.round(clip.end_time * fps) : session.total_frames - 1;
+
+  const [frameIdx, setFrameIdx] = useState(startFrame);
   const [overlayResult, setOverlayResult] = useState<FrameOverlayResponse | null>(null);
   const [readingFrame, setReadingFrame] = useState(false);
-  // Per-clip detection results: Map<clipId, result>
-  const [detections, setDetections] = useState<Map<number, VideoMoveDetectionResponse>>(new Map());
-  const [detectingClipId, setDetectingClipId] = useState<number | null>(null);
+  const [detection, setDetection] = useState<VideoMoveDetectionResponse | null>(null);
+  const [detectingMoves, setDetectingMoves] = useState(false);
   const [expandedSegment, setExpandedSegment] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    getDownloadStatus(video.video_id).then(setDownloadStatus);
-    listVideoClips(video.video_id).then(setClips);
-  }, [video.video_id]);
-
-  useEffect(() => {
-    if (downloadStatus?.downloaded && downloadStatus.path && !session) {
-      openVideo(downloadStatus.path, video.channel_handle || undefined)
-        .then(setSession)
-        .catch((e) => setError(e.message));
-    }
-  }, [downloadStatus, video.channel_handle, session]);
 
   const handleReadFrame = async () => {
-    if (!session) return;
     setReadingFrame(true);
-    setError(null);
     try {
-      const result = await readOverlayFrame(session.session_id, frameIdx, clips[0]?.id);
+      const result = await readOverlayFrame(session.session_id, frameIdx, clip.id);
       setOverlayResult(result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to read overlay");
+      toast.error(e instanceof Error ? e.message : "Failed to read overlay");
     } finally {
       setReadingFrame(false);
     }
   };
 
-  const handleDetectMoves = async (clipId?: number) => {
-    if (!session) return;
-    setDetectingClipId(clipId ?? -1);
-    setError(null);
+  const handleDetectMoves = async () => {
+    setDetectingMoves(true);
     try {
-      const result = await detectVideoMoves(session.session_id, 2.0, clipId);
-      setDetections((prev) => new Map(prev).set(clipId ?? -1, result));
+      const result = await detectVideoMoves(session.session_id, 2.0, clip.id);
+      setDetection(result);
       if (result.segments.length > 0) setExpandedSegment(0);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Move detection failed");
+      toast.error(e instanceof Error ? e.message : "Move detection failed");
     } finally {
-      setDetectingClipId(null);
+      setDetectingMoves(false);
     }
   };
 
-  if (!downloadStatus?.downloaded) {
-    return <p className="text-sm text-muted-foreground pt-2">Video must be downloaded first.</p>;
-  }
-
-  if (!session) {
-    return <p className="text-sm text-muted-foreground pt-2">Opening video session...</p>;
-  }
-
-  const hasClips = clips.length > 0;
-  if (!hasClips && !session.has_calibration) {
-    return <p className="text-sm text-muted-foreground pt-2">No clips or calibration found. Go to the Calibrate step first.</p>;
-  }
-
-  const fps = session.fps;
-  const totalFrames = session.total_frames;
-
   return (
-    <div className="space-y-6 pt-2 max-w-5xl">
-      {/* Frame-by-frame overlay reading */}
-      <section className="space-y-3">
-        <h3 className="text-sm font-semibold">Frame Sampling</h3>
+    <div className="border rounded-lg p-3 space-y-3">
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <span className="text-xs font-medium">{clip.label || `Clip ${clip.clip_index + 1}`}</span>
+        <span className="text-[10px] text-muted-foreground">
+          {fmtTime(clip.start_time)} &mdash; {clip.end_time != null ? fmtTime(clip.end_time) : "end"}
+        </span>
+      </div>
+
+      {/* Frame sampling */}
+      <div className="space-y-2">
         <div className="flex items-center gap-3">
           <div className="flex-1">
             <div className="text-xs text-muted-foreground mb-1">
@@ -882,8 +862,8 @@ function ExtractStep({ video }: { video: CrawlVideo }) {
             </div>
             <input
               type="range"
-              min={0}
-              max={totalFrames - 1}
+              min={startFrame}
+              max={endFrame}
               step={Math.max(1, Math.round(fps))}
               value={frameIdx}
               onChange={(e) => setFrameIdx(Number(e.target.value))}
@@ -924,87 +904,77 @@ function ExtractStep({ video }: { video: CrawlVideo }) {
             </div>
           </div>
         )}
-      </section>
+      </div>
 
       <hr />
 
-      {/* Move detection: per-clip or whole-video */}
-      <section className="space-y-3">
-        <h3 className="text-sm font-semibold">Move Detection</h3>
-
-        {hasClips ? (
-          <div className="space-y-4">
-            {clips.map((clip) => {
-              const detection = detections.get(clip.id);
-              const isDetecting = detectingClipId === clip.id;
-              return (
-                <div key={clip.id} className="border rounded-lg p-3 space-y-2">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs font-medium">{clip.label || `Clip ${clip.clip_index + 1}`}</span>
-                    <span className="text-[10px] text-muted-foreground">
-                      {fmtTime(clip.start_time)} &mdash; {clip.end_time != null ? fmtTime(clip.end_time) : "end"}
-                    </span>
-                    <button
-                      onClick={() => handleDetectMoves(clip.id)}
-                      disabled={isDetecting}
-                      className="px-3 py-1 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 disabled:opacity-50"
-                    >
-                      {isDetecting ? "Detecting..." : "Run Detection"}
-                    </button>
-                  </div>
-                  {detection && (
-                    <div className="space-y-2 pl-2">
-                      <div className="text-xs text-muted-foreground">
-                        Sampled {detection.num_frames_sampled} frames, {detection.num_readable} readable.
-                        Found {detection.segments.length} game(s).
-                      </div>
-                      {detection.segments.map((seg) => (
-                        <SegmentCard
-                          key={seg.game_index}
-                          segment={seg}
-                          expanded={expandedSegment === seg.game_index}
-                          onToggle={() => setExpandedSegment(expandedSegment === seg.game_index ? null : seg.game_index)}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <button
-              onClick={() => handleDetectMoves()}
-              disabled={detectingClipId !== null}
-              className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
-            >
-              {detectingClipId !== null ? "Detecting moves..." : "Run Move Detection"}
-            </button>
-            {(() => {
-              const det = detections.get(-1);
-              if (!det) return null;
-              return (
-                <div className="space-y-3">
-                  <div className="text-xs text-muted-foreground">
-                    Sampled {det.num_frames_sampled} frames, {det.num_readable} readable.
-                    Found {det.segments.length} game segment(s).
-                  </div>
-                  {det.segments.map((seg) => (
-                    <SegmentCard
-                      key={seg.game_index}
-                      segment={seg}
-                      expanded={expandedSegment === seg.game_index}
-                      onToggle={() => setExpandedSegment(expandedSegment === seg.game_index ? null : seg.game_index)}
-                    />
-                  ))}
-                </div>
-              );
-            })()}
+      {/* Move detection */}
+      <div className="space-y-2">
+        <button
+          onClick={handleDetectMoves}
+          disabled={detectingMoves}
+          className="px-3 py-1 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 disabled:opacity-50"
+        >
+          {detectingMoves ? "Detecting..." : "Run Detection"}
+        </button>
+        {detection && (
+          <div className="space-y-2 pl-2">
+            <div className="text-xs text-muted-foreground">
+              Sampled {detection.num_frames_sampled} frames, {detection.num_readable} readable.
+              Found {detection.segments.length} game(s).
+            </div>
+            {detection.segments.map((seg) => (
+              <SegmentCard
+                key={seg.game_index}
+                segment={seg}
+                expanded={expandedSegment === seg.game_index}
+                onToggle={() => setExpandedSegment(expandedSegment === seg.game_index ? null : seg.game_index)}
+              />
+            ))}
           </div>
         )}
-      </section>
+      </div>
 
+    </div>
+  );
+}
+
+function ExtractStep({ video }: { video: CrawlVideo }) {
+  const [downloadStatus, setDownloadStatus] = useState<DownloadStatus | null>(null);
+  const [session, setSession] = useState<VideoSession | null>(null);
+  const [clips, setClips] = useState<VideoClip[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getDownloadStatus(video.video_id).then(setDownloadStatus);
+    listVideoClips(video.video_id).then(setClips);
+  }, [video.video_id]);
+
+  useEffect(() => {
+    if (downloadStatus?.downloaded && downloadStatus.path && !session) {
+      openVideo(downloadStatus.path, video.channel_handle || undefined)
+        .then(setSession)
+        .catch((e) => setError(e.message));
+    }
+  }, [downloadStatus, video.channel_handle, session]);
+
+  if (!downloadStatus?.downloaded) {
+    return <p className="text-sm text-muted-foreground pt-2">Video must be downloaded first.</p>;
+  }
+
+  if (!session) {
+    return <p className="text-sm text-muted-foreground pt-2">Opening video session...</p>;
+  }
+
+  if (clips.length === 0) {
+    return <p className="text-sm text-muted-foreground pt-2">No clips found. Go to the Calibrate step first.</p>;
+  }
+
+  return (
+    <div className="space-y-4 pt-2 max-w-5xl">
+      {clips.map((clip) => (
+        <ClipExtractCard key={clip.id} clip={clip} session={session} />
+      ))}
       {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
