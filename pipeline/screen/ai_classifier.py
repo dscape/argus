@@ -72,15 +72,30 @@ class ScreeningClassifier(nn.Module):
         return self.classifier(features)
 
 
+_cached_encoder = None
+_cached_encoder_device: str | None = None
+
+
+def _get_encoder(device: str = "cpu"):
+    """Return a cached frozen DINOv2 encoder, loading it only once."""
+    global _cached_encoder, _cached_encoder_device
+    if _cached_encoder is not None and _cached_encoder_device == device:
+        return _cached_encoder
+    from argus.model.vision_encoder import VisionEncoder
+
+    encoder = VisionEncoder(frozen=True).to(torch.device(device))
+    encoder.eval()
+    _cached_encoder = encoder
+    _cached_encoder_device = device
+    return encoder
+
+
 class ScreeningFeatureExtractor:
     """Extract DINOv2 embeddings + scanner scores from YouTube thumbnails."""
 
     def __init__(self, device: str = "cpu") -> None:
-        from argus.model.vision_encoder import VisionEncoder
-
         self.device = torch.device(device)
-        self.encoder = VisionEncoder(frozen=True).to(self.device)
-        self.encoder.eval()
+        self.encoder = _get_encoder(device)
 
     def _preprocess_frame(self, frame_bgr: np.ndarray) -> torch.Tensor:
         """Resize and normalize a BGR frame for DINOv2 input."""

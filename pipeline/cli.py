@@ -331,6 +331,18 @@ def cmd_ai_screen(args):
     )
 
 
+def cmd_ai_profile(args):
+    """Profile AI screening pipeline for a single video."""
+    from pipeline.screen.ai_profiler import format_profile, profile_video
+    records, prediction = profile_video(
+        video_id=args.video_id,
+        checkpoint_path=args.checkpoint,
+        device=args.device,
+        force_uncached=args.force_uncached,
+    )
+    format_profile(records, prediction, video_id=args.video_id)
+
+
 def cmd_auto_calibrate(args):
     """Auto-propose calibration for a channel from screening data."""
     from pipeline.overlay.auto_calibration import (
@@ -659,6 +671,13 @@ def main():
     p.add_argument("--threshold", type=float, default=0.85, help="Confidence threshold for auto-deciding")
     p.add_argument("--device", type=str, default="cpu", help="Torch device")
 
+    # ai-profile
+    p = subparsers.add_parser("ai-profile", help="Profile AI screening pipeline for a single video")
+    p.add_argument("--video-id", type=str, required=True, help="YouTube video ID to profile")
+    p.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint (default: best.pt)")
+    p.add_argument("--device", type=str, default="cpu", help="Torch device")
+    p.add_argument("--force-uncached", action="store_true", help="Skip feature cache to force full pipeline")
+
     # auto-calibrate
     p = subparsers.add_parser("auto-calibrate", help="Auto-propose calibration for a channel")
     p.add_argument("--channel", type=str, required=True, help="Channel handle (e.g. @STLChessClub)")
@@ -706,6 +725,7 @@ def main():
         "ai-train": cmd_ai_train,
         "ai-eval": cmd_ai_eval,
         "ai-screen": cmd_ai_screen,
+        "ai-profile": cmd_ai_profile,
         "auto-calibrate": cmd_auto_calibrate,
         "smoke-test": cmd_smoke_test,
         "inspect-calibration": cmd_inspect_calibration,

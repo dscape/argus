@@ -17,7 +17,11 @@ class VisionEncoder(nn.Module):
         embed_dim: int = 768,
     ) -> None:
         super().__init__()
-        self.model = Dinov2Model.from_pretrained(model_name)
+        try:
+            self.model = Dinov2Model.from_pretrained(model_name, local_files_only=True)
+        except OSError:
+            # First run — model not yet downloaded locally
+            self.model = Dinov2Model.from_pretrained(model_name)
         self.embed_dim = embed_dim
         if frozen:
             self.freeze()

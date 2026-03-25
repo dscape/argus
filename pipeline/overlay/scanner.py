@@ -78,29 +78,23 @@ def compute_grid_regularity(region: np.ndarray) -> float:
 
     cell_h = h // 8
     cell_w = w // 8
-    low_variance_count = 0
+    margin_y = max(1, cell_h // 6)
+    margin_x = max(1, cell_w // 6)
+    inner_h = cell_h - 2 * margin_y
+    inner_w = cell_w - 2 * margin_x
 
-    for row in range(8):
-        for col in range(8):
-            y1 = row * cell_h
-            y2 = y1 + cell_h
-            x1 = col * cell_w
-            x2 = x1 + cell_w
-            cell = gray[y1:y2, x1:x2]
+    if inner_h <= 0 or inner_w <= 0:
+        return 0.0
 
-            # Shrink slightly to avoid edge effects between squares
-            margin_y = max(1, cell_h // 6)
-            margin_x = max(1, cell_w // 6)
-            inner = cell[margin_y:-margin_y, margin_x:-margin_x]
+    # Reshape into (8, cell_h, 8, cell_w) then transpose to (8, 8, cell_h, cell_w)
+    trimmed = gray[: cell_h * 8, : cell_w * 8]
+    grid = trimmed.reshape(8, cell_h, 8, cell_w).transpose(0, 2, 1, 3)
 
-            if inner.size == 0:
-                continue
+    # Apply uniform margin to each cell, flatten spatial dims, compute variance
+    inner = grid[:, :, margin_y : cell_h - margin_y, margin_x : cell_w - margin_x]
+    variances = inner.reshape(8, 8, -1).astype(np.float64).var(axis=2)
 
-            variance = float(np.var(inner))
-            if variance < MAX_RENDERED_SQUARE_VARIANCE:
-                low_variance_count += 1
-
-    return low_variance_count / 64.0
+    return int(np.sum(variances < MAX_RENDERED_SQUARE_VARIANCE)) / 64.0
 
 
 def check_alternating_pattern(region: np.ndarray) -> bool:
@@ -114,36 +108,27 @@ def check_alternating_pattern(region: np.ndarray) -> bool:
     cell_h = h // 8
     cell_w = w // 8
 
-    means = np.zeros((8, 8))
-    for row in range(8):
-        for col in range(8):
-            y1 = row * cell_h
-            y2 = y1 + cell_h
-            x1 = col * cell_w
-            x2 = x1 + cell_w
-            means[row, col] = np.mean(gray[y1:y2, x1:x2])
+    if cell_h == 0 or cell_w == 0:
+        return False
 
-    # Check horizontal alternation: adjacent cells should differ
-    alternation_count = 0
-    total_pairs = 0
-    for row in range(8):
-        for col in range(7):
-            diff = abs(means[row, col] - means[row, col + 1])
-            total_pairs += 1
-            if diff > 15:  # Meaningful brightness difference
-                alternation_count += 1
+    # Compute per-cell means via reshape
+    trimmed = gray[: cell_h * 8, : cell_w * 8]
+    means = (
+        trimmed.reshape(8, cell_h, 8, cell_w)
+        .transpose(0, 2, 1, 3)
+        .reshape(8, 8, -1)
+        .mean(axis=2)
+    )
 
-    # Also check vertical
-    for row in range(7):
-        for col in range(8):
-            diff = abs(means[row, col] - means[row + 1, col])
-            total_pairs += 1
-            if diff > 15:
-                alternation_count += 1
+    # Check horizontal and vertical alternation with vectorized diffs
+    h_diffs = np.abs(means[:, :-1] - means[:, 1:])  # (8, 7)
+    v_diffs = np.abs(means[:-1, :] - means[1:, :])  # (7, 8)
+    alternation_count = int(np.sum(h_diffs > 15) + np.sum(v_diffs > 15))
+    total_pairs = 8 * 7 + 7 * 8  # 112
 
     # Rendered boards won't have perfect alternation everywhere (pieces change
     # cell brightness), but should have it in most empty cells.
-    return alternation_count / total_pairs > 0.35 if total_pairs > 0 else False
+    return alternation_count / total_pairs > 0.35
 
 
 def _expand_bbox(
@@ -362,10 +347,17 @@ def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
     h, w = frame.shape[:2]
     resolution = (w, h)
 
+    # Precompute grayscale once instead of per-window.
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+
     best_score = 0.0
     best_bbox = None
+    found_early = False
 
     for scale in SCAN_SCALES:
+        if found_early:
+            break
+
         win_size = int(min(h, w) * scale)
         if win_size < 64:
             continue
@@ -373,8 +365,10 @@ def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
         step = max(1, int(win_size * SCAN_STEP_FRACTION))
 
         for y in range(0, h - win_size + 1, step):
+            if found_early:
+                break
             for x in range(0, w - win_size + 1, step):
-                region = frame[y : y + win_size, x : x + win_size]
+                region = gray[y : y + win_size, x : x + win_size]
                 regularity = compute_grid_regularity(region)
 
                 if regularity > MIN_LOW_VARIANCE_RATIO:
@@ -384,6 +378,10 @@ def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
                     if score > best_score:
                         best_score = score
                         best_bbox = (x, y, win_size, win_size)
+
+                        if best_score > 0.9:
+                            found_early = True
+                            break
 
     if best_bbox is not None and best_score > MIN_LOW_VARIANCE_RATIO:
         # Expand the seed detection to cover the full board.
