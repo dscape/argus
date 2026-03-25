@@ -4,7 +4,7 @@ from pipeline.screen.title_filter import score_title
 
 
 class TestPositivePatterns:
-    """Titles with OTB chess signals should be candidates."""
+    """Titles with OTB chess signals should pass the filter."""
 
     def test_vs_pattern(self):
         ok, conf = score_title("Carlsen vs Nepomniachtchi | World Championship 2023")

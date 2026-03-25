@@ -90,7 +90,7 @@ def score_title(title: str) -> tuple[bool, float]:
     """Score a video title for OTB chess footage likelihood.
 
     Returns:
-        (is_candidate, confidence) where is_candidate is True if the title
+        (is_match, confidence) where is_match is True if the title
         passes the filter, and confidence is a 0-1 score.
     """
     if not title or not title.strip():
@@ -137,8 +137,8 @@ def score_title(title: str) -> tuple[bool, float]:
     if score > 0 and re.search(r"\b20[0-2]\d\b", title):
         score += 0.1
 
-    # Threshold: need at least 0.15 to be a candidate
-    is_candidate = score >= 0.15
+    # Threshold: need at least 0.15 to pass
+    is_match = score >= 0.15
     confidence = min(score, 1.0)
 
-    return is_candidate, confidence
+    return is_match, confidence

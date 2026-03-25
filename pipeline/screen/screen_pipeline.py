@@ -1,7 +1,7 @@
 """Orchestrate video screening: title filtering + frame-level detection.
 
 Two-stage screening process:
-1. Title filter (cheap): regex-based keyword matching to identify candidates
+1. Title filter (cheap): regex-based keyword matching to reject non-chess titles
 2. Frame sampling (expensive): extract stills and detect overlay + OTB regions
 
 Optional AI screening stage:
@@ -28,11 +28,10 @@ def screen_all(
 ):
     """Screen crawled videos for overlay + OTB training suitability.
 
-    Stage 1: Score titles with keyword matching. Videos that pass become
-    'candidate' status.
+    Stage 1: Score titles with keyword matching. Titles that fail are rejected.
 
-    Stage 2: For candidates, sample frames and detect overlay + OTB regions.
-    Videos with both get 'approved'; others get 'rejected'.
+    Stage 2: For titles that pass, sample frames and detect overlay + OTB
+    regions. Videos with both get 'approved'; others get 'rejected'.
 
     Args:
         channel_handle: If provided, only screen videos from this channel.
@@ -68,24 +67,24 @@ def screen_all(
     print(f"Screening {len(videos)} videos...")
 
     # Stage 1: Title filtering
-    candidates = []
+    passed = []
     rejected_title = 0
 
     for video_id, handle, title in videos:
-        is_candidate, confidence = score_title(title)
+        is_match, confidence = score_title(title)
 
-        if is_candidate:
-            candidates.append((video_id, handle, title, confidence))
+        if is_match:
+            passed.append((video_id, handle, title, confidence))
         else:
             rejected_title += 1
             _update_screening_status(video_id, "rejected", confidence=0.0)
 
     print(
-        f"Title filter: {len(candidates)} candidates, "
+        f"Title filter: {len(passed)} passed, "
         f"{rejected_title} rejected"
     )
 
-    if not candidates:
+    if not passed:
         return
 
     # Stage 2: Frame-level screening
@@ -93,7 +92,7 @@ def screen_all(
     rejected_frame = 0
     failed = 0
 
-    for video_id, handle, title, title_confidence in candidates:
+    for video_id, handle, title, title_confidence in passed:
         url = f"https://www.youtube.com/watch?v={video_id}"
 
         try:

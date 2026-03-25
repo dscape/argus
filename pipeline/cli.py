@@ -164,7 +164,7 @@ def cmd_inspect(args):
                 """
                 params: list = []
 
-                status_filter = args.status or "candidate"
+                status_filter = args.status or "approved"
                 if status_filter == "unscreened":
                     query += " AND screening_status IS NULL"
                 else:
@@ -534,7 +534,7 @@ def cmd_stats(args):
                 conn.rollback()
 
             # Screening stats
-            for status in ["candidate", "approved", "rejected"]:
+            for status in ["approved", "rejected"]:
                 try:
                     cur.execute(
                         "SELECT COUNT(*) FROM youtube_videos WHERE screening_status = %s",
@@ -561,7 +561,6 @@ def cmd_stats(args):
     print(f"    Resolved:             {stats['resolved_channels']}")
     print(f"  YouTube videos:         {stats['youtube_videos']}")
     print(f"    Unscreened:           {stats['unscreened']}")
-    print(f"    Candidates:           {stats['screening_candidate']}")
     print(f"    Approved:             {stats['screening_approved']}")
     print(f"    Rejected:             {stats['screening_rejected']}")
     print(f"  Training clips:         {stats['training_clips']}")
@@ -604,7 +603,7 @@ def main():
     p = subparsers.add_parser("inspect", help="Inspect videos for overlay + OTB via frame extraction")
     p.add_argument("--video-id", type=str, default=None, help="Inspect a single video by ID")
     p.add_argument("--channel", type=str, default=None, help="Filter by channel handle")
-    p.add_argument("--status", type=str, default=None, help="Filter by status (default: candidate)")
+    p.add_argument("--status", type=str, default=None, help="Filter by status (default: approved)")
     p.add_argument("--limit", type=int, default=None, help="Max videos to inspect")
 
     # download

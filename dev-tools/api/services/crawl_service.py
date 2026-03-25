@@ -346,9 +346,9 @@ def list_videos(
 
     # Score titles (no auto-rejection — reviewer decides)
     for row in rows:
-        is_candidate, confidence = score_title(row["title"])
+        is_match, confidence = score_title(row["title"])
         row["title_score"] = round(confidence, 3)
-        row["title_is_candidate"] = is_candidate
+        row["title_is_match"] = is_match
 
     return {"videos": rows, "total": total}
 
@@ -438,8 +438,9 @@ def undo_auto_rejections(video_ids: list[str]) -> int:
 def screen_videos(channel_id: str | None = None, limit: int = 500) -> dict:
     """Run title-based screening on unscreened videos.
 
-    Applies score_title() to each unscreened video and marks it as
-    'candidate' (score >= 0.3) or 'rejected' (below threshold).
+    Applies score_title() to each unscreened video. Titles that fail
+    are rejected; titles that pass stay unscreened with their confidence
+    score stored for sorting/filtering.
     """
     conditions = ["screening_status IS NULL"]
     params: list = []
@@ -465,27 +466,26 @@ def screen_videos(channel_id: str | None = None, limit: int = 500) -> dict:
             videos = cur.fetchall()
 
     if not videos:
-        return {"screened": 0, "candidates": 0, "rejected": 0}
+        return {"screened": 0, "passed": 0, "rejected": 0}
 
-    candidates_ids: list[tuple[str, float]] = []
+    passed_ids: list[tuple[str, float]] = []
     rejected_ids: list[str] = []
 
     for video_id, title in videos:
-        is_candidate, confidence = score_title(title)
-        if is_candidate:
-            candidates_ids.append((video_id, confidence))
+        is_match, confidence = score_title(title)
+        if is_match:
+            passed_ids.append((video_id, confidence))
         else:
             rejected_ids.append(video_id)
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            if candidates_ids:
-                for vid, conf in candidates_ids:
+            if passed_ids:
+                for vid, conf in passed_ids:
                     cur.execute(
                         """
                         UPDATE youtube_videos
-                        SET screening_status = 'candidate',
-                            screening_confidence = %s,
+                        SET screening_confidence = %s,
                             updated_at = now()
                         WHERE video_id = %s
                         """,
@@ -506,7 +506,7 @@ def screen_videos(channel_id: str | None = None, limit: int = 500) -> dict:
 
     return {
         "screened": len(videos),
-        "candidates": len(candidates_ids),
+        "passed": len(passed_ids),
         "rejected": len(rejected_ids),
     }
 
@@ -662,7 +662,7 @@ def auto_classify_titles(
             ]
 
     if not to_classify:
-        return {"classified": 0, "candidates": 0, "rejected": 0}
+        return {"classified": 0, "approved": 0, "rejected": 0}
 
     if not positives:
         raise ValueError(
@@ -681,11 +681,11 @@ def auto_classify_titles(
 ## Titles to classify
 {titles_list}
 
-Classify each title as "candidate" (likely OTB chess game footage with board overlay) \
+Classify each title as "approved" (likely OTB chess game footage with board overlay) \
 or "rejected" (unlikely to have usable footage).
 
 Respond with a JSON array only, no other text:
-[{{"id": "VIDEO_ID", "status": "candidate|rejected"}}]"""
+[{{"id": "VIDEO_ID", "status": "approved|rejected"}}]"""
 
     client = anthropic.Anthropic(api_key=api_key)
     response = client.messages.create(
@@ -711,7 +711,7 @@ Respond with a JSON array only, no other text:
             "- Questions without tournament context\n"
             "- Personal commentary format\n\n"
             "If title contains formal tournament structure with specific players, venue, and year, "
-            "classify as 'candidate'. Otherwise, classify as 'rejected'.\n"
+            "classify as 'approved'. Otherwise, classify as 'rejected'.\n"
             "Edge cases: Titles mentioning famous players but without tournament context should be "
             "classified as 'rejected' unless they follow the formal game analysis format."
         ),
@@ -729,19 +729,19 @@ Respond with a JSON array only, no other text:
     classifications = _json.loads(raw)
 
     # Apply classifications
-    candidate_ids = [c["id"] for c in classifications if c["status"] == "candidate"]
+    approved_ids = [c["id"] for c in classifications if c["status"] == "approved"]
     rejected_ids = [c["id"] for c in classifications if c["status"] == "rejected"]
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            if candidate_ids:
+            if approved_ids:
                 cur.execute(
                     """
                     UPDATE youtube_videos
-                    SET screening_status = 'candidate', updated_at = now()
+                    SET screening_status = 'approved', updated_at = now()
                     WHERE video_id = ANY(%s) AND screening_status IS NULL
                     """,
-                    (candidate_ids,),
+                    (approved_ids,),
                 )
             if rejected_ids:
                 cur.execute(
@@ -756,7 +756,7 @@ Respond with a JSON array only, no other text:
 
     return {
         "classified": len(classifications),
-        "candidates": len(candidate_ids),
+        "approved": len(approved_ids),
         "rejected": len(rejected_ids),
     }
 
@@ -784,9 +784,9 @@ def get_video(video_id: str) -> dict | None:
             cols = [d[0] for d in cur.description]
             video = dict(zip(cols, row))
 
-    is_candidate, confidence = score_title(video["title"])
+    is_match, confidence = score_title(video["title"])
     video["title_score"] = round(confidence, 3)
-    video["title_is_candidate"] = is_candidate
+    video["title_is_match"] = is_match
     return video
 
 

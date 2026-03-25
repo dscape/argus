@@ -19,20 +19,20 @@ class TestTitleFilterIntegration:
             ("Guess The Elo #47", False),
         ]
 
-        for title, expected_candidate in titles:
+        for title, expected_match in titles:
             ok, _ = score_title(title)
-            assert ok == expected_candidate, (
-                f"Title '{title}' expected candidate={expected_candidate}, got {ok}"
+            assert ok == expected_match, (
+                f"Title '{title}' expected match={expected_match}, got {ok}"
             )
 
-    def test_all_candidates_have_positive_confidence(self):
-        """Candidates should always have confidence > 0."""
-        candidate_titles = [
+    def test_all_matches_have_positive_confidence(self):
+        """Matched titles should always have confidence > 0."""
+        match_titles = [
             "Player A vs Player B",
             "World Championship 2024",
             "Olympiad Round 5",
         ]
-        for title in candidate_titles:
+        for title in match_titles:
             ok, conf = score_title(title)
             if ok:
-                assert conf > 0.0, f"Candidate '{title}' has zero confidence"
+                assert conf > 0.0, f"Matched title '{title}' has zero confidence"

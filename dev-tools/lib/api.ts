@@ -356,7 +356,7 @@ export async function getQuotaStatus(): Promise<QuotaStatus> {
 export async function autoClassifyTitles(params?: {
   channel_id?: string;
   limit?: number;
-}): Promise<{ classified: number; candidates: number; rejected: number }> {
+}): Promise<{ classified: number; approved: number; rejected: number }> {
   const res = await fetch("/api/crawl/auto-classify", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -72,7 +72,7 @@ export default function AIClassifier() {
     try {
       const result = await autoClassifyTitles();
       setAutoResult(
-        `Classified ${result.classified} videos: ${result.candidates} candidates, ${result.rejected} rejected`
+        `Classified ${result.classified} videos: ${result.approved} approved, ${result.rejected} rejected`
       );
       loadCounts();
       loadApproved();
@@ -104,7 +104,7 @@ export default function AIClassifier() {
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
             Use Claude to automatically classify unscreened video titles as
-            candidates or rejected, based on your approved examples. This
+            approved or rejected, based on your approved examples. This
             replaces manual review for most videos.
           </p>
 

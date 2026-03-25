@@ -44,8 +44,7 @@ CREATE TABLE IF NOT EXISTS youtube_videos (
 
     -- Screening results (set by pipeline screen stage)
     screening_status    VARCHAR(20),
-    -- NULL = unscreened, 'candidate' = title matched,
-    -- 'approved' = has overlay + OTB, 'rejected' = failed screening
+    -- NULL = unscreened, 'approved' = has overlay + OTB, 'rejected' = failed screening
     screening_confidence FLOAT,
     overlay_bbox        JSONB,
     -- {"x": ..., "y": ..., "w": ..., "h": ...}
