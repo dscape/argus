@@ -63,6 +63,7 @@ def segment_video_layouts(
     video_path: str,
     sample_interval_sec: float = 30.0,
     bbox_shift_threshold: float = 0.15,
+    min_overlay_fraction: float = 0.55,
 ) -> tuple[list[LayoutSegment], list[tuple[float, float]]]:
     """Segment a video into layout regions by sampling overlay detection.
 
@@ -70,6 +71,9 @@ def segment_video_layouts(
         video_path: Path to the local video file.
         sample_interval_sec: Seconds between sampled frames (default 30).
         bbox_shift_threshold: Max relative bbox shift to consider "same layout".
+        min_overlay_fraction: Minimum overlay height as a fraction of frame
+            height.  Segments with smaller overlays are treated as gaps
+            (intros, outros, transitions).
 
     Returns:
         (segments, gaps) where *segments* have overlay detected and *gaps*
@@ -180,15 +184,26 @@ def segment_video_layouts(
             merged.append(seg)
 
     # ── Build output ─────────────────────────────────────────
+    min_overlay_px = int(height * min_overlay_fraction)
     segments: list[LayoutSegment] = []
     gaps: list[tuple[float, float]] = []
 
     for seg in merged:
         if seg["has_overlay"] and seg["bboxes"]:
+            bbox = _median_bbox(seg["bboxes"])
+            # Skip segments where the overlay is too small — likely an
+            # intro, outro, or transition rather than actual gameplay.
+            if bbox[2] < min_overlay_px or bbox[3] < min_overlay_px:
+                logger.info(
+                    f"Skipping segment {seg['start']:.0f}-{seg['end']:.0f}s: "
+                    f"overlay {bbox[2]}x{bbox[3]} below minimum {min_overlay_px}px"
+                )
+                gaps.append((seg["start"], seg["end"]))
+                continue
             segments.append(LayoutSegment(
                 start_time=seg["start"],
                 end_time=seg["end"],
-                overlay_bbox=_median_bbox(seg["bboxes"]),
+                overlay_bbox=bbox,
                 score=float(np.mean(seg["scores"])),
                 sample_count=len(seg["bboxes"]),
             ))
