@@ -25,6 +25,8 @@ import {
   deleteVideoClip,
   inspectAutoCalibration,
   updateVideoStatus,
+  autoSegmentVideo,
+  autoCalibrateClip,
 } from "@/lib/api";
 import type {
   CrawlVideo,
@@ -37,6 +39,8 @@ import type {
   VideoClip,
   GeneratedClip,
   ClipInspectResponse,
+  AutoSegmentResponse,
+  AutoCalibrateResponse,
 } from "@/lib/types";
 import { BboxDrawer, type Bbox } from "@/components/BboxDrawer";
 import { ChessBoard } from "@/components/ChessBoard";
@@ -49,6 +53,7 @@ import VideoCard, { type InspectResult } from "@/components/VideoCard";
 const STEPS = [
   { id: "info", label: "Info" },
   { id: "download", label: "Download" },
+  { id: "segment", label: "Segment" },
   { id: "calibrate", label: "Calibrate" },
   { id: "extract", label: "Extract" },
   { id: "generate", label: "Generate" },
@@ -151,7 +156,8 @@ export default function VideoWorkbenchPage() {
       {/* Step content */}
       <div className="flex-1 overflow-auto px-4 pb-4">
         {step === "info" && <InfoStep video={video} />}
-        {step === "download" && <DownloadStep video={video} onDownloaded={() => setStep("calibrate")} />}
+        {step === "download" && <DownloadStep video={video} onDownloaded={() => setStep("segment")} />}
+        {step === "segment" && <SegmentStep video={video} />}
         {step === "calibrate" && <CalibrateStep video={video} />}
         {step === "extract" && <ExtractStep video={video} />}
         {step === "generate" && <GenerateStep video={video} />}
@@ -354,182 +360,134 @@ function DownloadStep({ video, onDownloaded }: { video: CrawlVideo; onDownloaded
   );
 }
 
-// ── Step 3: Calibrate ───────────────────────────────────────
+// ── Step 3: Segment ─────────────────────────────────────────
 
-function fmtTime(secs: number) {
-  const m = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-function CalibrateStep({ video }: { video: CrawlVideo }) {
+function SegmentStep({ video }: { video: CrawlVideo }) {
   const [downloadStatus, setDownloadStatus] = useState<DownloadStatus | null>(null);
   const [session, setSession] = useState<VideoSession | null>(null);
   const [clips, setClips] = useState<VideoClip[]>([]);
-  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
-  const [channelCal, setChannelCal] = useState<CalibrationEntry | null>(null);
+  const [segmenting, setSegmenting] = useState(false);
+  const [segmentResult, setSegmentResult] = useState<AutoSegmentResponse | null>(null);
   const [frameIdx, setFrameIdx] = useState(0);
   const debouncedFrameIdx = useDebouncedValue(frameIdx, 150);
-  const [overlayBbox, setOverlayBbox] = useState<Bbox | null>(null);
-  const [cameraBbox, setCameraBbox] = useState<Bbox | null>(null);
-  const [drawingMode, setDrawingMode] = useState<"overlay" | "camera">("overlay");
-  const [boardFlipped, setBoardFlipped] = useState(false);
-  const [boardTheme, setBoardTheme] = useState("lichess_default");
-  const [clipStartTime, setClipStartTime] = useState(0);
-  const [clipEndTime, setClipEndTime] = useState<number | null>(null);
-  const [clipLabel, setClipLabel] = useState("");
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [autoCalLoading, setAutoCalLoading] = useState(false);
-  const [autoCalResult, setAutoCalResult] = useState<any>(null);
+  const [editingClip, setEditingClip] = useState<number | null>(null);
+  const [editStart, setEditStart] = useState(0);
+  const [editEnd, setEditEnd] = useState<number | null>(null);
 
-  const channelHandle = video.channel_handle;
-
-  // Load data on mount
   useEffect(() => {
     getDownloadStatus(video.video_id).then(setDownloadStatus);
     listVideoClips(video.video_id).then(setClips);
-    if (channelHandle) {
-      listCalibrations().then((cals) => {
-        const existing = cals.find((c) => c.channel_handle === channelHandle);
-        if (existing) setChannelCal(existing);
-      });
-    }
-  }, [video.video_id, channelHandle]);
+  }, [video.video_id]);
 
-  // Open video session once downloaded
   useEffect(() => {
     if (downloadStatus?.downloaded && downloadStatus.path && !session) {
-      openVideo(downloadStatus.path, channelHandle || undefined)
+      openVideo(downloadStatus.path, video.channel_handle || undefined)
         .then(setSession)
         .catch((e) => setError(e.message));
     }
-  }, [downloadStatus, channelHandle, session]);
+  }, [downloadStatus, video.channel_handle, session]);
 
-  // Load selected clip into editor state
-  const selectClip = useCallback((idx: number) => {
-    const clip = clips[idx];
-    if (!clip) return;
-    setSelectedIdx(idx);
-    setOverlayBbox({ x: clip.overlay_bbox[0], y: clip.overlay_bbox[1], w: clip.overlay_bbox[2], h: clip.overlay_bbox[3] });
-    setCameraBbox({ x: clip.camera_bbox[0], y: clip.camera_bbox[1], w: clip.camera_bbox[2], h: clip.camera_bbox[3] });
-    setBoardFlipped(clip.board_flipped);
-    setBoardTheme(clip.board_theme);
-    setClipStartTime(clip.start_time);
-    setClipEndTime(clip.end_time);
-    setClipLabel(clip.label || "");
-    // Jump scrubber to clip start
-    if (session && session.fps > 0) {
-      setFrameIdx(Math.round(clip.start_time * session.fps));
+  const handleAutoSegment = async (replace: boolean) => {
+    setSegmenting(true);
+    setError(null);
+    try {
+      const result = await autoSegmentVideo(video.video_id, { replaceExisting: replace });
+      setSegmentResult(result);
+      if (result.error) {
+        setError(result.error);
+      }
+      // Refresh clips list
+      const updated = await listVideoClips(video.video_id);
+      setClips(updated);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Segmentation failed");
+    } finally {
+      setSegmenting(false);
     }
-  }, [clips, session]);
-
-  // Auto-select first clip when clips load
-  useEffect(() => {
-    if (clips.length > 0 && selectedIdx === null) selectClip(0);
-  }, [clips, selectedIdx, selectClip]);
+  };
 
   const handleAddClip = async () => {
     if (!session) return;
     setError(null);
     const fps = session.fps;
     const currentTime = fps > 0 ? frameIdx / fps : 0;
-    const duration = session.duration_seconds;
-
-    // Default bbox from channel calibration or empty
-    const defOverlay: [number, number, number, number] = channelCal
-      ? [channelCal.overlay[0], channelCal.overlay[1], channelCal.overlay[2], channelCal.overlay[3]]
-      : [0, 0, 100, 100];
-    const defCamera: [number, number, number, number] = channelCal
-      ? [channelCal.camera[0], channelCal.camera[1], channelCal.camera[2], channelCal.camera[3]]
-      : [0, 0, 100, 100];
-
     try {
       const newClip = await createVideoClip(video.video_id, {
         start_time: currentTime,
-        end_time: duration,
+        end_time: session.duration_seconds,
         label: null,
-        overlay_bbox: defOverlay,
-        camera_bbox: defCamera,
+        overlay_bbox: [0, 0, 100, 100],
+        camera_bbox: [0, 0, 100, 100],
         ref_resolution: [session.width, session.height],
-        board_flipped: channelCal?.board_flipped ?? false,
-        board_theme: channelCal?.board_theme ?? "lichess_default",
+        board_flipped: false,
+        board_theme: "lichess_default",
       });
-      const updated = [...clips, newClip];
-      setClips(updated);
-      selectClip(updated.length - 1);
+      setClips((prev) => [...prev, newClip]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to add clip");
+      setError(e instanceof Error ? e.message : "Failed to add segment");
     }
   };
 
-  const handleSaveClip = async () => {
-    if (selectedIdx === null || !overlayBbox || !cameraBbox) return;
-    const clip = clips[selectedIdx];
-    setSaving(true);
+  const handleDeleteClip = async (clipId: number) => {
     setError(null);
     try {
-      const updated = await updateVideoClip(video.video_id, clip.id, {
-        start_time: clipStartTime,
-        end_time: clipEndTime,
-        label: clipLabel || null,
-        overlay_bbox: [overlayBbox.x, overlayBbox.y, overlayBbox.w, overlayBbox.h],
-        camera_bbox: [cameraBbox.x, cameraBbox.y, cameraBbox.w, cameraBbox.h],
-        ref_resolution: [session?.width || 1920, session?.height || 1080],
-        board_flipped: boardFlipped,
-        board_theme: boardTheme,
-      });
-      const newClips = [...clips];
-      newClips[selectedIdx] = updated;
-      setClips(newClips);
-      setSuccess("Clip saved");
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDeleteClip = async (idx: number) => {
-    const clip = clips[idx];
-    setError(null);
-    try {
-      await deleteVideoClip(video.video_id, clip.id);
+      await deleteVideoClip(video.video_id, clipId);
       const updated = await listVideoClips(video.video_id);
       setClips(updated);
-      if (updated.length === 0) {
-        setSelectedIdx(null);
-      } else {
-        selectClip(Math.min(idx, updated.length - 1));
-      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Delete failed");
+      setError(e instanceof Error ? e.message : "Failed to delete segment");
     }
   };
 
-  const handleAutoCalibrate = async () => {
-    setAutoCalLoading(true);
+  const handleSaveTimeRange = async (clipId: number) => {
     setError(null);
     try {
-      const result = await inspectAutoCalibration(video.video_id);
-      setAutoCalResult(result);
-      if (result.proposal) {
-        const p = result.proposal;
-        setOverlayBbox({ x: p.overlay[0], y: p.overlay[1], w: p.overlay[2], h: p.overlay[3] });
-        setCameraBbox({ x: p.camera[0], y: p.camera[1], w: p.camera[2], h: p.camera[3] });
-        setBoardTheme(p.theme);
-        setBoardFlipped(p.board_flipped);
-        setSuccess("Auto-calibration applied");
-        setTimeout(() => setSuccess(null), 3000);
-      } else {
-        setError("No overlay detected — could not auto-calibrate");
-      }
+      await updateVideoClip(video.video_id, clipId, {
+        start_time: editStart,
+        end_time: editEnd,
+      } as any);
+      const updated = await listVideoClips(video.video_id);
+      setClips(updated);
+      setEditingClip(null);
+      toast.success("Segment time range saved");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Auto-calibration failed");
-    } finally {
-      setAutoCalLoading(false);
+      setError(e instanceof Error ? e.message : "Failed to update time range");
+    }
+  };
+
+  const handleSplit = async (clipId: number) => {
+    if (!session) return;
+    const clip = clips.find((c) => c.id === clipId);
+    if (!clip) return;
+
+    const fps = session.fps;
+    const splitTime = fps > 0 ? frameIdx / fps : 0;
+    if (splitTime <= clip.start_time || (clip.end_time && splitTime >= clip.end_time)) {
+      toast.error("Scrubber must be within the segment to split");
+      return;
+    }
+
+    setError(null);
+    try {
+      // Update existing clip to end at split point
+      await updateVideoClip(video.video_id, clipId, { end_time: splitTime } as any);
+      // Create new clip from split point to original end
+      await createVideoClip(video.video_id, {
+        start_time: splitTime,
+        end_time: clip.end_time ?? session.duration_seconds,
+        label: null,
+        overlay_bbox: clip.overlay_bbox as any,
+        camera_bbox: clip.camera_bbox as any,
+        ref_resolution: clip.ref_resolution as any,
+        board_flipped: clip.board_flipped,
+        board_theme: clip.board_theme,
+      });
+      const updated = await listVideoClips(video.video_id);
+      setClips(updated);
+      toast.success("Segment split");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to split segment");
     }
   };
 
@@ -546,6 +504,342 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
   const duration = session.duration_seconds;
   const frameSrc = videoFrameUrl(session.session_id, debouncedFrameIdx);
   const timestamp = fps > 0 ? (frameIdx / fps).toFixed(1) : "0";
+
+  return (
+    <div className="space-y-4 pt-2 max-w-5xl">
+      {/* Actions */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => handleAutoSegment(clips.length > 0)}
+          disabled={segmenting}
+          className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+        >
+          {segmenting ? "Segmenting..." : clips.length > 0 ? "Re-Segment (replaces existing)" : "Auto-Segment"}
+        </button>
+        <button
+          onClick={handleAddClip}
+          className="px-3 py-2 rounded-lg border border-dashed text-xs font-medium text-muted-foreground hover:border-primary hover:text-foreground transition-colors"
+        >
+          + Add Segment Manually
+        </button>
+        {segmenting && (
+          <span className="text-xs text-muted-foreground animate-pulse">
+            Sampling frames and detecting layouts... This may take 30-180s for long videos.
+          </span>
+        )}
+      </div>
+
+      {/* Result summary */}
+      {segmentResult && !segmentResult.error && (
+        <div className="text-xs text-muted-foreground">
+          Found {segmentResult.segments.length} segment(s)
+          {segmentResult.gaps.length > 0 && `, ${segmentResult.gaps.length} gap(s)`}
+          {" "}in {segmentResult.processing_time_sec}s
+          ({segmentResult.total_frames_sampled} frames sampled)
+        </div>
+      )}
+
+      {/* Timeline */}
+      {clips.length > 0 && (
+        <div className="space-y-2">
+          <div className="relative w-full h-6 bg-muted rounded-full overflow-hidden">
+            {/* Gap regions */}
+            {segmentResult?.gaps.map((g, i) => {
+              const startPct = duration > 0 ? (g.start_time / duration) * 100 : 0;
+              const widthPct = duration > 0 ? ((g.end_time - g.start_time) / duration) * 100 : 0;
+              return (
+                <div
+                  key={`gap-${i}`}
+                  className="absolute top-0 h-full bg-yellow-500/20"
+                  style={{ left: `${startPct}%`, width: `${widthPct}%` }}
+                  title={`Gap: ${fmtTime(g.start_time)} — ${fmtTime(g.end_time)}`}
+                />
+              );
+            })}
+            {/* Segment regions */}
+            {clips.map((c) => {
+              const startPct = duration > 0 ? (c.start_time / duration) * 100 : 0;
+              const endTime = c.end_time ?? duration;
+              const widthPct = duration > 0 ? ((endTime - c.start_time) / duration) * 100 : 0;
+              return (
+                <div
+                  key={c.id}
+                  className="absolute top-0 h-full bg-primary/50 hover:bg-primary/70 cursor-pointer transition-colors border-r border-background"
+                  style={{ left: `${startPct}%`, width: `${widthPct}%` }}
+                  title={`${c.label || `Segment ${c.clip_index + 1}`}: ${fmtTime(c.start_time)} — ${c.end_time != null ? fmtTime(c.end_time) : "end"}`}
+                />
+              );
+            })}
+            {/* Playhead */}
+            <div
+              className="absolute top-0 w-0.5 h-full bg-foreground"
+              style={{ left: `${totalFrames > 1 ? (frameIdx / (totalFrames - 1)) * 100 : 0}%` }}
+            />
+          </div>
+
+          {/* Frame scrubber */}
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Frame {frameIdx} / {totalFrames}</span>
+            <span>({timestamp}s)</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={totalFrames - 1}
+            step={Math.max(1, Math.round(fps))}
+            value={frameIdx}
+            onChange={(e) => setFrameIdx(Number(e.target.value))}
+            className="w-full"
+          />
+
+          {/* Frame preview */}
+          <img src={frameSrc} alt={`Frame ${frameIdx}`} className="w-full max-w-lg rounded border" />
+        </div>
+      )}
+
+      {/* Segment list */}
+      {clips.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium">Segments ({clips.length})</h3>
+          {clips.map((c) => (
+            <div key={c.id} className="border rounded-lg p-3 flex items-center gap-3">
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium">{c.label || `Segment ${c.clip_index + 1}`}</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {fmtTime(c.start_time)} &mdash; {c.end_time != null ? fmtTime(c.end_time) : "end"}
+                  </span>
+                  {c.overlay_bbox && c.overlay_bbox[2] > 100 && (
+                    <span className="text-[10px] text-green-600">
+                      overlay {c.overlay_bbox[2]}x{c.overlay_bbox[3]}
+                    </span>
+                  )}
+                </div>
+                {editingClip === c.id && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <label className="text-xs text-muted-foreground">Start (s):</label>
+                    <input
+                      type="number"
+                      value={editStart}
+                      onChange={(e) => setEditStart(Number(e.target.value))}
+                      min={0}
+                      max={duration}
+                      step={0.1}
+                      className="h-6 rounded border bg-background px-2 text-xs w-20 tabular-nums"
+                    />
+                    <label className="text-xs text-muted-foreground">End (s):</label>
+                    <input
+                      type="number"
+                      value={editEnd ?? duration}
+                      onChange={(e) => setEditEnd(Number(e.target.value))}
+                      min={editStart}
+                      max={duration}
+                      step={0.1}
+                      className="h-6 rounded border bg-background px-2 text-xs w-20 tabular-nums"
+                    />
+                    <button
+                      onClick={() => handleSaveTimeRange(c.id)}
+                      className="px-2 py-1 rounded bg-primary text-primary-foreground text-xs"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={() => setEditingClip(null)}
+                      className="px-2 py-1 rounded border text-xs"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => {
+                  setEditingClip(c.id);
+                  setEditStart(c.start_time);
+                  setEditEnd(c.end_time);
+                }}
+                className="text-xs text-muted-foreground hover:text-foreground"
+                title="Edit time range"
+              >
+                Edit
+              </button>
+              <button
+                onClick={() => handleSplit(c.id)}
+                className="text-xs text-muted-foreground hover:text-foreground"
+                title="Split at scrubber position"
+              >
+                Split
+              </button>
+              <button
+                onClick={() => handleDeleteClip(c.id)}
+                className="text-xs text-muted-foreground hover:text-destructive"
+                title="Delete segment"
+              >
+                &times;
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {clips.length === 0 && !segmenting && (
+        <p className="text-sm text-muted-foreground">
+          No segments yet. Click &ldquo;Auto-Segment&rdquo; to detect layout regions, or add one manually.
+        </p>
+      )}
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}
+
+// ── Step 4: Calibrate ───────────────────────────────────────
+
+function fmtTime(secs: number) {
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function CalibrateStep({ video }: { video: CrawlVideo }) {
+  const [downloadStatus, setDownloadStatus] = useState<DownloadStatus | null>(null);
+  const [session, setSession] = useState<VideoSession | null>(null);
+  const [clips, setClips] = useState<VideoClip[]>([]);
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const [frameIdx, setFrameIdx] = useState(0);
+  const debouncedFrameIdx = useDebouncedValue(frameIdx, 150);
+  const [overlayBbox, setOverlayBbox] = useState<Bbox | null>(null);
+  const [cameraBbox, setCameraBbox] = useState<Bbox | null>(null);
+  const [drawingMode, setDrawingMode] = useState<"overlay" | "camera">("overlay");
+  const [boardFlipped, setBoardFlipped] = useState(false);
+  const [boardTheme, setBoardTheme] = useState("lichess_default");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [autoCalClipId, setAutoCalClipId] = useState<number | null>(null);
+  const [autoCalAllRunning, setAutoCalAllRunning] = useState(false);
+  const [autoCalPreview, setAutoCalPreview] = useState<AutoCalibrateResponse | null>(null);
+
+  const channelHandle = video.channel_handle;
+
+  useEffect(() => {
+    getDownloadStatus(video.video_id).then(setDownloadStatus);
+    listVideoClips(video.video_id).then(setClips);
+  }, [video.video_id]);
+
+  useEffect(() => {
+    if (downloadStatus?.downloaded && downloadStatus.path && !session) {
+      openVideo(downloadStatus.path, channelHandle || undefined)
+        .then(setSession)
+        .catch((e) => setError(e.message));
+    }
+  }, [downloadStatus, channelHandle, session]);
+
+  const selectClip = useCallback((idx: number) => {
+    const clip = clips[idx];
+    if (!clip) return;
+    setSelectedIdx(idx);
+    setOverlayBbox({ x: clip.overlay_bbox[0], y: clip.overlay_bbox[1], w: clip.overlay_bbox[2], h: clip.overlay_bbox[3] });
+    setCameraBbox({ x: clip.camera_bbox[0], y: clip.camera_bbox[1], w: clip.camera_bbox[2], h: clip.camera_bbox[3] });
+    setBoardFlipped(clip.board_flipped);
+    setBoardTheme(clip.board_theme);
+    setAutoCalPreview(null);
+    if (session && session.fps > 0) {
+      setFrameIdx(Math.round(clip.start_time * session.fps));
+    }
+  }, [clips, session]);
+
+  useEffect(() => {
+    if (clips.length > 0 && selectedIdx === null) selectClip(0);
+  }, [clips, selectedIdx, selectClip]);
+
+  const handleSaveClip = async () => {
+    if (selectedIdx === null || !overlayBbox || !cameraBbox) return;
+    const clip = clips[selectedIdx];
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await updateVideoClip(video.video_id, clip.id, {
+        overlay_bbox: [overlayBbox.x, overlayBbox.y, overlayBbox.w, overlayBbox.h],
+        camera_bbox: [cameraBbox.x, cameraBbox.y, cameraBbox.w, cameraBbox.h],
+        ref_resolution: [session?.width || 1920, session?.height || 1080],
+        board_flipped: boardFlipped,
+        board_theme: boardTheme,
+      } as any);
+      const newClips = [...clips];
+      newClips[selectedIdx] = updated;
+      setClips(newClips);
+      setSuccess("Saved");
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAutoCalibrateSingle = async (clipId: number) => {
+    setAutoCalClipId(clipId);
+    setError(null);
+    try {
+      const result = await autoCalibrateClip(video.video_id, clipId);
+      setAutoCalPreview(result);
+      if (result.proposal) {
+        // Refresh clips to pick up the updated calibration
+        const updated = await listVideoClips(video.video_id);
+        setClips(updated);
+        // Re-select the clip to update the editor state
+        const idx = updated.findIndex((c) => c.id === clipId);
+        if (idx >= 0) selectClip(idx);
+        setSuccess("Auto-calibrated");
+        setTimeout(() => setSuccess(null), 3000);
+      } else {
+        setError("No overlay detected in this clip's time range");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Auto-calibration failed");
+    } finally {
+      setAutoCalClipId(null);
+    }
+  };
+
+  const handleAutoCalAll = async () => {
+    setAutoCalAllRunning(true);
+    setError(null);
+    let calibrated = 0;
+    for (const clip of clips) {
+      try {
+        const result = await autoCalibrateClip(video.video_id, clip.id);
+        if (result.proposal) calibrated++;
+      } catch {
+        // continue with next clip
+      }
+    }
+    const updated = await listVideoClips(video.video_id);
+    setClips(updated);
+    if (updated.length > 0) selectClip(0);
+    setAutoCalAllRunning(false);
+    setSuccess(`Auto-calibrated ${calibrated}/${clips.length} clips`);
+    setTimeout(() => setSuccess(null), 5000);
+  };
+
+  if (!downloadStatus?.downloaded) {
+    return <p className="text-sm text-muted-foreground pt-2">Video must be downloaded first. Go to the Download step.</p>;
+  }
+
+  if (!session) {
+    return <p className="text-sm text-muted-foreground pt-2">Opening video...</p>;
+  }
+
+  if (clips.length === 0) {
+    return <p className="text-sm text-muted-foreground pt-2">No segments found. Go to the Segment step first to create segments.</p>;
+  }
+
+  const totalFrames = session.total_frames;
+  const fps = session.fps;
+  const duration = session.duration_seconds;
+  const frameSrc = videoFrameUrl(session.session_id, debouncedFrameIdx);
+  const timestamp = fps > 0 ? (frameIdx / fps).toFixed(1) : "0";
   const selected = selectedIdx !== null ? clips[selectedIdx] : null;
 
   return (
@@ -553,24 +847,12 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
       {/* Left: Clip list */}
       <div className="w-64 flex-shrink-0 flex flex-col gap-2 overflow-auto">
         <button
-          onClick={handleAddClip}
-          className="w-full px-3 py-2 rounded-lg border border-dashed text-xs font-medium text-muted-foreground hover:border-primary hover:text-foreground transition-colors"
-        >
-          + Add Clip
-        </button>
-        <button
-          onClick={handleAutoCalibrate}
-          disabled={autoCalLoading}
+          onClick={handleAutoCalAll}
+          disabled={autoCalAllRunning}
           className="w-full px-3 py-2 rounded-lg border text-xs font-medium bg-green-500/10 border-green-500/30 text-green-700 hover:bg-green-500/20 transition-colors disabled:opacity-50"
         >
-          {autoCalLoading ? "Auto-Calibrating..." : "Auto-Calibrate"}
+          {autoCalAllRunning ? "Calibrating All..." : "Auto-Calibrate All"}
         </button>
-
-        {clips.length === 0 && (
-          <p className="text-xs text-muted-foreground px-1">
-            No clips defined. Add a clip to define calibration regions for this video.
-          </p>
-        )}
 
         {clips.map((c, i) => (
           <div
@@ -583,11 +865,11 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium">{c.label || `Clip ${c.clip_index + 1}`}</span>
               <button
-                onClick={(e) => { e.stopPropagation(); handleDeleteClip(i); }}
-                className="text-xs text-muted-foreground hover:text-destructive"
-                title="Delete clip"
+                onClick={(e) => { e.stopPropagation(); handleAutoCalibrateSingle(c.id); }}
+                disabled={autoCalClipId === c.id}
+                className="text-[10px] text-green-600 hover:text-green-700 disabled:opacity-50"
               >
-                &times;
+                {autoCalClipId === c.id ? "..." : "Cal"}
               </button>
             </div>
             <div className="text-[10px] text-muted-foreground mt-0.5">
@@ -595,6 +877,7 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
             </div>
             <div className="text-[10px] text-muted-foreground">
               {c.overlay_bbox[2]}x{c.overlay_bbox[3]} overlay
+              {c.camera_bbox[2] > 100 && ` | ${c.camera_bbox[2]}x${c.camera_bbox[3]} cam`}
             </div>
           </div>
         ))}
@@ -603,39 +886,17 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
       {/* Right: Calibration editor */}
       <div className="flex-1 space-y-3 overflow-auto">
         {selected === null ? (
-          <p className="text-sm text-muted-foreground">Select or add a clip to begin calibrating.</p>
+          <p className="text-sm text-muted-foreground">Select a clip to calibrate.</p>
         ) : (
           <>
-            {/* Clip time range */}
+            {/* Clip info */}
             <div className="flex items-center gap-3 text-xs">
-              <label className="text-muted-foreground">Label:</label>
-              <input
-                type="text"
-                value={clipLabel}
-                onChange={(e) => setClipLabel(e.target.value)}
-                placeholder={`Clip ${selected.clip_index + 1}`}
-                className="h-7 rounded-md border bg-background px-2 text-xs w-40"
-              />
-              <label className="text-muted-foreground ml-2">Start (s):</label>
-              <input
-                type="number"
-                value={clipStartTime}
-                onChange={(e) => setClipStartTime(Number(e.target.value))}
-                min={0}
-                max={duration}
-                step={0.1}
-                className="h-7 rounded-md border bg-background px-2 text-xs w-20 tabular-nums"
-              />
-              <label className="text-muted-foreground">End (s):</label>
-              <input
-                type="number"
-                value={clipEndTime ?? duration}
-                onChange={(e) => setClipEndTime(Number(e.target.value))}
-                min={clipStartTime}
-                max={duration}
-                step={0.1}
-                className="h-7 rounded-md border bg-background px-2 text-xs w-20 tabular-nums"
-              />
+              <span className="font-medium">{selected.label || `Clip ${selected.clip_index + 1}`}</span>
+              <span className="text-muted-foreground">
+                {fmtTime(selected.start_time)} &mdash; {selected.end_time != null ? fmtTime(selected.end_time) : "end"}
+              </span>
+              <span className="text-muted-foreground">{selected.board_theme}</span>
+              {selected.board_flipped && <span className="text-muted-foreground">(flipped)</span>}
             </div>
 
             {/* Frame scrubber */}
@@ -676,25 +937,6 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
                   className="absolute top-0 w-0.5 h-full bg-foreground"
                   style={{ left: `${totalFrames > 1 ? (frameIdx / (totalFrames - 1)) * 100 : 0}%` }}
                 />
-              </div>
-
-              {/* Set start/end from current frame */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setClipStartTime(parseFloat((fps > 0 ? frameIdx / fps : 0).toFixed(1)))}
-                  className="px-3 py-1 rounded-md border text-xs font-medium hover:bg-muted transition-colors"
-                >
-                  Set Start
-                </button>
-                <button
-                  onClick={() => setClipEndTime(parseFloat((fps > 0 ? frameIdx / fps : 0).toFixed(1)))}
-                  className="px-3 py-1 rounded-md border text-xs font-medium hover:bg-muted transition-colors"
-                >
-                  Set End
-                </button>
-                <span className="text-xs text-muted-foreground">
-                  Current: {fps > 0 ? (frameIdx / fps).toFixed(1) : "0"}s
-                </span>
               </div>
             </div>
 
@@ -749,31 +991,31 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
             </div>
 
             {/* Auto-calibration preview */}
-            {autoCalResult && !autoCalResult.error && (
+            {autoCalPreview?.preview_frame_b64 && (
               <div className="space-y-3 border rounded-lg p-3">
                 <h4 className="text-xs font-medium text-muted-foreground">Auto-Calibration Preview</h4>
-                {autoCalResult.proposal_frame_base64 && (
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Green = Overlay, Red = Camera</p>
+                  <img
+                    src={`data:image/jpeg;base64,${autoCalPreview.preview_frame_b64}`}
+                    alt="Proposal"
+                    className="w-full max-w-lg rounded border"
+                  />
+                </div>
+                {autoCalPreview.camera_heatmap_b64 && (
                   <div>
-                    <p className="text-xs text-muted-foreground mb-1">
-                      Green = Overlay, Red = Camera
-                    </p>
+                    <p className="text-xs text-muted-foreground mb-1">Camera Motion Heatmap</p>
                     <img
-                      src={`data:image/jpeg;base64,${autoCalResult.proposal_frame_base64}`}
-                      alt="Proposal"
+                      src={`data:image/jpeg;base64,${autoCalPreview.camera_heatmap_b64}`}
+                      alt="Heatmap"
                       className="w-full max-w-lg rounded border"
                     />
                   </div>
                 )}
-                {autoCalResult.camera_motion_heatmap_base64 && (
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">
-                      Camera Motion Heatmap — Red = motion (camera), Blue = static
-                    </p>
-                    <img
-                      src={`data:image/jpeg;base64,${autoCalResult.camera_motion_heatmap_base64}`}
-                      alt="Heatmap"
-                      className="w-full max-w-lg rounded border"
-                    />
+                {autoCalPreview.proposal && (
+                  <div className="text-xs text-muted-foreground space-y-0.5">
+                    <div>Theme: {autoCalPreview.proposal.board_theme} ({(autoCalPreview.proposal.theme_confidence * 100).toFixed(0)}%)</div>
+                    <div>Flipped: {autoCalPreview.proposal.board_flipped ? "Yes" : "No"} ({(autoCalPreview.proposal.orientation_confidence * 100).toFixed(0)}%)</div>
                   </div>
                 )}
               </div>
@@ -786,7 +1028,14 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
                 disabled={saving || !overlayBbox || !cameraBbox}
                 className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
               >
-                {saving ? "Saving..." : "Save Clip"}
+                {saving ? "Saving..." : "Save"}
+              </button>
+              <button
+                onClick={() => handleAutoCalibrateSingle(selected.id)}
+                disabled={autoCalClipId !== null}
+                className="px-4 py-2 rounded-lg border text-sm font-medium bg-green-500/10 border-green-500/30 text-green-700 hover:bg-green-500/20 disabled:opacity-50"
+              >
+                {autoCalClipId === selected.id ? "Calibrating..." : "Auto-Calibrate This Clip"}
               </button>
               {error && <span className="text-xs text-destructive">{error}</span>}
               {success && <span className="text-xs text-green-600">{success}</span>}
@@ -798,7 +1047,7 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
   );
 }
 
-// ── Step 4: Extract ─────────────────────────────────────────
+// ── Step 5: Extract ─────────────────────────────────────────
 
 function ClipExtractCard({
   clip,
@@ -1041,7 +1290,7 @@ function SegmentCard({
   );
 }
 
-// ── Step 5: Generate ────────────────────────────────────────
+// ── Step 6: Generate ────────────────────────────────────────
 
 function GenerateStep({ video }: { video: CrawlVideo }) {
   const [downloadStatus, setDownloadStatus] = useState<DownloadStatus | null>(null);
@@ -1164,7 +1413,7 @@ function GenerateStep({ video }: { video: CrawlVideo }) {
   );
 }
 
-// ── Step 6: Inspect ─────────────────────────────────────────
+// ── Step 7: Inspect ─────────────────────────────────────────
 
 function InspectStep({ video }: { video: CrawlVideo }) {
   const [clips, setClips] = useState<GeneratedClip[]>([]);

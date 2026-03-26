@@ -88,6 +88,29 @@ def cmd_generate_clips(args):
     from pipeline.overlay.overlay_clip_generator import generate_from_video
     from pipeline.db.connection import get_conn
 
+    if args.video_id:
+        # Single video mode — look up channel handle from DB
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT channel_handle FROM youtube_videos WHERE video_id = %s",
+                    (args.video_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            print(f"Video {args.video_id} not found in DB.")
+            return
+        channel_handle = row[0] or ""
+        video_path = get_video_path(args.video_id, channel_handle)
+        if video_path is None:
+            print(f"Video {args.video_id} not downloaded.")
+            return
+        results = generate_from_video(video_path, channel_handle=channel_handle)
+        for r in results:
+            print(f"  {r['filepath']} ({r['num_moves']} moves, {r['num_frames']} frames)")
+        print(f"\nGenerated {len(results)} clip(s)")
+        return
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             query = """
@@ -623,6 +646,7 @@ def main():
     # generate-clips
     p = subparsers.add_parser("generate-clips", help="Generate training clips from approved videos")
     p.add_argument("--channel", type=str, default=None, help="Generate for specific channel")
+    p.add_argument("--video-id", type=str, default=None, help="Generate for a single video by ID")
     p.add_argument("--limit", type=int, default=None, help="Max videos to process")
 
     # overlay-test

@@ -137,167 +137,60 @@ def _expand_bbox(
 ) -> tuple[int, int, int, int]:
     """Expand a detected overlay bbox to cover the full board.
 
-    The scanner finds a small high-confidence seed inside the board.
-    This estimates the square size from the seed region and extrapolates
-    to the full 8x8 board.
-
-    Strategy: the seed's 8x8 grid gives us the approximate square size.
-    From that we infer the full board size (8 * square_size) and position
-    (align to the nearest grid boundary).
+    Tries progressively larger windows centred on the seed.  Picks the
+    *largest* window where the grid detector finds a valid 8×8 grid.
+    Keeps trying even if intermediate sizes fail (the grid detector may
+    fail at awkward aspect ratios where board edges are partially cropped
+    but succeed again at the true board size).
     """
+    from pipeline.overlay.grid_detector import detect_grid
+
     h, w = frame.shape[:2]
     sx, sy, sw, sh = seed_bbox
-
-    # The seed was scored as a valid 8x8 grid, so each cell is sw/8.
-    cell_size = sw / 8.0
-
-    # Sample colors from the seed to find the board's light/dark palette.
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    # Expand outward from the seed center. Walk left/right/up/down along
-    # the board's grid pattern. At each step, check that the alternating
-    # light/dark color pattern continues.
     cx = sx + sw // 2
     cy = sy + sh // 2
 
-    # Measure light and dark square mean brightness from the seed.
-    seed_gray = gray[sy : sy + sh, sx : sx + sw]
-    cs = int(cell_size)
-    light_vals, dark_vals = [], []
-    for r in range(8):
-        for c in range(8):
-            y1, y2 = r * cs, (r + 1) * cs
-            x1, x2 = c * cs, (c + 1) * cs
-            cell = seed_gray[y1:y2, x1:x2]
-            if cell.size == 0:
-                continue
-            m = float(np.mean(cell))
-            if (r + c) % 2 == 0:
-                light_vals.append(m)
-            else:
-                dark_vals.append(m)
+    best = seed_bbox
 
-    if not light_vals or not dark_vals:
-        return seed_bbox
-
-    light_mean = np.median(light_vals)
-    dark_mean = np.median(dark_vals)
-    # Board squares should have a clear contrast between light and dark.
-    if abs(light_mean - dark_mean) < 20:
-        return seed_bbox
-
-    mid_brightness = (light_mean + dark_mean) / 2
-    tolerance = abs(light_mean - dark_mean) * 0.8
-
-    def _is_board_pixel(px_y: int, px_x: int) -> bool:
-        """Check if a pixel's brightness is within the board's color range."""
-        if px_y < 0 or px_y >= h or px_x < 0 or px_x >= w:
-            return False
-        val = float(gray[px_y, px_x])
-        return abs(val - light_mean) < tolerance or abs(val - dark_mean) < tolerance
-
-    # Expand in each direction by scanning columns/rows.
-    # Walk left from seed left edge until we hit non-board pixels.
-    def _scan_edge(start: int, delta: int, axis: str, limit: int) -> int:
-        """Scan outward from start in direction delta until board pattern stops."""
-        pos = start
-        consecutive_misses = 0
-        while 0 <= pos + delta <= limit:
-            pos += delta
-            # Sample several points along this line
-            hits = 0
-            samples = 10
-            for i in range(samples):
-                if axis == "x":
-                    py = sy + int(sh * i / samples)
-                    px = pos
-                else:
-                    py = pos
-                    px = sx + int(sw * i / samples)
-                if _is_board_pixel(py, px):
-                    hits += 1
-            if hits < samples * 0.4:
-                consecutive_misses += 1
-                if consecutive_misses > int(cell_size * 0.5):
-                    return pos - delta * consecutive_misses
-            else:
-                consecutive_misses = 0
-        return pos
-
-    left = _scan_edge(sx, -1, "x", w - 1)
-    right = _scan_edge(sx + sw, 1, "x", w - 1)
-    top = _scan_edge(sy, -1, "y", h - 1)
-    bottom = _scan_edge(sy + sh, 1, "y", h - 1)
-
-    # The board is square, so use the larger dimension.
-    bw = right - left
-    bh = bottom - top
-    board_size = max(bw, bh)
-
-    # Keep it square and centered on the detected region.
-    bcx = (left + right) // 2
-    bcy = (top + bottom) // 2
-    half = board_size // 2
-    ex = max(0, min(bcx - half, w - board_size))
-    ey = max(0, min(bcy - half, h - board_size))
-    board_size = min(board_size, w - ex, h - ey)
-
-    # Only use the expanded bbox if it's meaningfully larger than the seed.
-    if board_size < sw * 1.3:
-        return seed_bbox
-
-    # Trim uniform-color borders (rank/file label strips, separator bars).
-    # Walk inward from each edge, skipping columns/rows with near-zero variance.
-    expanded = frame[ey : ey + board_size, ex : ex + board_size]
-    exp_gray = cv2.cvtColor(expanded, cv2.COLOR_BGR2GRAY) if len(expanded.shape) == 3 else expanded
-    trim_l = trim_t = 0
-    trim_r = trim_b = 0
-    bs = board_size
-
-    # Trim left
-    for col_x in range(bs // 8):
-        col = exp_gray[bs // 4 : 3 * bs // 4, col_x]
-        if float(np.var(col)) < 100:
-            trim_l = col_x + 1
-        else:
+    # Try 125%, 150%, …, up to 4× the seed size.  Keep trying all
+    # sizes — don't stop early because the grid detector can fail at
+    # intermediate sizes and then succeed at the correct one.
+    for multiplier_pct in range(125, 425, 25):
+        size = int(sw * multiplier_pct / 100)
+        if size > min(h, w):
             break
 
-    # Trim right
-    for col_x in range(bs - 1, bs - bs // 8, -1):
-        col = exp_gray[bs // 4 : 3 * bs // 4, col_x]
-        if float(np.var(col)) < 100:
-            trim_r = bs - col_x
-        else:
-            break
+        ex = max(0, min(cx - size // 2, w - size))
+        ey = max(0, min(cy - size // 2, h - size))
+        size = min(size, w - ex, h - ey)
 
-    # Trim top
-    for row_y in range(bs // 8):
-        row = exp_gray[row_y, bs // 4 : 3 * bs // 4]
-        if float(np.var(row)) < 100:
-            trim_t = row_y + 1
-        else:
-            break
+        crop = frame[ey : ey + size, ex : ex + size]
+        grid = detect_grid(crop)
+        if grid is not None and len(grid.v_lines) == 9 and len(grid.h_lines) == 9:
+            best = (ex, ey, size, size)
 
-    # Trim bottom
-    for row_y in range(bs - 1, bs - bs // 8, -1):
-        row = exp_gray[row_y, bs // 4 : 3 * bs // 4]
-        if float(np.var(row)) < 100:
-            trim_b = bs - row_y
-        else:
-            break
+    # If the grid detector found the board at a larger size, use it to
+    # compute a tighter bbox from the actual grid lines.
+    if best != seed_bbox:
+        ex, ey, size, _ = best
+        crop = frame[ey : ey + size, ex : ex + size]
+        grid = detect_grid(crop)
+        if grid is not None and len(grid.v_lines) == 9 and len(grid.h_lines) == 9:
+            gx = grid.v_lines[0]
+            gy = grid.h_lines[0]
+            gw = grid.v_lines[-1] - grid.v_lines[0]
+            gh = grid.h_lines[-1] - grid.h_lines[0]
+            board_size = max(gw, gh)
+            bx = ex + gx
+            by = ey + gy
+            # Clamp
+            bx = max(0, min(bx, w - board_size))
+            by = max(0, min(by, h - board_size))
+            board_size = min(board_size, w - bx, h - by)
+            if board_size > sw:
+                return (bx, by, board_size, board_size)
 
-    # Apply trim, keep square by using the max trim and adjusting center
-    total_trim = max(trim_l + trim_r, trim_t + trim_b)
-    if total_trim > 0 and total_trim < bs // 4:
-        new_ex = ex + trim_l
-        new_ey = ey + trim_t
-        new_w = board_size - trim_l - trim_r
-        new_h = board_size - trim_t - trim_b
-        # Keep it square
-        new_size = min(new_w, new_h)
-        return (new_ex, new_ey, new_size, new_size)
-
-    return (ex, ey, board_size, board_size)
+    return best
 
 
 def _refine_alignment(
@@ -350,23 +243,23 @@ def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
     # Precompute grayscale once instead of per-window.
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
-    best_score = 0.0
-    best_bbox = None
-    found_early = False
+    # Collect all detections above threshold, then pick the best.
+    # We prefer larger detections: a 900px board at 0.7 score is better
+    # than a 216px sub-region at 0.93.  To achieve this we scan all scales
+    # and keep the *largest* detection whose score exceeds the threshold.
+    # Within the same scale, pick the highest score.
+    candidates: list[tuple[float, tuple[int, int, int, int]]] = []  # (score, bbox)
 
     for scale in SCAN_SCALES:
-        if found_early:
-            break
-
         win_size = int(min(h, w) * scale)
         if win_size < 64:
             continue
 
         step = max(1, int(win_size * SCAN_STEP_FRACTION))
+        scale_best_score = 0.0
+        scale_best_bbox = None
 
         for y in range(0, h - win_size + 1, step):
-            if found_early:
-                break
             for x in range(0, w - win_size + 1, step):
                 region = gray[y : y + win_size, x : x + win_size]
                 regularity = compute_grid_regularity(region)
@@ -375,13 +268,23 @@ def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
                     has_pattern = check_alternating_pattern(region)
                     score = regularity + (0.2 if has_pattern else 0.0)
 
-                    if score > best_score:
-                        best_score = score
-                        best_bbox = (x, y, win_size, win_size)
+                    if score > scale_best_score:
+                        scale_best_score = score
+                        scale_best_bbox = (x, y, win_size, win_size)
 
-                        if best_score > 0.9:
-                            found_early = True
-                            break
+        if scale_best_bbox is not None:
+            candidates.append((scale_best_score, scale_best_bbox))
+
+    # Pick the largest detection that passes threshold.  Among ties in
+    # window size, pick the highest score.
+    best_score = 0.0
+    best_bbox = None
+    for score, bbox in candidates:
+        bbox_area = bbox[2] * bbox[3]
+        best_area = best_bbox[2] * best_bbox[3] if best_bbox else 0
+        if bbox_area > best_area or (bbox_area == best_area and score > best_score):
+            best_score = score
+            best_bbox = bbox
 
     if best_bbox is not None and best_score > MIN_LOW_VARIANCE_RATIO:
         # Expand the seed detection to cover the full board.

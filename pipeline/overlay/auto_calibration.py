@@ -8,6 +8,7 @@ only needs to confirm or adjust rather than draw from scratch.
 import logging
 from dataclasses import dataclass
 
+import chess
 import cv2
 import numpy as np
 
@@ -487,4 +488,119 @@ def propose_calibration_for_channel(
         board_theme=best_theme,
         theme_confidence=avg_theme_conf,
         orientation_confidence=avg_orient_conf,
+    )
+
+
+def propose_calibration_for_clip(
+    video_path: str,
+    start_time: float,
+    end_time: float | None,
+    num_samples: int = 5,
+    ref_resolution: tuple[int, int] = DEFAULT_REF_RESOLUTION,
+) -> CalibrationProposal | None:
+    """Auto-propose calibration for a specific clip time range.
+
+    Unlike :func:`propose_calibration` (which samples fixed timestamps or
+    thumbnails), this operates on a specific ``[start_time, end_time]``
+    window of a downloaded video.
+
+    Args:
+        video_path: Path to the local video file.
+        start_time: Clip start in seconds.
+        end_time: Clip end in seconds (``None`` = end of video).
+        num_samples: Number of frames to sample within the clip.
+        ref_resolution: Target resolution for the returned bboxes.
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        logger.error(f"Cannot open video: {video_path}")
+        return None
+
+    fps = max(cap.get(cv2.CAP_PROP_FPS), 1)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps
+
+    clip_end = end_time if end_time is not None else duration
+    clip_end = min(clip_end, duration)
+    clip_duration = clip_end - start_time
+
+    if clip_duration <= 0:
+        cap.release()
+        return None
+
+    # Evenly spaced timestamps within the clip, avoiding the very edges
+    margin = min(5.0, clip_duration * 0.05)
+    effective_start = start_time + margin
+    effective_end = clip_end - margin
+    if effective_start >= effective_end:
+        effective_start = start_time
+        effective_end = clip_end
+
+    if num_samples == 1:
+        timestamps = [(effective_start + effective_end) / 2]
+    else:
+        step = (effective_end - effective_start) / (num_samples - 1)
+        timestamps = [effective_start + i * step for i in range(num_samples)]
+
+    frames: list[tuple[np.ndarray, str]] = []
+    for ts in timestamps:
+        cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000)
+        ret, frame = cap.read()
+        if ret:
+            frames.append((frame, f"{ts:.1f}s"))
+
+    cap.release()
+
+    if not frames:
+        logger.warning(f"No frames extracted from {video_path} [{start_time}-{clip_end}]")
+        return None
+
+    # Find the best overlay detection across sampled frames
+    best_detection = None
+    best_frame = None
+
+    for frame, label in frames:
+        detection = detect_overlay_in_frame(frame)
+        if detection.found:
+            bbox_area = detection.bbox[2] * detection.bbox[3] if detection.bbox else 0
+            best_area = (
+                best_detection.bbox[2] * best_detection.bbox[3]
+                if best_detection and best_detection.bbox
+                else 0
+            )
+            if bbox_area > best_area:
+                best_detection = detection
+                best_frame = frame
+
+    if best_detection is None or best_frame is None:
+        logger.info(f"No overlay detected in clip [{start_time:.0f}-{clip_end:.0f}]")
+        return None
+
+    frame_h, frame_w = best_frame.shape[:2]
+    overlay_bbox = best_detection.bbox
+    ox, oy, ow, oh = overlay_bbox
+    overlay_crop = best_frame[oy : oy + oh, ox : ox + ow]
+
+    theme, theme_conf = detect_board_theme(overlay_crop)
+    flipped, orient_conf = detect_board_orientation(overlay_crop, theme)
+
+    all_frames = [f for f, _ in frames]
+    camera_bbox = compute_camera_bbox(all_frames, overlay_bbox)
+
+    ref_w, ref_h = ref_resolution
+    if frame_w == ref_w and frame_h == ref_h:
+        overlay_final = overlay_bbox
+        camera_final = camera_bbox
+    else:
+        overlay_final = _scale_bbox(overlay_bbox, frame_w, frame_h, ref_w, ref_h)
+        camera_final = _scale_bbox(camera_bbox, frame_w, frame_h, ref_w, ref_h)
+
+    return CalibrationProposal(
+        overlay=overlay_final,
+        camera=camera_final,
+        ref_resolution=ref_resolution,
+        board_flipped=flipped,
+        board_theme=theme,
+        theme_confidence=theme_conf,
+        orientation_confidence=orient_conf,
     )

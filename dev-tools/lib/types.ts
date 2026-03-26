@@ -311,3 +311,47 @@ export interface GenerationStatus {
   output_dir?: string;
   error?: string | null;
 }
+
+// Auto-segment
+export interface SegmentResult {
+  start_time: number;
+  end_time: number;
+  overlay_bbox: [number, number, number, number] | null;
+  score: number;
+  sample_count: number;
+  clip_id: number;
+}
+
+export interface SegmentGap {
+  start_time: number;
+  end_time: number;
+}
+
+export interface AutoSegmentResponse {
+  segments: SegmentResult[];
+  gaps: SegmentGap[];
+  video_resolution: [number, number];
+  total_frames_sampled: number;
+  processing_time_sec: number;
+  error?: string;
+  existing_clips?: number;
+}
+
+// Auto-calibrate clip
+export interface AutoCalibrateProposal {
+  overlay_bbox: [number, number, number, number];
+  camera_bbox: [number, number, number, number];
+  board_theme: string;
+  theme_confidence: number;
+  board_flipped: boolean;
+  orientation_confidence: number;
+  ref_resolution: [number, number];
+}
+
+export interface AutoCalibrateResponse {
+  clip_id: number;
+  proposal: AutoCalibrateProposal | null;
+  applied: boolean;
+  preview_frame_b64: string | null;
+  camera_heatmap_b64: string | null;
+}

@@ -21,6 +21,8 @@ import type {
   GenerateClipsResponse,
   AiScreenResult,
   GenerationStatus,
+  AutoSegmentResponse,
+  AutoCalibrateResponse,
 } from "./types";
 
 // ── Overlay ─────────────────────────────────────────────────
@@ -438,6 +440,39 @@ export async function deleteVideoClip(
     { method: "DELETE" }
   );
   if (!res.ok) throw new Error(await res.text());
+}
+
+// ── Auto-segment & auto-calibrate ─────────────────────────
+
+export async function autoSegmentVideo(
+  videoId: string,
+  opts?: { sampleIntervalSec?: number; replaceExisting?: boolean }
+): Promise<AutoSegmentResponse> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/auto-segment`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sample_interval_sec: opts?.sampleIntervalSec ?? 30.0,
+        replace_existing: opts?.replaceExisting ?? false,
+      }),
+    }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function autoCalibrateClip(
+  videoId: string,
+  clipId: number
+): Promise<AutoCalibrateResponse> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/clips/${clipId}/auto-calibrate`,
+    { method: "POST" }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function downloadVideo(

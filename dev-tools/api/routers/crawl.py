@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from api.services import crawl_service, inspect_service, models_service
+from api.services import crawl_service, inspect_service, models_service, segment_service
 
 router = APIRouter()
 
@@ -377,3 +377,34 @@ async def delete_video_clip(video_id: str, clip_id: int):
     if not deleted:
         raise HTTPException(404, f"Clip {clip_id} not found")
     return {"deleted": True}
+
+
+# ── Auto-segment & auto-calibrate ─────────────────────────
+
+
+class AutoSegmentRequest(BaseModel):
+    sample_interval_sec: float = 30.0
+    replace_existing: bool = False
+
+
+@router.post("/videos/{video_id}/auto-segment")
+async def auto_segment(video_id: str, body: AutoSegmentRequest = AutoSegmentRequest()):
+    try:
+        return await run_in_threadpool(
+            segment_service.auto_segment_video,
+            video_id,
+            body.sample_interval_sec,
+            body.replace_existing,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/videos/{video_id}/clips/{clip_id}/auto-calibrate")
+async def auto_calibrate_clip(video_id: str, clip_id: int):
+    try:
+        return await run_in_threadpool(
+            segment_service.auto_calibrate_clip, video_id, clip_id,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))

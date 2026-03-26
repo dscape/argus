@@ -361,6 +361,31 @@ def download_video(url: str, output_dir: str = "data/videos/overlay") -> str | N
         return None
 
 
+def _get_db_clips(video_id: str) -> list[dict]:
+    """Query per-clip calibrations from the video_clips DB table."""
+    try:
+        from pipeline.db.connection import get_conn
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, start_time, end_time,
+                           overlay_bbox, camera_bbox, ref_resolution,
+                           board_flipped, board_theme
+                    FROM video_clips
+                    WHERE video_id = %s
+                    ORDER BY clip_index
+                    """,
+                    (video_id,),
+                )
+                cols = [d[0] for d in cur.description]
+                return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception as e:
+        logger.debug(f"Could not read video_clips from DB: {e}")
+        return []
+
+
 def generate_from_video(
     video_path_or_url: str,
     channel_handle: str,
@@ -368,6 +393,9 @@ def generate_from_video(
     base_fps: float = 2.0,
 ) -> list[dict]:
     """Generate training clips from a video path or URL.
+
+    Checks the ``video_clips`` DB table first for per-clip calibrations.
+    Falls back to channel-level YAML calibration if no DB entries exist.
 
     Args:
         video_path_or_url: Local file path or YouTube URL.
@@ -378,14 +406,6 @@ def generate_from_video(
     Returns:
         List of clip metadata dicts.
     """
-    calibration = get_calibration(channel_handle)
-    if calibration is None:
-        logger.error(
-            f"No calibration found for {channel_handle}. "
-            f"Run 'pipeline overlay-calibrate' first."
-        )
-        return []
-
     # Download if URL
     video_path = video_path_or_url
     is_url = video_path_or_url.startswith(("http://", "https://"))
@@ -397,8 +417,40 @@ def generate_from_video(
             logger.error("Failed to download video")
             return []
 
-    # Extract video ID for naming
     video_id = os.path.splitext(os.path.basename(video_path))[0]
+
+    # 1. Try per-clip DB calibrations
+    db_clips = _get_db_clips(video_id)
+    if db_clips:
+        logger.info(f"Using {len(db_clips)} clip(s) from DB for {video_id}")
+        generator = OverlayClipGenerator(output_dir=output_dir, base_fps=base_fps)
+        results: list[dict] = []
+        for clip_row in db_clips:
+            cal = LayoutCalibration(
+                overlay=tuple(clip_row["overlay_bbox"]),
+                camera=tuple(clip_row["camera_bbox"]),
+                ref_resolution=tuple(clip_row["ref_resolution"]),
+                board_flipped=clip_row["board_flipped"],
+                board_theme=clip_row["board_theme"],
+            )
+            clip_results = generator.generate_clips(
+                video_path,
+                cal,
+                video_id=f"{video_id}_clip{clip_row['id']}",
+                start_time=clip_row["start_time"],
+                end_time=clip_row["end_time"],
+            )
+            results.extend(clip_results)
+        return results
+
+    # 2. Fall back to channel-level YAML calibration
+    calibration = get_calibration(channel_handle)
+    if calibration is None:
+        logger.error(
+            f"No calibration found for {channel_handle}. "
+            f"Run auto-segment + auto-calibrate, or 'pipeline calibrate' first."
+        )
+        return []
 
     generator = OverlayClipGenerator(output_dir=output_dir, base_fps=base_fps)
     return generator.generate_clips(video_path, calibration, video_id=video_id)
