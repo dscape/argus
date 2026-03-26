@@ -6,22 +6,14 @@ Chess vision model using VLA (Vision-Language-Action) paradigm to detect moves f
 
 ### Starting the dev servers
 
-The dev UI requires **both** the FastAPI backend and the Next.js frontend. Always start both:
+Everything runs via Docker Compose. Start and stop with:
 
 ```bash
-# Option 1: via launch.json (preferred in Claude Code)
-# Start "api" and "dev-tools" servers from .claude/launch.json
-
-# Option 2: via Make (uses Docker)
-make dev-tools
-
-# Option 3: manually
-cd dev-tools
-../.venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload  # backend
-npm run dev                                                               # frontend
+make up    # starts postgres, API, UI, and Blender render server
+make down  # stops everything
 ```
 
-The frontend (Next.js, port 3000) proxies `/api/*` to the backend (FastAPI, port 8000). If the backend is not running, pages will show "Loading..." and all API calls will fail with proxy errors.
+The UI is at http://localhost:3000, the API at http://localhost:8000. The frontend proxies `/api/*` to the backend. If the backend is not running, pages will show "Loading..." and all API calls will fail with proxy errors.
 
 ### Key paths
 
