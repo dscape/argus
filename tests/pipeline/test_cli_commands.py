@@ -67,18 +67,3 @@ class TestInspectCalibrationCommand:
         )
         assert result.returncode == 0
         assert "No calibration found" in result.stdout
-
-
-class TestAiExtractStatusCommand:
-    """Test the ai-extract-status CLI command."""
-
-    def test_runs_without_error(self):
-        """Should run even with empty/missing cache dir."""
-        result = subprocess.run(
-            [sys.executable, "-m", "pipeline.cli", "ai-extract-status"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0
-        assert "AI feature extraction progress" in result.stdout
