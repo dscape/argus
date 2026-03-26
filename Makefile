@@ -1,4 +1,4 @@
-.PHONY: install dev test lint typecheck format train eval datagen infer clean \
+.PHONY: install dev test lint typecheck format train eval datagen infer train-pieces clean \
        db-up db-down db-backup db-restore pipeline-install seed-channels crawl screen inspect download generate-clips pipeline-stats \
        dev-tools dev-tools-down blender-server blender-server-stop \
        up down \
@@ -42,6 +42,9 @@ datagen:
 
 infer:
 	$(PYTHON) scripts/infer.py $(ARGS)
+
+train-pieces: check-backup
+	$(PYTHON) scripts/train_piece_classifier.py $(ARGS)
 
 clean:
 	rm -rf build/ dist/ *.egg-info .pytest_cache .mypy_cache __pycache__

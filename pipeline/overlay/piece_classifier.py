@@ -213,23 +213,24 @@ def _detect_orientation(class_grid: list[list[int]]) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def read_fen_from_frame(
+def read_fen_with_grid(
     frame: np.ndarray,
+    grid: "GridResult",
     device: str = "cpu",
-) -> str | None:
-    """Read chess position from a video frame using the CNN classifier.
+    detect_orientation: bool = True,
+) -> str:
+    """Classify pieces given a known grid.  Returns piece-placement FEN.
 
-    Returns piece-placement FEN or None.
+    Unlike :func:`read_fen_from_frame` this never returns ``None`` — the
+    caller provides a pre-validated grid.
+
+    Set *detect_orientation* to ``False`` when the board orientation is
+    known (e.g. chess-positions boards are always white-at-bottom).
     """
-    grid = find_board_in_frame(frame)
-    if grid is None:
-        logger.warning("No grid found in frame")
-        return None
-
     squares = grid.crop_squares(frame)
     class_grid = classify_squares(squares, device=device)
 
-    flipped = _detect_orientation(class_grid)
+    flipped = _detect_orientation(class_grid) if detect_orientation else False
 
     board = chess.Board(fen=None)
     for r in range(8):
@@ -244,3 +245,19 @@ def read_fen_from_frame(
             board.set_piece_at(sq, piece)
 
     return board.board_fen()
+
+
+def read_fen_from_frame(
+    frame: np.ndarray,
+    device: str = "cpu",
+) -> str | None:
+    """Read chess position from a video frame using the CNN classifier.
+
+    Returns piece-placement FEN or None.
+    """
+    grid = find_board_in_frame(frame)
+    if grid is None:
+        logger.warning("No grid found in frame")
+        return None
+
+    return read_fen_with_grid(frame, grid, device=device)

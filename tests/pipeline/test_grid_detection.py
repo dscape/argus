@@ -1,4 +1,7 @@
-"""Tests for pipeline.overlay.grid_detector — exact grid detection on reference videos."""
+"""Tests for pipeline.overlay.grid_detector — exact grid detection on reference frames."""
+
+import json
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -6,58 +9,24 @@ import pytest
 from pipeline.overlay.grid_detector import GridResult, detect_grid, find_board_in_frame
 
 # ---------------------------------------------------------------------------
-# Video paths & ground-truth grid positions
+# Fixture data
 # ---------------------------------------------------------------------------
 
-VIDEO_DIR = "data/videos/STLChessClub"
+FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "frames"
 
-# Manually verified grid coordinates (9 vertical + 9 horizontal boundaries).
-# For O8Z / 7Ra / 2wW the overlay occupies the left ~1080×1080 of the 1920×1080 frame.
-# For Ov8 the board is a small overlay on the right side of the frame.
-GRID_TRUTH: dict[str, dict] = {
-    "O8Z": {
-        "video": f"{VIDEO_DIR}/O8ZwstOxG_A.mp4",
-        "timestamp": 60,
-        "v_lines": [56, 188, 320, 452, 584, 716, 848, 980, 1112],
-        "h_lines": [10, 142, 274, 406, 538, 670, 802, 934, 1066],
-        "sq_size": 132,
-        "tolerance": 8,
-    },
-    "7Ra": {
-        "video": f"{VIDEO_DIR}/7RaBQag34Hk.mp4",
-        "timestamp": 60,
-        "v_lines": [56, 188, 320, 452, 584, 716, 848, 980, 1112],
-        "h_lines": [10, 142, 274, 406, 538, 670, 802, 934, 1066],
-        "sq_size": 132,
-        "tolerance": 8,
-    },
-    "2wW": {
-        "video": f"{VIDEO_DIR}/2wWUKmCBr6A.mp4",
-        "timestamp": 60,
-        "v_lines": [56, 188, 320, 452, 584, 716, 848, 980, 1112],
-        "h_lines": [10, 142, 274, 406, 538, 670, 802, 934, 1066],
-        "sq_size": 132,
-        "tolerance": 8,
-    },
-    "Ov8": {
-        "video": f"{VIDEO_DIR}/Ov8PXnJp1PU.mp4",
-        "timestamp": 60,
-        "v_lines": [1279, 1352, 1425, 1498, 1571, 1644, 1717, 1790, 1863],
-        "h_lines": [219, 292, 365, 438, 511, 584, 657, 730, 803],
-        "sq_size": 73,
-        "tolerance": 8,
-    },
-}
+with open(FIXTURES_DIR / "ground_truth.json") as _f:
+    GROUND_TRUTH: dict[str, dict] = json.load(_f)
+
+# Test-specific thresholds (not part of the shared ground truth).
+SQ_SIZES = {"O8Z": 132, "7Ra": 132, "2wW": 132, "Ov8": 73}
+TOLERANCE = 8
 
 
-def _extract_frame(video_path: str, timestamp: int) -> np.ndarray:
-    """Extract a single frame from *video_path* at *timestamp* seconds."""
-    cap = cv2.VideoCapture(video_path)
-    assert cap.isOpened(), f"Cannot open {video_path}"
-    cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000)
-    ret, frame = cap.read()
-    cap.release()
-    assert ret, f"Failed to read frame at {timestamp}s from {video_path}"
+def _load_frame(entry: dict) -> np.ndarray:
+    """Load a pre-extracted frame from the fixtures directory."""
+    path = FIXTURES_DIR / entry["image"]
+    frame = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    assert frame is not None, f"Cannot load fixture image: {path}"
     return frame
 
 
@@ -94,31 +63,31 @@ def _assert_grid_close(
 
 
 class TestGridDetection:
-    """Grid detection must find the exact 8×8 grid in each reference video."""
+    """Grid detection must find the exact 8×8 grid in each reference frame."""
 
     @pytest.mark.parametrize("name", ["O8Z", "7Ra", "2wW", "Ov8"])
     def test_find_board_in_frame(self, name: str) -> None:
-        """find_board_in_frame returns correct grid for each video."""
-        info = GRID_TRUTH[name]
-        frame = _extract_frame(info["video"], info["timestamp"])
+        """find_board_in_frame returns correct grid for each frame."""
+        info = GROUND_TRUTH[name]
+        frame = _load_frame(info)
 
         result = find_board_in_frame(frame)
 
         assert result is not None, f"{name}: find_board_in_frame returned None"
         _assert_grid_close(
             result,
-            info["v_lines"],
-            info["h_lines"],
-            info["sq_size"],
-            info["tolerance"],
+            info["grid"]["v_lines"],
+            info["grid"]["h_lines"],
+            SQ_SIZES[name],
+            TOLERANCE,
             name,
         )
 
     @pytest.mark.parametrize("name", ["O8Z", "7Ra", "2wW"])
     def test_detect_grid_on_overlay_crop(self, name: str) -> None:
         """detect_grid works directly on the overlay crop for left-side boards."""
-        info = GRID_TRUTH[name]
-        frame = _extract_frame(info["video"], info["timestamp"])
+        info = GROUND_TRUTH[name]
+        frame = _load_frame(info)
         overlay = frame[0:1080, 0:1080]
 
         result = detect_grid(overlay)
@@ -129,8 +98,8 @@ class TestGridDetection:
 
     def test_grid_produces_64_squares(self) -> None:
         """crop_squares returns an 8×8 list of non-empty images."""
-        info = GRID_TRUTH["O8Z"]
-        frame = _extract_frame(info["video"], info["timestamp"])
+        info = GROUND_TRUTH["O8Z"]
+        frame = _load_frame(info)
         result = find_board_in_frame(frame)
         assert result is not None
 
