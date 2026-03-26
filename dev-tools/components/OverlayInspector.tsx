@@ -12,17 +12,15 @@ import {
   ReferenceLine,
   ResponsiveContainer,
 } from "recharts";
-import VideoCard, {
-  type InspectResult,
-  computeAgreement,
-  classColor,
-} from "@/components/VideoCard";
-import { youtubeThumb } from "@/components/video-shared";
+import OverlayTestCard from "@/components/OverlayTestCard";
 import {
-  createScreeningSession,
-  listScreeningSessions,
-  updateSessionPins,
-  type ScreeningSession,
+  sampleOverlayBoards,
+  inspectOverlayBoard,
+  createOverlayTestSession,
+  listOverlayTestSessions,
+  updateOverlaySessionPins,
+  type OverlayTestResult,
+  type OverlayTestSession,
 } from "@/lib/api";
 
 interface EvalPoint {
@@ -31,31 +29,27 @@ interface EvalPoint {
   accuracy: number;
   sample_size: number;
   notes: string | null;
-  per_class: Record<string, unknown> | null;
+  per_class: { piece_accuracy?: number; images_per_minute?: number } | null;
 }
 
-interface AiScreeningInspectorProps {
+interface OverlayInspectorProps {
   initialSession?: {
     id: string;
-    results: InspectResult[];
+    results: OverlayTestResult[];
     accuracy: number | null;
-    per_class: Record<string, { correct: number; total: number }> | null;
+    piece_accuracy: number | null;
     pin_state: Record<string, boolean>;
-    model_version: string | null;
     created_at: string;
   };
 }
 
-export default function AiScreeningInspector({ initialSession }: AiScreeningInspectorProps) {
+export default function OverlayInspector({ initialSession }: OverlayInspectorProps) {
   const router = useRouter();
   const [sampleSize, setSampleSize] = useState(20);
-  const [results, setResults] = useState<InspectResult[]>(initialSession?.results ?? []);
+  const [results, setResults] = useState<OverlayTestResult[]>(initialSession?.results ?? []);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [evalHistory, setEvalHistory] = useState<EvalPoint[]>([]);
-  const [modelVersion, setModelVersion] = useState<string | null>(
-    initialSession?.model_version ?? null
-  );
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(
     new Set(
       initialSession?.pin_state
@@ -67,18 +61,16 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
   );
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [sessionId, setSessionId] = useState<string | null>(initialSession?.id ?? null);
-  const [recentSessions, setRecentSessions] = useState<ScreeningSession[]>([]);
+  const [recentSessions, setRecentSessions] = useState<OverlayTestSession[]>([]);
   const [showSessionList, setShowSessionList] = useState(false);
-  const inspectedIds = useRef<Set<string>>(new Set());
+  const inspectedFiles = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const sessionListRef = useRef<HTMLDivElement>(null);
 
-  // Fetch eval history on mount
   useEffect(() => {
     fetchHistory();
   }, []);
 
-  // Close session list on click outside
   useEffect(() => {
     if (!showSessionList) return;
     const handleClick = (e: MouseEvent) => {
@@ -92,7 +84,7 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
 
   async function fetchHistory() {
     try {
-      const res = await fetch("/api/models/evaluations?model_name=ai_screening");
+      const res = await fetch("/api/models/evaluations?model_name=piece_classifier");
       if (res.ok) {
         const data = await res.json();
         setEvalHistory(data.evaluations);
@@ -104,7 +96,7 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
 
   async function fetchRecentSessions() {
     try {
-      const { sessions } = await listScreeningSessions(20);
+      const { sessions } = await listOverlayTestSessions(20);
       setRecentSessions(sessions);
       setShowSessionList(true);
     } catch (e) {
@@ -113,33 +105,31 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
   }
 
   const togglePin = useCallback(
-    (videoId: string) => {
+    (filename: string) => {
       setPinnedIds((prev) => {
         const next = new Set(prev);
-        if (next.has(videoId)) next.delete(videoId);
-        else next.add(videoId);
+        if (next.has(filename)) next.delete(filename);
+        else next.add(filename);
 
-        // Persist to server if we have a session
         if (sessionId) {
-          updateSessionPins(sessionId, { [videoId]: !prev.has(videoId) }).catch(() => {});
+          updateOverlaySessionPins(sessionId, { [filename]: !prev.has(filename) }).catch(() => {});
         }
         return next;
       });
-      // If unpinning, also collapse
       setExpandedIds((prev) => {
         const next = new Set(prev);
-        next.delete(videoId);
+        next.delete(filename);
         return next;
       });
     },
     [sessionId]
   );
 
-  const toggleExpand = useCallback((videoId: string) => {
+  const toggleExpand = useCallback((filename: string) => {
     setExpandedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(videoId)) next.delete(videoId);
-      else next.add(videoId);
+      if (next.has(filename)) next.delete(filename);
+      else next.add(filename);
       return next;
     });
   }, []);
@@ -152,111 +142,81 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
     setLoading(true);
     setResults([]);
     setProgress({ current: 0, total: 0 });
-    setModelVersion(null);
     setPinnedIds(new Set());
     setExpandedIds(new Set());
     setSessionId(null);
 
-    const collected: InspectResult[] = [];
+    const collected: OverlayTestResult[] = [];
     const autoPinned = new Set<string>();
-    let detectedModelVersion: string | null = null;
     const batchStartTime = performance.now();
 
     try {
-      // Step 1: get sample video IDs (excluding previously inspected)
-      const excludeParam =
-        inspectedIds.current.size > 0
-          ? `&exclude=${Array.from(inspectedIds.current).join(",")}`
-          : "";
-      const sampleRes = await fetch(
-        `/api/models/ai-screening/sample?limit=${sampleSize}${excludeParam}`,
-        { signal: controller.signal }
-      );
-      if (!sampleRes.ok) throw new Error(await sampleRes.text());
-      const { video_ids } = await sampleRes.json();
+      // Step 1: get sample filenames
+      const excludeArr = Array.from(inspectedFiles.current);
+      const { filenames } = await sampleOverlayBoards(sampleSize, excludeArr);
 
-      setProgress({ current: 0, total: video_ids.length });
+      setProgress({ current: 0, total: filenames.length });
 
-      // Step 2: inspect each video individually for progress
-      for (let i = 0; i < video_ids.length; i++) {
+      // Step 2: inspect each board
+      for (let i = 0; i < filenames.length; i++) {
         if (controller.signal.aborted) break;
-        const res = await fetch("/api/models/ai-screening/inspect", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ video_id: video_ids[i] }),
-          signal: controller.signal,
-        });
-        if (res.ok) {
-          const result: InspectResult = await res.json();
-          collected.push(result);
-          setResults((prev) => [...prev, result]);
-          inspectedIds.current.add(video_ids[i]);
-          if (result.model_version) {
-            detectedModelVersion = result.model_version;
-            setModelVersion(result.model_version);
-          }
-          // Auto-pin disagreements
-          const agrees = computeAgreement(result);
-          if (agrees === false) {
-            autoPinned.add(result.video_id);
-            setPinnedIds((prev) => new Set([...prev, result.video_id]));
-          }
+
+        const result = await inspectOverlayBoard(filenames[i]);
+        collected.push(result);
+        setResults((prev) => [...prev, result]);
+        inspectedFiles.current.add(filenames[i]);
+
+        // Auto-pin mismatches
+        if (!result.match) {
+          autoPinned.add(result.filename);
+          setPinnedIds((prev) => new Set([...prev, result.filename]));
         }
-        setProgress({ current: i + 1, total: video_ids.length });
+
+        setProgress({ current: i + 1, total: filenames.length });
       }
 
-      // Step 3: auto-save evaluation results
-      const batchLabeled = collected.filter((r) => r.human_label && r.prediction);
-      let evaluationId: number | null = null;
-
-      if (batchLabeled.length > 0) {
-        const batchAgrees = batchLabeled.filter(
-          (r) => computeAgreement(r) === true
-        );
-        const batchClassCounts: Record<string, { correct: number; total: number }> = {};
-        for (const r of batchLabeled) {
-          const cls = r.prediction!.class;
-          if (!batchClassCounts[cls]) batchClassCounts[cls] = { correct: 0, total: 0 };
-          batchClassCounts[cls].total++;
-          if (computeAgreement(r) === true) batchClassCounts[cls].correct++;
-        }
-
-        const accuracy = batchAgrees.length / batchLabeled.length;
+      // Step 3: compute accuracy & save
+      const total = collected.length;
+      if (total > 0) {
+        const matches = collected.filter((r) => r.match).length;
+        const accuracy = matches / total;
+        const avgPieceAccuracy =
+          collected.reduce((s, r) => s + r.piece_accuracy, 0) / total;
         const elapsedMin = (performance.now() - batchStartTime) / 60000;
-        const imagesPerMinute = elapsedMin > 0 ? Math.round(collected.length / elapsedMin) : null;
+        const imagesPerMinute = elapsedMin > 0 ? Math.round(total / elapsedMin) : null;
 
-        const saveRes = await fetch("/api/models/ai-screening/save-eval", {
+        const saveRes = await fetch("/api/models/overlay-test/save-eval", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             accuracy,
-            sample_size: batchLabeled.length,
-            per_class: { ...batchClassCounts, images_per_minute: imagesPerMinute },
-            model_version: detectedModelVersion,
+            sample_size: total,
+            piece_accuracy: avgPieceAccuracy,
+            images_per_minute: imagesPerMinute,
           }),
         });
+        let evaluationId: number | null = null;
         if (saveRes.ok) {
           const evalResult = await saveRes.json();
           evaluationId = evalResult.id;
           await fetchHistory();
         }
 
-        // Step 4: save screening session
+        // Step 4: save session
         try {
           const pinStateObj: Record<string, boolean> = {};
           autoPinned.forEach((id) => (pinStateObj[id] = true));
 
-          const { session_id } = await createScreeningSession({
+          const { session_id } = await createOverlayTestSession({
             results: collected,
             accuracy,
-            sample_size: batchLabeled.length,
-            per_class: batchClassCounts,
-            model_version: detectedModelVersion,
+            sample_size: total,
+            piece_accuracy: avgPieceAccuracy,
             pin_state: pinStateObj,
             evaluation_id: evaluationId,
           });
           setSessionId(session_id);
-          router.replace(`/models/screening/${session_id}`, { scroll: false });
+          router.replace(`/models/overlay/${session_id}`, { scroll: false });
         } catch (e) {
           console.warn("Failed to save session:", e);
         }
@@ -270,30 +230,26 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
     }
   }
 
-  // Compute accuracy summary from results
-  const labeled = results.filter((r) => r.human_label && r.prediction);
-  const agrees = labeled.filter((r) => computeAgreement(r) === true);
+  // Accuracy summary
+  const total = results.length;
+  const matches = results.filter((r) => r.match).length;
+  const avgPieceAccuracy =
+    total > 0
+      ? results.reduce((s, r) => s + r.piece_accuracy, 0) / total
+      : 0;
 
-  const classCounts: Record<string, { correct: number; total: number }> = {};
-  for (const r of labeled) {
-    const cls = r.prediction!.class;
-    if (!classCounts[cls]) classCounts[cls] = { correct: 0, total: 0 };
-    classCounts[cls].total++;
-    if (computeAgreement(r) === true) classCounts[cls].correct++;
-  }
-
-  // Sort results into pinned and unpinned
+  // Sort into pinned / unpinned
   const { pinned, unpinned } = useMemo(() => {
-    const p: InspectResult[] = [];
-    const u: InspectResult[] = [];
+    const p: OverlayTestResult[] = [];
+    const u: OverlayTestResult[] = [];
     for (const r of results) {
-      if (pinnedIds.has(r.video_id)) p.push(r);
+      if (pinnedIds.has(r.filename)) p.push(r);
       else u.push(r);
     }
     return { pinned: p, unpinned: u };
   }, [results, pinnedIds]);
 
-  // Prepare chart data (chronological)
+  // Chart data
   const chartData = [...evalHistory]
     .reverse()
     .map((ev) => ({
@@ -302,14 +258,16 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
         day: "numeric",
       }),
       accuracy: Math.round(ev.accuracy * 1000) / 10,
-      images_per_minute: (ev.per_class as Record<string, unknown>)?.images_per_minute as number | null ?? null,
+      piece_accuracy: ev.per_class?.piece_accuracy
+        ? Math.round(ev.per_class.piece_accuracy * 1000) / 10
+        : null,
+      images_per_minute: ev.per_class?.images_per_minute ?? null,
       notes: ev.notes,
       sample_size: ev.sample_size,
     }));
 
   const hasPerformanceData = chartData.some((d) => d.images_per_minute != null);
 
-  // Version annotations: evals where notes starts with "v"
   const versionLines = chartData
     .map((d, i) => ({ ...d, idx: i }))
     .filter((d) => d.notes && /^v\d/i.test(d.notes));
@@ -318,13 +276,15 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
     <div className="space-y-4">
       {/* Controls */}
       <div className="flex gap-2 items-center flex-wrap">
-        <span className="text-sm text-muted-foreground">Sample from labeled videos:</span>
+        <span className="text-sm text-muted-foreground">
+          Sample from chess-positions test set:
+        </span>
         <input
           type="number"
           value={sampleSize}
           onChange={(e) => setSampleSize(Number(e.target.value))}
           min={1}
-          max={50}
+          max={200}
           className="w-16 px-2 py-1.5 border rounded text-sm"
         />
         <button
@@ -334,11 +294,6 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
         >
           {loading ? "Inspecting..." : "Sample & Inspect"}
         </button>
-        {modelVersion && (
-          <span className="text-xs text-muted-foreground font-mono">
-            model: {modelVersion}
-          </span>
-        )}
 
         <div className="flex-1" />
 
@@ -362,7 +317,7 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
                     key={s.id}
                     onClick={() => {
                       setShowSessionList(false);
-                      router.push(`/models/screening/${s.id}`);
+                      router.push(`/models/overlay/${s.id}`);
                     }}
                     className={`w-full text-left px-3 py-2 text-xs hover:bg-muted/50 transition-colors border-b last:border-b-0 ${
                       s.id === sessionId ? "bg-muted/30" : ""
@@ -384,7 +339,9 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
                         minute: "2-digit",
                       })}
                       {" \u00b7 "}n={s.sample_size}
-                      {s.model_version ? ` \u00b7 ${s.model_version}` : ""}
+                      {s.piece_accuracy != null
+                        ? ` \u00b7 ${(s.piece_accuracy * 100).toFixed(1)}% sq`
+                        : ""}
                     </div>
                   </button>
                 ))}
@@ -395,9 +352,7 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
 
         {sessionId && (
           <button
-            onClick={() => {
-              navigator.clipboard.writeText(window.location.href);
-            }}
+            onClick={() => navigator.clipboard.writeText(window.location.href)}
             className="px-3 py-1.5 border rounded text-xs text-muted-foreground hover:text-foreground transition-colors"
             title="Copy session URL"
           >
@@ -410,7 +365,7 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
       {loading && progress.total > 0 && (
         <div className="space-y-1">
           <div className="flex justify-between text-xs text-muted-foreground">
-            <span>Inspecting videos...</span>
+            <span>Inspecting boards...</span>
             <span>
               {progress.current}/{progress.total}
             </span>
@@ -430,7 +385,7 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
       {chartData.length >= 2 && (
         <div className={`grid gap-4 ${hasPerformanceData ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}>
           <div className="border rounded-lg p-3">
-            <h3 className="text-sm font-medium mb-2">Accuracy over time</h3>
+            <h3 className="text-sm font-medium mb-2">Board accuracy over time</h3>
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
@@ -443,7 +398,10 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
                   width={40}
                 />
                 <Tooltip
-                  formatter={(value) => [`${value}%`, "Accuracy"]}
+                  formatter={(value, name) => [
+                    `${value}%`,
+                    name === "accuracy" ? "Board accuracy" : "Square accuracy",
+                  ]}
                   labelFormatter={(label, payload) => {
                     const d = payload?.[0]?.payload;
                     return `${label}${d?.notes ? ` \u2014 ${d.notes}` : ""} (n=${d?.sample_size ?? "?"})`;
@@ -511,28 +469,22 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
       )}
 
       {/* Accuracy summary */}
-      {labeled.length > 0 && (
+      {total > 0 && (
         <div className="border rounded-lg p-3 space-y-2 bg-muted/20">
           <div className="flex items-center gap-4">
             <span className="text-sm font-medium">
-              Accuracy: {agrees.length}/{labeled.length}{" "}
-              ({((agrees.length / labeled.length) * 100).toFixed(1)}%)
+              Board accuracy: {matches}/{total}{" "}
+              ({((matches / total) * 100).toFixed(1)}%)
             </span>
             <div className="flex-1 h-2 bg-muted rounded overflow-hidden max-w-xs">
               <div
                 className="h-full bg-green-500 rounded"
-                style={{
-                  width: `${(agrees.length / labeled.length) * 100}%`,
-                }}
+                style={{ width: `${(matches / total) * 100}%` }}
               />
             </div>
           </div>
-          <div className="flex gap-3 text-xs text-muted-foreground">
-            {Object.entries(classCounts).map(([cls, { correct, total }]) => (
-              <span key={cls}>
-                <span className={classColor(cls)}>{cls}</span>: {correct}/{total}
-              </span>
-            ))}
+          <div className="text-xs text-muted-foreground">
+            Square accuracy: {(avgPieceAccuracy * 100).toFixed(2)}% ({Math.round(avgPieceAccuracy * 64)}/64 avg)
           </div>
         </div>
       )}
@@ -540,7 +492,7 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
       {/* Results */}
       {results.length > 0 && (
         <div className="space-y-4">
-          {/* Pinned section — full-size cards */}
+          {/* Pinned section */}
           {pinned.length > 0 && (
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
@@ -548,91 +500,87 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
               </p>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {pinned.map((r) => (
-                  <VideoCard
-                    key={r.video_id}
+                  <OverlayTestCard
+                    key={r.filename}
                     result={r}
                     pinned
-                    onPin={() => togglePin(r.video_id)}
+                    onPin={() => togglePin(r.filename)}
                   />
                 ))}
               </div>
             </div>
           )}
 
-          {/* Thumbnail strip — small squares for unpinned */}
+          {/* Thumbnail strip */}
           {unpinned.length > 0 && (
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
-                {pinned.length > 0 ? `Others (${unpinned.length})` : `${results.length} results`}
+                {pinned.length > 0
+                  ? `Others (${unpinned.length})`
+                  : `${results.length} results`}
               </p>
 
-              {/* Compact thumbnail grid */}
               <div className="flex flex-wrap gap-1.5">
                 {unpinned
-                  .filter((r) => !expandedIds.has(r.video_id))
-                  .map((r) => {
-                    const agreement = computeAgreement(r);
-                    return (
-                      <button
-                        key={r.video_id}
-                        onClick={() => agreement === false ? togglePin(r.video_id) : toggleExpand(r.video_id)}
-                        title={`${r.title}\n${r.prediction?.class ?? "?"} ${
-                          agreement === true ? "\u2713" : agreement === false ? "\u2717" : "?"
-                        }`}
-                        className="relative w-16 h-12 rounded border overflow-hidden group flex-shrink-0 transition-all hover:ring-2 hover:ring-foreground/30"
-                      >
+                  .filter((r) => !expandedIds.has(r.filename))
+                  .map((r) => (
+                    <button
+                      key={r.filename}
+                      onClick={() => !r.match ? togglePin(r.filename) : toggleExpand(r.filename)}
+                      title={`${r.filename}\n${r.match ? "\u2713 match" : `\u2717 ${r.square_diffs.length} wrong`}`}
+                      className="relative w-16 h-16 rounded border overflow-hidden flex-shrink-0 transition-all hover:ring-2 hover:ring-foreground/30"
+                    >
+                      {r.board_image_b64 ? (
                         <img
-                          src={youtubeThumb(r.video_id, 0)}
-                          alt={r.title}
+                          src={`data:image/jpeg;base64,${r.board_image_b64}`}
+                          alt={r.filename}
                           className="w-full h-full object-cover"
                           loading="lazy"
                         />
-                        <div
-                          className={`absolute inset-0 ${
-                            agreement === true
-                              ? "bg-green-500/25"
-                              : agreement === false
-                              ? "bg-red-500/35"
-                              : "bg-yellow-500/20"
-                          }`}
-                        />
+                      ) : (
+                        <div className="w-full h-full bg-muted" />
+                      )}
+                      <div
+                        className={`absolute inset-0 ${
+                          r.match ? "bg-green-500/25" : "bg-red-500/35"
+                        }`}
+                      />
+                      <span
+                        className={`absolute top-0 left-0 text-[9px] leading-none px-0.5 py-px ${
+                          r.match
+                            ? "bg-green-500/80 text-white"
+                            : "bg-red-500/80 text-white"
+                        }`}
+                      >
+                        {r.match ? "\u2713" : "\u2717"}
+                      </span>
+                      {!r.match && (
                         <span className="absolute bottom-0 right-0 text-[9px] leading-none bg-black/60 text-white px-0.5 py-px">
-                          {r.prediction?.class?.[0]?.toUpperCase() ?? "?"}
+                          {r.square_diffs.length}
                         </span>
-                        {agreement !== null && (
-                          <span
-                            className={`absolute top-0 left-0 text-[9px] leading-none px-0.5 py-px ${
-                              agreement
-                                ? "bg-green-500/80 text-white"
-                                : "bg-red-500/80 text-white"
-                            }`}
-                          >
-                            {agreement ? "\u2713" : "\u2717"}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
+                      )}
+                    </button>
+                  ))}
               </div>
 
-              {/* Expanded cards from thumbnail clicks */}
-              {unpinned.filter((r) => expandedIds.has(r.video_id)).length > 0 && (
+              {/* Expanded cards */}
+              {unpinned.filter((r) => expandedIds.has(r.filename)).length > 0 && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-2">
                   {unpinned
-                    .filter((r) => expandedIds.has(r.video_id))
+                    .filter((r) => expandedIds.has(r.filename))
                     .map((r) => (
-                      <div key={r.video_id} className="relative">
+                      <div key={r.filename} className="relative">
                         <button
-                          onClick={() => toggleExpand(r.video_id)}
+                          onClick={() => toggleExpand(r.filename)}
                           className="absolute top-2 right-2 z-10 w-6 h-6 flex items-center justify-center rounded bg-muted/80 text-muted-foreground hover:text-foreground text-xs"
                           title="Collapse"
                         >
-                          \u2715
+                          {"\u2715"}
                         </button>
-                        <VideoCard
+                        <OverlayTestCard
                           result={r}
                           pinned={false}
-                          onPin={() => togglePin(r.video_id)}
+                          onPin={() => togglePin(r.filename)}
                         />
                       </div>
                     ))}

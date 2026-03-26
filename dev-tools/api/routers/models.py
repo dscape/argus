@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from api.services import models_service
+from api.services import models_service, overlay_test_service
 
 router = APIRouter()
 
@@ -192,3 +192,115 @@ async def get_evaluations(model_name: str | None = None):
     """Get evaluation history."""
     history = models_service.get_evaluation_history(model_name)
     return {"evaluations": history}
+
+
+# ── Overlay Testing (Piece Classifier) ─────────────────────
+
+
+class OverlayInspectRequest(BaseModel):
+    filename: str
+
+
+class SaveOverlayEvalRequest(BaseModel):
+    accuracy: float
+    sample_size: int
+    piece_accuracy: float | None = None
+    images_per_minute: int | None = None
+    notes: str | None = None
+
+
+class CreateOverlaySessionRequest(BaseModel):
+    results: list[dict]
+    accuracy: float | None = None
+    sample_size: int = 0
+    piece_accuracy: float | None = None
+    pin_state: dict | None = None
+    evaluation_id: int | None = None
+
+
+class UpdateOverlayPinsRequest(BaseModel):
+    pin_state: dict
+
+
+@router.get("/overlay-test/sample")
+async def sample_overlay_boards(limit: int = 20, exclude: str | None = None):
+    """Return random sample of board image filenames from chess-positions test set."""
+    exclude_list = exclude.split(",") if exclude else None
+    filenames = await run_in_threadpool(
+        overlay_test_service.sample_board_filenames, limit, exclude_list
+    )
+    return {"filenames": filenames}
+
+
+@router.post("/overlay-test/inspect")
+async def inspect_overlay_board(body: OverlayInspectRequest):
+    """Inspect piece classifier accuracy on a single board image."""
+    try:
+        result = await run_in_threadpool(
+            overlay_test_service.inspect_board, body.filename
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return result
+
+
+@router.post("/overlay-test/save-eval")
+async def save_overlay_eval(body: SaveOverlayEvalRequest):
+    """Save an overlay evaluation result."""
+    result = await run_in_threadpool(
+        overlay_test_service.save_overlay_eval,
+        body.accuracy,
+        body.sample_size,
+        body.piece_accuracy,
+        body.images_per_minute,
+        body.notes,
+    )
+    return result
+
+
+@router.post("/overlay-test/sessions")
+async def create_overlay_session(body: CreateOverlaySessionRequest):
+    """Create a shareable overlay test session."""
+    result = await run_in_threadpool(
+        overlay_test_service.create_overlay_test_session,
+        body.results,
+        body.accuracy,
+        body.sample_size,
+        body.piece_accuracy,
+        body.pin_state,
+        body.evaluation_id,
+    )
+    return result
+
+
+@router.get("/overlay-test/sessions")
+async def list_overlay_sessions(limit: int = 20):
+    """List recent overlay test sessions."""
+    sessions = await run_in_threadpool(
+        overlay_test_service.list_overlay_test_sessions, limit
+    )
+    return {"sessions": sessions}
+
+
+@router.get("/overlay-test/sessions/{session_id}")
+async def get_overlay_session(session_id: str):
+    """Get an overlay test session by ID."""
+    session = await run_in_threadpool(
+        overlay_test_service.get_overlay_test_session, session_id
+    )
+    if session is None:
+        raise HTTPException(404, f"Session {session_id} not found")
+    return session
+
+
+@router.patch("/overlay-test/sessions/{session_id}/pins")
+async def update_overlay_pins(session_id: str, body: UpdateOverlayPinsRequest):
+    """Update pin state for an overlay test session."""
+    result = await run_in_threadpool(
+        overlay_test_service.update_overlay_session_pins, session_id, body.pin_state
+    )
+    if "error" in result:
+        raise HTTPException(404, result["error"])
+    return result

@@ -579,6 +579,107 @@ export async function updateSessionPins(
   return res.json();
 }
 
+// ── Overlay Test Sessions ──────────────────────────────────
+
+export interface OverlayTestResult {
+  filename: string;
+  expected_fen: string;
+  predicted_fen: string | null;
+  match: boolean;
+  piece_accuracy: number;
+  square_diffs: string[];
+  board_image_b64?: string;
+  elapsed_ms: number;
+  error?: string;
+}
+
+export interface OverlayTestSession {
+  id: string;
+  created_at: string;
+  sample_size: number;
+  accuracy: number | null;
+  piece_accuracy: number | null;
+  results?: OverlayTestResult[];
+  pin_state?: Record<string, boolean>;
+  evaluation_id?: number | null;
+}
+
+export async function sampleOverlayBoards(
+  limit: number,
+  exclude?: string[]
+): Promise<{ filenames: string[] }> {
+  const excludeParam =
+    exclude && exclude.length > 0 ? `&exclude=${exclude.join(",")}` : "";
+  const res = await fetch(
+    `/api/models/overlay-test/sample?limit=${limit}${excludeParam}`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function inspectOverlayBoard(
+  filename: string
+): Promise<OverlayTestResult> {
+  const res = await fetch("/api/models/overlay-test/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createOverlayTestSession(body: {
+  results: OverlayTestResult[];
+  accuracy?: number | null;
+  sample_size?: number;
+  piece_accuracy?: number | null;
+  pin_state?: Record<string, boolean>;
+  evaluation_id?: number | null;
+}): Promise<{ session_id: string }> {
+  const res = await fetch("/api/models/overlay-test/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getOverlayTestSession(
+  sessionId: string
+): Promise<OverlayTestSession> {
+  const res = await fetch(`/api/models/overlay-test/sessions/${sessionId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listOverlayTestSessions(
+  limit = 20
+): Promise<{ sessions: OverlayTestSession[] }> {
+  const res = await fetch(
+    `/api/models/overlay-test/sessions?limit=${limit}`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateOverlaySessionPins(
+  sessionId: string,
+  pinState: Record<string, boolean>
+): Promise<{ pin_state: Record<string, boolean> }> {
+  const res = await fetch(
+    `/api/models/overlay-test/sessions/${sessionId}/pins`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin_state: pinState }),
+    }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ── AI Classification ───────────────────────────────────────
 
 export async function classifyTitles(
