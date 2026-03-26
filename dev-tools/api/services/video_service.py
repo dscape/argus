@@ -7,6 +7,7 @@ import threading
 import uuid
 from typing import Any
 
+import chess
 import cv2
 import numpy as np
 
@@ -135,7 +136,8 @@ def _get_clip_calibration(clip_id: int):
 
 def read_overlay_at_frame(session_id: str, frame_index: int, clip_id: int | None = None) -> dict:
     """Read overlay FEN at a specific frame. Optionally use a clip's calibration."""
-    from pipeline.overlay.overlay_reader import OverlayReader
+    from pipeline.overlay.grid_detector import detect_grid
+    from pipeline.overlay.piece_classifier import read_fen_with_grid
 
     session = _sessions.get(session_id)
     if session is None:
@@ -159,17 +161,22 @@ def read_overlay_at_frame(session_id: str, frame_index: int, clip_id: int | None
     overlay_crop_b64 = _encode_crop_b64(frame, calibration.overlay)
     camera_crop_b64 = _encode_crop_b64(frame, calibration.camera)
 
-    # Read FEN
+    # Read FEN using DINOv2 piece classifier with auto grid detection
     ox, oy, ow, oh = calibration.overlay
     overlay_img = frame[oy : oy + oh, ox : ox + ow]
 
-    reader = OverlayReader(board_theme=calibration.board_theme)
-    board = reader.read_board(overlay_img, flipped=calibration.board_flipped)
+    grid = detect_grid(overlay_img)
+    fen: str | None = None
+    board: chess.Board | None = None
+    if grid is not None:
+        fen = read_fen_with_grid(overlay_img, grid)
+        board = chess.Board(fen=None)
+        board.set_fen(fen + " w - - 0 1")
 
     return {
         "frame_index": frame_index,
         "timestamp_seconds": round(frame_index / fps, 3) if fps > 0 else 0,
-        "fen": board.board_fen() if board else None,
+        "fen": fen,
         "board_ascii": str(board) if board else None,
         "overlay_crop_b64": overlay_crop_b64,
         "camera_crop_b64": camera_crop_b64,

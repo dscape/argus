@@ -37,7 +37,8 @@ def test_image(
         output_path: Where to save the annotated image. Defaults to
                      {input_stem}_annotated.png next to the input.
     """
-    from pipeline.overlay.overlay_reader import OverlayReader
+    from pipeline.overlay.grid_detector import detect_grid
+    from pipeline.overlay.piece_classifier import read_fen_with_grid
     from pipeline.overlay.scanner import detect_overlay_in_frame
 
     frame = cv2.imread(image_path)
@@ -69,19 +70,16 @@ def test_image(
 
     # ── Step 2: Read board from overlay region ──
     overlay_crop = frame[y : y + bh, x : x + bw]
-    reader = OverlayReader(board_theme=theme)
-    board = reader.read_board(overlay_crop, flipped=flipped)
-
-    if board is None:
-        print("READER FAILED: Could not extract a valid board from the overlay region.")
-        print("  Possible causes:")
-        print("  - Overlay bbox doesn't align with the board squares")
-        print("  - Board theme mismatch (try --theme chess_com_green)")
-        print("  - Image quality too low")
+    grid = detect_grid(overlay_crop)
+    board = None
+    if grid is None:
+        print("GRID DETECTION FAILED: Could not find 8x8 grid in the overlay region.")
     else:
+        fen = read_fen_with_grid(overlay_crop, grid)
+        board = chess.Board(fen=None)
+        board.set_fen(fen + " w - - 0 1")
         print("Extracted board:")
         print()
-        # Print ASCII board indented
         for line in str(board).split("\n"):
             print(f"  {line}")
         print()

@@ -16,6 +16,20 @@ logger = logging.getLogger(__name__)
 
 CONFIG_PATH = os.path.join("configs", "pipeline", "overlay_layouts.yaml")
 
+# Common board themes: hex colors for light/dark squares.
+BOARD_THEMES: dict[str, dict[str, str]] = {
+    "lichess_default": {"light": "#F0D9B5", "dark": "#B58863"},
+    "chess_com_green": {"light": "#EEEED2", "dark": "#769656"},
+    "chess_com_brown": {"light": "#F0D9B5", "dark": "#B58863"},
+}
+
+
+def hex_to_bgr(hex_color: str) -> tuple[int, int, int]:
+    """Convert hex color string to BGR tuple."""
+    hex_color = hex_color.lstrip("#")
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    return (b, g, r)
+
 
 @dataclass
 class LayoutCalibration:

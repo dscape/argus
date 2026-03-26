@@ -17,7 +17,8 @@ import torch
 
 from pipeline.overlay.calibration import LayoutCalibration, get_calibration
 from pipeline.overlay.overlay_move_detector import GameSegment, detect_moves
-from pipeline.overlay.overlay_reader import OverlayReader
+from pipeline.overlay.grid_detector import detect_grid
+from pipeline.overlay.piece_classifier import read_fen_with_grid
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +85,6 @@ class OverlayClipGenerator:
         # Scale calibration to actual video resolution
         cal = calibration.scale_to_resolution(width, height)
 
-        # Initialize overlay reader
-        reader = OverlayReader(board_theme=cal.board_theme)
-
         # Extract frames
         frame_skip = max(1, int(fps / self.base_fps))
         overlay_crops = []
@@ -122,7 +120,8 @@ class OverlayClipGenerator:
             camera_crop = frame[cy : cy + ch, cx : cx + cw]
 
             # Read board from overlay
-            fen = reader.read_fen(overlay_crop, flipped=cal.board_flipped)
+            grid = detect_grid(overlay_crop)
+            fen = read_fen_with_grid(overlay_crop, grid) if grid else None
 
             overlay_crops.append(overlay_crop)
             camera_crops.append(camera_crop)

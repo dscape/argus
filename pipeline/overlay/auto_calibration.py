@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from pipeline.overlay.overlay_reader import BOARD_THEMES, OverlayReader, hex_to_bgr
+from pipeline.overlay.calibration import BOARD_THEMES, hex_to_bgr
 from pipeline.overlay.scanner import detect_overlay_in_frame
 from pipeline.screen.frame_fetcher import fetch_youtube_frames
 
@@ -122,54 +122,52 @@ def detect_board_orientation(
 ) -> tuple[bool, float]:
     """Detect whether the board is flipped (Black at bottom).
 
-    Reads the board in both orientations and checks which has the expected
-    piece distribution: in standard orientation, the bottom two ranks
-    should contain more white material.
+    Uses the DINOv2 piece classifier to read the board in both orientations
+    and checks which has the expected piece distribution.
 
     Returns (flipped, confidence).
     """
-    reader = OverlayReader(board_theme=theme)
+    from pipeline.overlay.grid_detector import detect_grid
+    from pipeline.overlay.piece_classifier import CLASS_TO_PIECE, classify_squares
 
-    board_normal = reader.read_board(overlay_crop, flipped=False)
-    board_flipped = reader.read_board(overlay_crop, flipped=True)
-
-    if board_normal is None and board_flipped is None:
+    grid = detect_grid(overlay_crop)
+    if grid is None:
         return False, 0.0
 
-    def bottom_material_score(board, is_white: bool) -> float:
-        """Sum material values in the bottom 2 ranks (ranks 1-2 in chess terms)."""
+    squares = grid.crop_squares(overlay_crop)
+    class_grid = classify_squares(squares)
+
+    def _build_board(flipped: bool) -> chess.Board:
+        board = chess.Board(fen=None)
+        for r in range(8):
+            for c in range(8):
+                piece = CLASS_TO_PIECE.get(class_grid[r][c])
+                if piece is None:
+                    continue
+                if not flipped:
+                    sq = chess.square(c, 7 - r)
+                else:
+                    sq = chess.square(7 - c, r)
+                board.set_piece_at(sq, piece)
+        return board
+
+    board_normal = _build_board(False)
+    board_flipped = _build_board(True)
+
+    def material_score(board: chess.Board, ranks: range, color: bool) -> float:
         piece_values = {1: 1, 2: 3, 3: 3, 4: 5, 5: 9, 6: 0}
         score = 0.0
-        for sq in range(16):  # Squares 0-15 = a1-h2
-            piece = board.piece_at(sq)
-            if piece is not None and piece.color == is_white:
-                score += piece_values.get(piece.piece_type, 0)
+        for rank in ranks:
+            for f in range(8):
+                piece = board.piece_at(chess.square(f, rank))
+                if piece is not None and piece.color == color:
+                    score += piece_values.get(piece.piece_type, 0)
         return score
 
-    def top_material_score(board, is_white: bool) -> float:
-        """Sum material values in the top 2 ranks (ranks 7-8)."""
-        piece_values = {1: 1, 2: 3, 3: 3, 4: 5, 5: 9, 6: 0}
-        score = 0.0
-        for sq in range(48, 64):  # Squares 48-63 = a7-h8
-            piece = board.piece_at(sq)
-            if piece is not None and piece.color == is_white:
-                score += piece_values.get(piece.piece_type, 0)
-        return score
-
-    # In non-flipped orientation: bottom ranks should have White pieces
-    # In flipped orientation: bottom ranks should have Black pieces
-    normal_score = 0.0
-    flipped_score = 0.0
-
-    if board_normal is not None:
-        white_bottom = bottom_material_score(board_normal, True)
-        black_top = top_material_score(board_normal, False)
-        normal_score = white_bottom + black_top
-
-    if board_flipped is not None:
-        white_bottom = bottom_material_score(board_flipped, True)
-        black_top = top_material_score(board_flipped, False)
-        flipped_score = white_bottom + black_top
+    normal_score = material_score(board_normal, range(0, 2), chess.WHITE) + \
+                   material_score(board_normal, range(6, 8), chess.BLACK)
+    flipped_score = material_score(board_flipped, range(0, 2), chess.WHITE) + \
+                    material_score(board_flipped, range(6, 8), chess.BLACK)
 
     total = normal_score + flipped_score
     if total < 1.0:

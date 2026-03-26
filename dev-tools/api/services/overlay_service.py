@@ -7,18 +7,6 @@ import cv2
 import numpy as np
 
 
-# Singleton readers per theme to avoid rebuilding templates each request
-_readers: dict = {}
-
-
-def _get_reader(theme: str):
-    from pipeline.overlay.overlay_reader import OverlayReader
-
-    if theme not in _readers:
-        _readers[theme] = OverlayReader(board_theme=theme)
-    return _readers[theme]
-
-
 def decode_image(file_bytes: bytes) -> np.ndarray:
     nparr = np.frombuffer(file_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -30,6 +18,20 @@ def decode_image(file_bytes: bytes) -> np.ndarray:
 def encode_image_b64(img: np.ndarray, fmt: str = ".png") -> str:
     _, buffer = cv2.imencode(fmt, img)
     return base64.b64encode(buffer).decode("utf-8")
+
+
+def _read_board(overlay_crop: np.ndarray) -> chess.Board | None:
+    """Read board using DINOv2 piece classifier with auto grid detection."""
+    from pipeline.overlay.grid_detector import detect_grid
+    from pipeline.overlay.piece_classifier import read_fen_with_grid
+
+    grid = detect_grid(overlay_crop)
+    if grid is None:
+        return None
+    fen = read_fen_with_grid(overlay_crop, grid)
+    board = chess.Board(fen=None)
+    board.set_fen(fen + " w - - 0 1")
+    return board
 
 
 def test_image(
@@ -50,7 +52,6 @@ def test_image(
     if bbox is None:
         detection = detect_overlay_in_frame(frame)
         if not detection.found:
-            # Return annotated image even on failure
             return {
                 "detected": False,
                 "bbox": None,
@@ -69,8 +70,7 @@ def test_image(
 
     # Read board
     overlay_crop = frame[y : y + bh, x : x + bw]
-    reader = _get_reader(theme)
-    board = reader.read_board(overlay_crop, flipped=flipped)
+    board = _read_board(overlay_crop)
 
     # Annotate
     annotated = frame.copy()
