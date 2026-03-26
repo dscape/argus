@@ -680,6 +680,10 @@ export async function updateOverlaySessionPins(
   return res.json();
 }
 
+export function overlayBoardImageUrl(filename: string): string {
+  return `/api/models/overlay-test/board-image/${encodeURIComponent(filename)}`;
+}
+
 // ── AI Classification ───────────────────────────────────────
 
 export async function classifyTitles(

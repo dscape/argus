@@ -188,7 +188,8 @@ def detect_moves(session_id: str, sample_fps: float = 2.0, clip_id: int | None =
     from pipeline.overlay.overlay_move_detector import (
         detect_moves as run_detect,
     )
-    from pipeline.overlay.overlay_reader import OverlayReader
+    from pipeline.overlay.grid_detector import detect_grid
+    from pipeline.overlay.piece_classifier import read_fen_with_grid
 
     session = _sessions.get(session_id)
     if session is None:
@@ -218,7 +219,6 @@ def detect_moves(session_id: str, sample_fps: float = 2.0, clip_id: int | None =
 
     # Sample frames
     frame_interval = max(1, int(fps / sample_fps))
-    reader = OverlayReader(board_theme=calibration.board_theme)
 
     fens: list[str | None] = []
     frame_indices: list[int] = []
@@ -236,7 +236,8 @@ def detect_moves(session_id: str, sample_fps: float = 2.0, clip_id: int | None =
 
         ox, oy, ow, oh = calibration.overlay
         overlay_img = frame[oy : oy + oh, ox : ox + ow]
-        fen = reader.read_fen(overlay_img, flipped=calibration.board_flipped)
+        grid = detect_grid(overlay_img)
+        fen = read_fen_with_grid(overlay_img, grid) if grid else None
         fens.append(fen)
         frame_indices.append(idx)
         if fen is not None:

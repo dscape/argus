@@ -127,7 +127,7 @@ cd dev-tools && npm install && npm run dev
 |--------|---------|--------------|
 | **All** | `make test` | Full suite |
 | **Chess core** | `pytest tests/test_move_vocabulary.py tests/test_chess_state_machine.py tests/test_constraint_mask.py -v` | Move vocabulary, state machine, constraint masking |
-| **Pipeline — overlay** | `pytest tests/pipeline/test_overlay_reader.py tests/pipeline/test_overlay_move_detector.py -v` | Overlay FEN reading, move detection (including hard cut detection) |
+| **Pipeline — overlay** | `pytest tests/pipeline/test_overlay_move_detector.py -v` | Overlay move detection (including hard cut detection) |
 | **Pipeline — screening** | `pytest tests/pipeline/test_screen_pipeline.py tests/pipeline/test_title_filter.py -v` | Title filter, screening orchestration |
 
 ### Quick Smoke Tests (no DB required)

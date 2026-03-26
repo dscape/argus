@@ -318,7 +318,8 @@ def test_reader(
         flipped: Board from Black's perspective.
         theme: Board theme for piece recognition.
     """
-    from pipeline.overlay.overlay_reader import OverlayReader
+    from pipeline.overlay.grid_detector import detect_grid
+    from pipeline.overlay.piece_classifier import CLASS_TO_PIECE, classify_squares, read_fen_with_grid
 
     frame = cv2.imread(image_path)
     if frame is None:
@@ -337,56 +338,44 @@ def test_reader(
         print("ERROR: Crop region is empty. Check coordinates.")
         return
 
-    reader = OverlayReader(board_theme=theme)
+    grid = detect_grid(overlay_crop)
+    if grid is None:
+        print("GRID DETECTION FAILED: Could not find 8x8 grid.")
+        return
 
-    # Detailed per-square classification
-    sq_h = overlay_crop.shape[0] // 8
-    sq_w = overlay_crop.shape[1] // 8
+    squares = grid.crop_squares(overlay_crop)
+    class_grid = classify_squares(squares)
 
     print("Per-square analysis:")
     print("     a    b    c    d    e    f    g    h")
 
     for row in range(8):
-        if not flipped:
-            rank_label = str(8 - row)
-        else:
-            rank_label = str(row + 1)
-
+        rank_label = str(8 - row) if not flipped else str(row + 1)
         cells = []
         for col in range(8):
-            y1 = row * sq_h
-            x1 = col * sq_w
-            sq_img = overlay_crop[y1 : y1 + sq_h, x1 : x1 + sq_w]
-            gray = cv2.cvtColor(sq_img, cv2.COLOR_BGR2GRAY)
-            var = float(np.var(gray))
-            is_light = (col + row) % 2 == 0
-
-            if var < 100:
-                cells.append(f"  .  ")
+            piece = CLASS_TO_PIECE.get(class_grid[row][col])
+            if piece is None:
+                cells.append("  .  ")
             else:
-                piece_class = reader._classify_square(sq_img, is_light)
-                from pipeline.overlay.overlay_reader import PIECE_CLASSES
-                piece = PIECE_CLASSES.get(piece_class)
-                symbol = piece.symbol() if piece else "?"
-                cells.append(f" {symbol}({int(var):3d})")
-
+                cells.append(f"  {piece.symbol()}  ")
         print(f" {rank_label} {''.join(cells)}")
 
     print()
 
     # Full board read
-    board = reader.read_board(overlay_crop, flipped=flipped)
-    if board is not None:
-        print("Extracted board:")
-        for line in str(board).split("\n"):
-            print(f"  {line}")
-        print()
-        print(f"FEN: {board.board_fen()}")
-    else:
-        print("READER FAILED: Board validation did not pass.")
+    fen = read_fen_with_grid(overlay_crop, grid)
+    board = chess.Board(fen=None)
+    board.set_fen(fen + " w - - 0 1")
+    print("Extracted board:")
+    for line in str(board).split("\n"):
+        print(f"  {line}")
+    print()
+    print(f"FEN: {board.board_fen()}")
 
     # Save annotated crop
     annotated = overlay_crop.copy()
+    sq_w = overlay_crop.shape[1] // 8
+    sq_h = overlay_crop.shape[0] // 8
     for i in range(1, 8):
         cv2.line(annotated, (i * sq_w, 0), (i * sq_w, overlay_crop.shape[0]), (0, 255, 255), 1)
         cv2.line(annotated, (0, i * sq_h), (overlay_crop.shape[1], i * sq_h), (0, 255, 255), 1)

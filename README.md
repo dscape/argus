@@ -239,7 +239,7 @@ graph TD
     end
 
     subgraph "6. Generate Clips"
-        CAL --> READ["OverlayReader: frame to FEN"]
+        CAL --> READ["PieceClassifier: frame to FEN"]
         READ --> MOVE["OverlayMoveDetector: FEN diffs + hard cut detection"]
         MOVE --> CLIP["OverlayClipGenerator: frames + moves + confidence to .pt"]
         CLIP --> PT[.pt training clips]
@@ -275,7 +275,7 @@ Screening results are stored on `youtube_videos` as `screening_status`, `screeni
 For videos with a 2D board overlay:
 
 1. **Calibration** — per-channel layout config defines overlay crop, camera crop, reference resolution, board flip, and board theme. Can be auto-proposed via `auto-calibrate` or set manually.
-2. **FEN reading** — `OverlayReader` template-matches each of the 64 squares against piece libraries per theme to produce a FEN string
+2. **FEN reading** — `PieceClassifier` (DINOv2-based) classifies each of the 64 squares using a trained CNN to produce a FEN string. `GridDetector` handles automatic board boundary detection.
 3. **Move detection with hard cut detection** — `OverlayMoveDetector` compares FENs across frames with a stability window, using python-chess to find the legal move transforming old FEN to new FEN. Detects game resets AND hard cuts (when >4 squares change simultaneously, indicating a board switch rather than a legal move).
 4. **Per-move confidence scoring** — each detected move receives a confidence score based on how many consecutive frames agreed on the FEN before and after the transition. Higher stability = higher confidence. Moves found via resync (no legal move path) get confidence 0.0.
 5. **Move synchronization** — broadcast delay compensation aligns overlay moves to camera footage timestamps
@@ -286,7 +286,8 @@ For videos with a 2D board overlay:
 | Module | What it does |
 |--------|-------------|
 | `scanner.py` | Detects rendered 2D boards via pixel regularity (low intra-square variance, alternating light/dark). Sliding window at multiple scales. |
-| `overlay_reader.py` | Template-matches each of the 64 squares against piece libraries per theme. Returns FEN. Supports `lichess_default`, `chess_com_green`, `chess_com_brown`. |
+| `piece_classifier.py` | DINOv2-based per-square piece classifier (99.83% accuracy). Classifies 64 squares in a single batch. |
+| `grid_detector.py` | Detects the 8x8 board grid using Sobel edge projection with HoughLinesP fallback. Handles borders and coordinate labels. |
 | `overlay_move_detector.py` | Compares FENs across frames with a stability window. Uses python-chess to find the legal move transforming old FEN to new FEN. Detects game resets and hard cuts (>4 squares changed = board switch). Assigns per-move confidence scores. |
 | `calibration.py` | Stores per-channel layout configs: overlay crop, camera crop, reference resolution, board flip, board theme. Persisted in `configs/pipeline/overlay_layouts.yaml`. |
 | `auto_calibration.py` | Auto-proposes calibration from YouTube thumbnails: detects board theme (color sampling), orientation (piece distribution), and camera region (largest non-overlay area). |
@@ -513,9 +514,9 @@ The dev-tools services are thin REST wrappers — they directly import from `pip
 |----------|------|-----------------|----------------|
 | **Synthetic Monitor** | Synthetic | `argus.datagen.synth`, filesystem scanner | `datagen` |
 | **Clip Inspector** | Synthetic | `argus.chess.move_vocabulary`, PyTorch tensors | `inspect-clip` |
-| **Overlay Tester** | Video | `pipeline.overlay.scanner`, `overlay_reader` | `overlay-test` |
+| **Overlay Tester** | Video | `pipeline.overlay.scanner`, `piece_classifier` | `overlay-test` |
 | **Calibration Editor** | Video | `pipeline.overlay.calibration`, `auto_calibration` | `calibrate`, `auto-calibrate` |
-| **Video Annotator** | Video | `pipeline.overlay.overlay_reader`, `overlay_move_detector` | `overlay-test`, `generate-clips` |
+| **Video Annotator** | Video | `pipeline.overlay.piece_classifier`, `overlay_move_detector` | `overlay-test`, `generate-clips` |
 | **Video Browser** | Crawl | `pipeline.screen`, `inspect_service`, `ai_predict` | `screen`, `ai-screen` |
 | **Channel Manager** | Crawl | `pipeline.crawl`, `channel_seeder` | `crawl`, `seed-channels` |
 
@@ -545,9 +546,9 @@ graph LR
     subgraph "Pipeline Modules"
         S0["synth, filesystem"]
         S2["move_vocabulary, clip tensors"]
-        S1["scanner, overlay_reader"]
+        S1["scanner, piece_classifier"]
         S3["calibration, auto_calibration"]
-        S4["overlay_reader, overlay_move_detector"]
+        S4["piece_classifier, overlay_move_detector"]
         S5["screen_pipeline, ai_classifier, inspect_service"]
     end
 
@@ -1027,7 +1028,8 @@ argus/
 │   │   └── video_downloader.py                 #     yt-dlp with rate limiting
 │   └── overlay/                                #   Stage 5-6: overlay clip generation
 │       ├── scanner.py                          #     Detect 2D board overlays
-│       ├── overlay_reader.py                   #     Template match to FEN
+│       ├── piece_classifier.py                  #     DINOv2-based piece classification to FEN
+│       ├── grid_detector.py                    #     Board grid detection (Sobel + Hough)
 │       ├── overlay_move_detector.py            #     FEN diffs to legal moves + hard cut detection
 │       ├── overlay_clip_generator.py           #     Camera frames + moves + confidence to .pt
 │       ├── calibration.py                      #     Per-channel layout config
@@ -1062,7 +1064,6 @@ argus/
 │   ├── test_chess_state_machine.py             #   Shared: chess core
 │   ├── test_constraint_mask.py                 #   Shared: chess core
 │   └── pipeline/                               #   Pipeline domain
-│       ├── test_overlay_reader.py              #     Overlay FEN reading
 │       └── test_overlay_move_detector.py       #     Overlay move detection
 ├── blender/                                    # Data Gen: 3D Blender rendering
 │   ├── render_chess.py                         #   Blender Python render script (EEVEE)

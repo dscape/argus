@@ -19,6 +19,7 @@ import {
   createOverlayTestSession,
   listOverlayTestSessions,
   updateOverlaySessionPins,
+  overlayBoardImageUrl,
   type OverlayTestResult,
   type OverlayTestSession,
 } from "@/lib/api";
@@ -530,16 +531,14 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
                       title={`${r.filename}\n${r.match ? "\u2713 match" : `\u2717 ${r.square_diffs.length} wrong`}`}
                       className="relative w-16 h-16 rounded border overflow-hidden flex-shrink-0 transition-all hover:ring-2 hover:ring-foreground/30"
                     >
-                      {r.board_image_b64 ? (
-                        <img
-                          src={`data:image/jpeg;base64,${r.board_image_b64}`}
-                          alt={r.filename}
-                          className="w-full h-full object-cover"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="w-full h-full bg-muted" />
-                      )}
+                      <img
+                        src={r.board_image_b64
+                          ? `data:image/jpeg;base64,${r.board_image_b64}`
+                          : overlayBoardImageUrl(r.filename)}
+                        alt={r.filename}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                      />
                       <div
                         className={`absolute inset-0 ${
                           r.match ? "bg-green-500/25" : "bg-red-500/35"

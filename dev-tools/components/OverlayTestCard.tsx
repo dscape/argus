@@ -1,6 +1,8 @@
 "use client";
 
 import type { OverlayTestResult } from "@/lib/api";
+import { overlayBoardImageUrl } from "@/lib/api";
+import { ChessBoard } from "@/components/ChessBoard";
 
 interface OverlayTestCardProps {
   result: OverlayTestResult;
@@ -10,6 +12,10 @@ interface OverlayTestCardProps {
 
 export default function OverlayTestCard({ result, pinned, onPin }: OverlayTestCardProps) {
   const wrongSquares = result.square_diffs.length;
+
+  const imgSrc = result.board_image_b64
+    ? `data:image/jpeg;base64,${result.board_image_b64}`
+    : overlayBoardImageUrl(result.filename);
 
   return (
     <div className="border rounded-lg p-3 space-y-3">
@@ -54,6 +60,29 @@ export default function OverlayTestCard({ result, pinned, onPin }: OverlayTestCa
         </div>
       </div>
 
+      {/* Side-by-side: source image + predicted board */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">Source Image</label>
+          <img
+            src={imgSrc}
+            alt={result.filename}
+            className="w-full max-w-[200px] rounded border"
+            loading="lazy"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">
+            Predicted {result.predicted_fen ? "" : "(failed)"}
+          </label>
+          {result.predicted_fen ? (
+            <ChessBoard fen={result.predicted_fen} size={200} />
+          ) : (
+            <p className="text-xs text-destructive">Could not classify board</p>
+          )}
+        </div>
+      </div>
+
       {/* FEN comparison */}
       <div className="flex items-center gap-2 flex-wrap">
         <span
@@ -69,16 +98,6 @@ export default function OverlayTestCard({ result, pinned, onPin }: OverlayTestCa
           Expected: {result.expected_fen}
         </span>
       </div>
-
-      {/* Board image */}
-      {result.board_image_b64 && (
-        <img
-          src={`data:image/jpeg;base64,${result.board_image_b64}`}
-          alt={result.filename}
-          className="w-full max-w-[400px] rounded border"
-          loading="lazy"
-        />
-      )}
 
       {/* Square diffs */}
       {result.square_diffs.length > 0 && (

@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from api.services import models_service, overlay_test_service
@@ -304,3 +305,14 @@ async def update_overlay_pins(session_id: str, body: UpdateOverlayPinsRequest):
     if "error" in result:
         raise HTTPException(404, result["error"])
     return result
+
+
+@router.get("/overlay-test/board-image/{filename}")
+async def get_board_image(filename: str):
+    """Serve a chess-positions test image by filename."""
+    if "/" in filename or ".." in filename:
+        raise HTTPException(400, "Invalid filename")
+    path = overlay_test_service.CHESS_POSITIONS_TEST_DIR / filename
+    if not path.exists():
+        raise HTTPException(404, f"Board image not found: {filename}")
+    return FileResponse(path, media_type="image/jpeg")

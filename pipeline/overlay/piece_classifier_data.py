@@ -40,7 +40,7 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# Class index mapping — matches PIECE_CLASSES in overlay_reader.py
+# Class index mapping — matches CLASS_TO_PIECE in piece_classifier.py
 CLASS_NAMES = ["empty", "P", "N", "B", "R", "Q", "K", "p", "n", "b", "r", "q", "k"]
 NUM_CLASSES = len(CLASS_NAMES)
 
