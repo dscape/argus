@@ -1,6 +1,5 @@
 """Tests for pipeline.overlay.piece_classifier_data — dataset generation and persistence."""
 
-
 import numpy as np
 import pytest
 from pipeline.overlay.piece_classifier_data import (

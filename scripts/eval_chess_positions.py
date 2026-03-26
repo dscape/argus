@@ -25,7 +25,6 @@ from pathlib import Path
 
 import chess
 import cv2
-import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -100,16 +99,21 @@ def evaluate(
         expected_fen = parse_fen_from_filename(fname)
         try:
             predicted_fen = read_fen_with_grid(
-                image, _GRID, device=device, detect_orientation=False,
+                image,
+                _GRID,
+                device=device,
+                detect_orientation=False,
             )
         except Exception as e:
             logger.warning("Error on %s: %s", fname, e)
-            failures.append({
-                "filename": fname,
-                "fen": expected_fen,
-                "predicted_fen": None,
-                "mismatches": [str(e)],
-            })
+            failures.append(
+                {
+                    "filename": fname,
+                    "fen": expected_fen,
+                    "predicted_fen": None,
+                    "mismatches": [str(e)],
+                }
+            )
             continue
 
         expected_board = _fen_to_board(expected_fen)
@@ -131,7 +135,8 @@ def evaluate(
         if (i + 1) % 200 == 0:
             logger.info(
                 "Progress: %d/%d (%.1f%% accurate so far)",
-                i + 1, len(files),
+                i + 1,
+                len(files),
                 len(passes) / max(len(passes) + len(failures), 1) * 100,
             )
 
@@ -207,14 +212,23 @@ def main() -> None:
         sys.exit(1)
 
     passes, failures = evaluate(
-        data_dir, limit=args.limit, device=args.device, seed=args.seed,
+        data_dir,
+        limit=args.limit,
+        device=args.device,
+        seed=args.seed,
     )
 
     total = len(passes) + len(failures)
     acc = len(passes) / max(total, 1) * 100
     logger.info("")
     logger.info("=== Results ===")
-    logger.info("Total: %d boards, %d passed, %d failed (%.1f%% accuracy)", total, len(passes), len(failures), acc)
+    logger.info(
+        "Total: %d boards, %d passed, %d failed (%.1f%% accuracy)",
+        total,
+        len(passes),
+        len(failures),
+        acc,
+    )
 
     if failures:
         logger.info("")

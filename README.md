@@ -18,6 +18,7 @@ Argus reconstructs PGN game records from tournament video by framing move recogn
 - [Training](#training)
 - [Inference](#inference)
 - [Evaluation](#evaluation)
+- [Piece Classifier](#piece-classifier)
 - [Developer Tools](#developer-tools)
 - [Dev Tools REST API](#dev-tools-rest-api)
 - [Deployment & Production Status](#deployment--production-status)
@@ -454,6 +455,42 @@ Uses plain argparse (not Hydra).
 | Board Detection mAP | mAP | Standard mAP@0.5 for board localization |
 | Identity Switch Rate | ISR | ID switches per 1000 frames |
 | Occlusion Recovery Rate | ORR | Correct re-ID after N frames of occlusion |
+
+---
+
+## Piece Classifier
+
+> **Domain: Pipeline** — `pipeline/overlay/piece_classifier.py`, `scripts/train_piece_classifier.py`
+
+DINOv2-base (frozen) + MLP head classifying individual board squares into 13 classes (empty + 12 piece types). Trained on synthetic data and the [chess-positions](https://www.kaggle.com/datasets/koryakinp/chess-positions) dataset.
+
+### Training
+
+```bash
+# Train with feature caching (seconds per epoch after initial extraction)
+make train-pieces ARGS="--chess-positions-dir data/chess_positions/train --epochs 20"
+```
+
+Feature caching pre-computes DINOv2 embeddings once, then trains only the MLP head on cached 768-D vectors.
+
+### Accuracy Validation
+
+```bash
+# Evaluate on chess-positions test set
+.venv/bin/python scripts/eval_chess_positions.py data/chess_positions/test --limit 1000
+
+# Auto-add failing boards to test fixtures
+.venv/bin/python scripts/eval_chess_positions.py data/chess_positions/test --add-failures
+```
+
+### Data Setup
+
+The chess-positions dataset is not included in the repo. Extract from the downloaded zip:
+
+```bash
+mkdir -p data/chess_positions
+cd data/chess_positions && unzip ~/Downloads/ChessPositions.zip "train/*" "test/*"
+```
 
 ---
 

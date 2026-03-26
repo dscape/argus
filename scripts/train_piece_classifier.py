@@ -3,7 +3,8 @@
 
 Usage:
     .venv/bin/python scripts/train_piece_classifier.py [--epochs N] [--samples N]
-    .venv/bin/python scripts/train_piece_classifier.py --chess-positions-dir data/chess_positions/train
+    .venv/bin/python scripts/train_piece_classifier.py \\
+        --chess-positions-dir data/chess_positions/train
 
 Supports two training modes:
 - **Feature-cached** (default): pre-compute DINOv2 embeddings once, then train
@@ -148,9 +149,11 @@ def _train_on_features(
         val_acc = val_correct / max(val_total, 1)
         logger.info(
             "Epoch %d/%d  train_loss=%.4f  train_acc=%.3f  val_acc=%.3f",
-            epoch + 1, epochs,
+            epoch + 1,
+            epochs,
             train_loss / max(train_total, 1),
-            train_acc, val_acc,
+            train_acc,
+            val_acc,
         )
 
         if val_acc > best_val_acc:
@@ -238,9 +241,11 @@ def _train_full_forward(
         val_acc = val_correct / max(val_total, 1)
         logger.info(
             "Epoch %d/%d  train_loss=%.4f  train_acc=%.3f  val_acc=%.3f",
-            epoch + 1, epochs,
+            epoch + 1,
+            epochs,
             train_loss / max(train_total, 1),
-            train_acc, val_acc,
+            train_acc,
+            val_acc,
         )
 
         if val_acc > best_val_acc:
@@ -325,11 +330,14 @@ def main() -> None:
 
     if cached is not None:
         synth_images, synth_labels = cached
-        logger.info("Using cached synthetic dataset: %d images from %s", len(synth_images), DATASET_DIR)
+        logger.info(
+            "Using cached synthetic dataset: %d images from %s", len(synth_images), DATASET_DIR
+        )
     else:
         logger.info(
             "Generating %d synthetic samples per class (%d total)…",
-            args.samples, args.samples * NUM_CLASSES,
+            args.samples,
+            args.samples * NUM_CLASSES,
         )
         synth_images, synth_labels = generate_dataset(
             num_samples_per_class=args.samples,
@@ -366,7 +374,6 @@ def main() -> None:
     # -------------------------------------------------------------------
     if args.cache_features:
         from pipeline.overlay.feature_cache import (
-            FEATURE_CACHE_DIR,
             extract_and_cache_features,
             load_cached_features,
         )
@@ -375,8 +382,11 @@ def main() -> None:
         synth_cached = None if args.recache else load_cached_features("synthetic")
         if synth_cached is None:
             extract_and_cache_features(
-                synth_images, synth_labels, "synthetic",
-                device=str(device), batch_size=args.batch_size,
+                synth_images,
+                synth_labels,
+                "synthetic",
+                device=str(device),
+                batch_size=args.batch_size,
             )
             synth_cached = load_cached_features("synthetic")
         synth_feats, synth_labs = synth_cached
@@ -386,8 +396,11 @@ def main() -> None:
             cp_cached = None if args.recache else load_cached_features("chess_positions")
             if cp_cached is None:
                 extract_and_cache_features(
-                    cp_images, cp_labels, "chess_positions",
-                    device=str(device), batch_size=args.batch_size,
+                    cp_images,
+                    cp_labels,
+                    "chess_positions",
+                    device=str(device),
+                    batch_size=args.batch_size,
                 )
                 cp_cached = load_cached_features("chess_positions")
             cp_feats, cp_labs = cp_cached
@@ -399,7 +412,8 @@ def main() -> None:
 
         logger.info("Total features: %d", len(all_features))
         best_state, best_val_acc, train_size, val_size = _train_on_features(
-            all_features, all_labels,
+            all_features,
+            all_labels,
             epochs=args.epochs,
             batch_size=args.batch_size,
             lr=args.lr,
@@ -416,7 +430,8 @@ def main() -> None:
 
         logger.info("Total images: %d", len(all_images))
         best_state, best_val_acc, train_size, val_size = _train_full_forward(
-            all_images, all_labels_np,
+            all_images,
+            all_labels_np,
             epochs=args.epochs,
             batch_size=args.batch_size,
             lr=args.lr,

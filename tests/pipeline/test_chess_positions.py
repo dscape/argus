@@ -13,8 +13,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
-
 from pipeline.overlay.grid_detector import GridResult
+
 from tests.pipeline.fen_helpers import compare_boards, fen_to_board
 
 # ---------------------------------------------------------------------------
