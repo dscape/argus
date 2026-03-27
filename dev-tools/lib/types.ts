@@ -337,6 +337,127 @@ export interface AutoSegmentResponse {
   existing_clips?: number;
 }
 
+// Segmentation evaluation
+export interface SegmentFrameValidation {
+  time: number;
+  overlay_detected: boolean;
+  grid_found?: boolean;
+  pieces_readable?: boolean;
+}
+
+export interface SegmentEvalSegment {
+  start_time: number;
+  end_time: number;
+  overlay_bbox: [number, number, number, number] | null;
+  score: number;
+  sample_count: number;
+  frames: SegmentFrameValidation[];
+  thumbnail_b64?: string;
+}
+
+export interface SegmentEvalGap {
+  start_time: number;
+  end_time: number;
+  frames: SegmentFrameValidation[];
+  has_overlay: boolean;
+}
+
+export interface SegmentEvalMetrics {
+  segment_consistency: number;
+  gap_consistency: number;
+  piece_readability: number;
+  false_negative_count: number;
+  coverage_ratio: number;
+}
+
+export interface SegmentEvalResult {
+  video_id: string;
+  duration_sec: number;
+  resolution: string;
+  num_segments: number;
+  num_gaps: number;
+  segments: SegmentEvalSegment[];
+  gaps: SegmentEvalGap[];
+  metrics: SegmentEvalMetrics;
+  elapsed_ms: number;
+  error?: string;
+}
+
+export interface SegmentEvalSession {
+  id: string;
+  created_at: string;
+  sample_size: number;
+  segment_consistency: number | null;
+  gap_consistency: number | null;
+  piece_readability: number | null;
+  false_negative_rate: number | null;
+  coverage_ratio: number | null;
+  results?: SegmentEvalResult[];
+  pin_state?: Record<string, boolean>;
+  evaluation_id?: number | null;
+}
+
+// Calibration evaluation
+export interface CalibrationFrameValidation {
+  timestamp: number;
+  overlay_detected: boolean;
+  overlay_iou: number;
+  grid_found: boolean;
+  fen: string | null;
+  fen_valid: boolean;
+  detected_theme: string;
+  theme_confidence: number;
+  theme_match: boolean;
+  detected_flipped: boolean;
+  orientation_confidence: number;
+  orientation_match: boolean;
+  frame_b64?: string;
+  crop_b64?: string;
+}
+
+export interface CalibrationEvalResult {
+  clip_id: number;
+  video_id: string;
+  clip_index: number;
+  start_time: number;
+  end_time: number | null;
+  stored_calibration: {
+    overlay_bbox: number[];
+    camera_bbox: number[];
+    ref_resolution: number[];
+    board_theme: string;
+    board_flipped: boolean;
+  };
+  validation: {
+    frames: CalibrationFrameValidation[];
+    fresh_camera_bbox: number[];
+    camera_iou: number;
+  };
+  metrics: {
+    overlay_iou: number;
+    grid_success_rate: number;
+    fen_validity_rate: number;
+    theme_accuracy: number;
+    orientation_accuracy: number;
+    camera_iou: number;
+  };
+  elapsed_ms: number;
+}
+
+export interface CalibrationEvalSession {
+  id: string;
+  created_at: string;
+  sample_size: number;
+  overlay_iou_avg: number | null;
+  theme_accuracy: number | null;
+  orientation_accuracy: number | null;
+  grid_success_rate: number | null;
+  fen_validity_rate: number | null;
+  results?: CalibrationEvalResult[];
+  pin_state?: Record<string, boolean>;
+  evaluation_id?: number | null;
+}
+
 // Auto-calibrate clip
 export interface AutoCalibrateProposal {
   overlay_bbox: [number, number, number, number];

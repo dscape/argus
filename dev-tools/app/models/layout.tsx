@@ -6,8 +6,8 @@ import { usePathname } from "next/navigation";
 const TABS = [
   { id: "screening", label: "Screening", href: "/models/screening" },
   { id: "overlay", label: "Overlay", href: "/models/overlay" },
-  { id: "calibration", label: "Auto-Calibration", href: "/models/calibration" },
-  { id: "hardcuts", label: "Hard Cuts", href: "/models/hardcuts" },
+  { id: "segmentation", label: "Segmentation", href: "/models/segmentation" },
+  { id: "calibration-eval", label: "Calibration", href: "/models/calibration-eval" },
 ] as const;
 
 export default function ModelsLayout({ children }: { children: React.ReactNode }) {

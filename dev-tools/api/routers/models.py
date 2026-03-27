@@ -5,7 +5,12 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from api.services import models_service, overlay_test_service
+from api.services import (
+    calibration_eval_service,
+    models_service,
+    overlay_test_service,
+    segmentation_eval_service,
+)
 
 router = APIRouter()
 
@@ -316,3 +321,240 @@ async def get_board_image(filename: str):
     if not path.exists():
         raise HTTPException(404, f"Board image not found: {filename}")
     return FileResponse(path, media_type="image/jpeg")
+
+
+# ── Segmentation Evaluation ────────────────────────────────
+
+
+class SegmentationInspectRequest(BaseModel):
+    video_id: str
+
+
+class SaveSegmentationEvalRequest(BaseModel):
+    segment_consistency: float
+    gap_consistency: float
+    piece_readability: float
+    false_negative_rate: float
+    coverage_ratio: float
+    sample_size: int
+    notes: str | None = None
+
+
+class CreateSegmentationEvalSessionRequest(BaseModel):
+    results: list[dict]
+    segment_consistency: float | None = None
+    gap_consistency: float | None = None
+    piece_readability: float | None = None
+    false_negative_rate: float | None = None
+    coverage_ratio: float | None = None
+    sample_size: int = 0
+    pin_state: dict | None = None
+    evaluation_id: int | None = None
+
+
+@router.get("/segmentation-eval/sample")
+async def sample_segmentation_videos(limit: int = 10, exclude: str | None = None):
+    """Return random sample of downloaded video IDs for segmentation evaluation."""
+    exclude_list = exclude.split(",") if exclude else None
+    video_ids = await run_in_threadpool(
+        segmentation_eval_service.sample_downloaded_videos, limit, exclude_list
+    )
+    return {"video_ids": video_ids}
+
+
+@router.post("/segmentation-eval/inspect")
+async def inspect_segmentation(body: SegmentationInspectRequest):
+    """Run segmentation evaluation on a single video."""
+    result = await run_in_threadpool(
+        segmentation_eval_service.inspect_segmentation, body.video_id
+    )
+    if result.get("error"):
+        raise HTTPException(404, result["error"])
+    return result
+
+
+@router.post("/segmentation-eval/save-eval")
+async def save_segmentation_eval(body: SaveSegmentationEvalRequest):
+    """Save a segmentation evaluation result."""
+    result = await run_in_threadpool(
+        segmentation_eval_service.save_segmentation_eval,
+        body.segment_consistency,
+        body.gap_consistency,
+        body.piece_readability,
+        body.false_negative_rate,
+        body.coverage_ratio,
+        body.sample_size,
+        body.notes,
+    )
+    return result
+
+
+@router.post("/segmentation-eval/sessions")
+async def create_segmentation_eval_session(body: CreateSegmentationEvalSessionRequest):
+    """Create a shareable segmentation eval session."""
+    result = await run_in_threadpool(
+        segmentation_eval_service.create_segmentation_eval_session,
+        body.results,
+        body.segment_consistency or 0.0,
+        body.gap_consistency or 0.0,
+        body.piece_readability or 0.0,
+        body.false_negative_rate or 0.0,
+        body.coverage_ratio or 0.0,
+        body.sample_size,
+        body.pin_state,
+        body.evaluation_id,
+    )
+    return result
+
+
+@router.get("/segmentation-eval/sessions")
+async def list_segmentation_eval_sessions(limit: int = 20):
+    """List recent segmentation eval sessions."""
+    sessions = await run_in_threadpool(
+        segmentation_eval_service.list_segmentation_eval_sessions, limit
+    )
+    return {"sessions": sessions}
+
+
+@router.get("/segmentation-eval/sessions/{session_id}")
+async def get_segmentation_eval_session(session_id: str):
+    """Get a segmentation eval session by ID."""
+    session = await run_in_threadpool(
+        segmentation_eval_service.get_segmentation_eval_session, session_id
+    )
+    if session is None:
+        raise HTTPException(404, f"Session {session_id} not found")
+    return session
+
+
+@router.patch("/segmentation-eval/sessions/{session_id}/pins")
+async def update_segmentation_eval_pins(session_id: str, body: UpdatePinsRequest):
+    """Update pin state for a segmentation eval session."""
+    result = await run_in_threadpool(
+        segmentation_eval_service.update_segmentation_eval_pins,
+        session_id,
+        body.pin_state,
+    )
+    if "error" in result:
+        raise HTTPException(404, result["error"])
+    return result
+
+
+# ── Calibration Evaluation ─────────────────────────────────
+
+
+class CalibrationEvalInspectRequest(BaseModel):
+    clip_id: int
+
+
+class SaveCalibrationEvalRequest(BaseModel):
+    overlay_iou: float
+    grid_success_rate: float
+    fen_validity_rate: float
+    theme_accuracy: float
+    orientation_accuracy: float
+    camera_iou: float
+    sample_size: int
+    notes: str | None = None
+
+
+class CreateCalibrationEvalSessionRequest(BaseModel):
+    results: list[dict]
+    overlay_iou_avg: float | None = None
+    theme_accuracy: float | None = None
+    orientation_accuracy: float | None = None
+    grid_success_rate: float | None = None
+    fen_validity_rate: float | None = None
+    sample_size: int = 0
+    pin_state: dict | None = None
+    evaluation_id: int | None = None
+
+
+@router.get("/calibration-eval/sample")
+async def sample_calibration_clips(limit: int = 10, exclude: str | None = None):
+    """Return sample of calibrated clips for evaluation."""
+    exclude_list = [int(x) for x in exclude.split(",")] if exclude else None
+    clips = await run_in_threadpool(
+        calibration_eval_service.sample_calibration_clips, limit, exclude_list
+    )
+    return {"clips": clips}
+
+
+@router.post("/calibration-eval/inspect")
+async def inspect_calibration(body: CalibrationEvalInspectRequest):
+    """Run calibration evaluation on a single clip."""
+    try:
+        result = await run_in_threadpool(
+            calibration_eval_service.inspect_calibration, body.clip_id
+        )
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return result
+
+
+@router.post("/calibration-eval/save-eval")
+async def save_calibration_eval(body: SaveCalibrationEvalRequest):
+    """Save a calibration evaluation result."""
+    result = await run_in_threadpool(
+        calibration_eval_service.save_calibration_eval,
+        body.overlay_iou,
+        body.grid_success_rate,
+        body.fen_validity_rate,
+        body.theme_accuracy,
+        body.orientation_accuracy,
+        body.camera_iou,
+        body.sample_size,
+        body.notes,
+    )
+    return result
+
+
+@router.post("/calibration-eval/sessions")
+async def create_calibration_eval_session(body: CreateCalibrationEvalSessionRequest):
+    """Create a shareable calibration eval session."""
+    result = await run_in_threadpool(
+        calibration_eval_service.create_calibration_eval_session,
+        body.results,
+        body.overlay_iou_avg or 0.0,
+        body.theme_accuracy or 0.0,
+        body.orientation_accuracy or 0.0,
+        body.grid_success_rate or 0.0,
+        body.fen_validity_rate or 0.0,
+        body.sample_size,
+        body.pin_state,
+        body.evaluation_id,
+    )
+    return result
+
+
+@router.get("/calibration-eval/sessions")
+async def list_calibration_eval_sessions(limit: int = 20):
+    """List recent calibration eval sessions."""
+    sessions = await run_in_threadpool(
+        calibration_eval_service.list_calibration_eval_sessions, limit
+    )
+    return {"sessions": sessions}
+
+
+@router.get("/calibration-eval/sessions/{session_id}")
+async def get_calibration_eval_session(session_id: str):
+    """Get a calibration eval session by ID."""
+    session = await run_in_threadpool(
+        calibration_eval_service.get_calibration_eval_session, session_id
+    )
+    if session is None:
+        raise HTTPException(404, f"Session {session_id} not found")
+    return session
+
+
+@router.patch("/calibration-eval/sessions/{session_id}/pins")
+async def update_calibration_eval_pins(session_id: str, body: UpdatePinsRequest):
+    """Update pin state for a calibration eval session."""
+    result = await run_in_threadpool(
+        calibration_eval_service.update_calibration_eval_pins,
+        session_id,
+        body.pin_state,
+    )
+    if "error" in result:
+        raise HTTPException(404, result["error"])
+    return result

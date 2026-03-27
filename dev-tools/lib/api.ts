@@ -799,6 +799,233 @@ export async function stopGeneration(): Promise<GenerationStatus> {
   return res.json();
 }
 
+// ── Segmentation Evaluation ──────────────────────────────────
+
+export interface SegmentEvalSessionSummary {
+  id: string;
+  created_at: string;
+  sample_size: number;
+  segment_consistency: number | null;
+  gap_consistency: number | null;
+  piece_readability: number | null;
+  false_negative_rate: number | null;
+  coverage_ratio: number | null;
+}
+
+export async function sampleSegmentationVideos(
+  limit: number,
+  exclude?: string[]
+): Promise<{ video_ids: string[] }> {
+  const excludeParam =
+    exclude && exclude.length > 0 ? `&exclude=${exclude.join(",")}` : "";
+  const res = await fetch(
+    `/api/models/segmentation-eval/sample?limit=${limit}${excludeParam}`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function inspectSegmentation(
+  videoId: string
+): Promise<any> {
+  const res = await fetch("/api/models/segmentation-eval/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ video_id: videoId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function saveSegmentationEval(body: {
+  segment_consistency: number;
+  gap_consistency: number;
+  piece_readability: number;
+  false_negative_rate: number;
+  coverage_ratio: number;
+  sample_size: number;
+  notes?: string | null;
+}): Promise<{ id: number; evaluated_at: string }> {
+  const res = await fetch("/api/models/segmentation-eval/save-eval", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createSegmentationEvalSession(body: {
+  results: any[];
+  segment_consistency?: number | null;
+  gap_consistency?: number | null;
+  piece_readability?: number | null;
+  false_negative_rate?: number | null;
+  coverage_ratio?: number | null;
+  sample_size?: number;
+  pin_state?: Record<string, boolean>;
+  evaluation_id?: number | null;
+}): Promise<{ session_id: string }> {
+  const res = await fetch("/api/models/segmentation-eval/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getSegmentationEvalSession(
+  sessionId: string
+): Promise<any> {
+  const res = await fetch(
+    `/api/models/segmentation-eval/sessions/${sessionId}`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listSegmentationEvalSessions(
+  limit = 20
+): Promise<{ sessions: SegmentEvalSessionSummary[] }> {
+  const res = await fetch(
+    `/api/models/segmentation-eval/sessions?limit=${limit}`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateSegmentationEvalPins(
+  sessionId: string,
+  pinState: Record<string, boolean>
+): Promise<{ pin_state: Record<string, boolean> }> {
+  const res = await fetch(
+    `/api/models/segmentation-eval/sessions/${sessionId}/pins`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin_state: pinState }),
+    }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── Calibration Evaluation ──────────────────────────────────
+
+export interface CalibrationEvalSessionSummary {
+  id: string;
+  created_at: string;
+  sample_size: number;
+  overlay_iou_avg: number | null;
+  theme_accuracy: number | null;
+  orientation_accuracy: number | null;
+  grid_success_rate: number | null;
+  fen_validity_rate: number | null;
+}
+
+export async function sampleCalibrationClips(
+  limit: number,
+  exclude?: number[]
+): Promise<{ clips: any[] }> {
+  const excludeParam =
+    exclude && exclude.length > 0
+      ? `&exclude=${exclude.join(",")}`
+      : "";
+  const res = await fetch(
+    `/api/models/calibration-eval/sample?limit=${limit}${excludeParam}`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function inspectCalibration(
+  clipId: number
+): Promise<any> {
+  const res = await fetch("/api/models/calibration-eval/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clip_id: clipId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function saveCalibrationEval(body: {
+  overlay_iou: number;
+  grid_success_rate: number;
+  fen_validity_rate: number;
+  theme_accuracy: number;
+  orientation_accuracy: number;
+  camera_iou: number;
+  sample_size: number;
+  notes?: string | null;
+}): Promise<{ id: number; evaluated_at: string }> {
+  const res = await fetch("/api/models/calibration-eval/save-eval", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createCalibrationEvalSession(body: {
+  results: any[];
+  overlay_iou_avg?: number | null;
+  theme_accuracy?: number | null;
+  orientation_accuracy?: number | null;
+  grid_success_rate?: number | null;
+  fen_validity_rate?: number | null;
+  sample_size?: number;
+  pin_state?: Record<string, boolean>;
+  evaluation_id?: number | null;
+}): Promise<{ session_id: string }> {
+  const res = await fetch("/api/models/calibration-eval/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getCalibrationEvalSession(
+  sessionId: string
+): Promise<any> {
+  const res = await fetch(
+    `/api/models/calibration-eval/sessions/${sessionId}`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listCalibrationEvalSessions(
+  limit = 20
+): Promise<{ sessions: CalibrationEvalSessionSummary[] }> {
+  const res = await fetch(
+    `/api/models/calibration-eval/sessions?limit=${limit}`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateCalibrationEvalPins(
+  sessionId: string,
+  pinState: Record<string, boolean>
+): Promise<{ pin_state: Record<string, boolean> }> {
+  const res = await fetch(
+    `/api/models/calibration-eval/sessions/${sessionId}/pins`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin_state: pinState }),
+    }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ── Auto-Calibration ────────────────────────────────────────
 
 export async function inspectAutoCalibration(
