@@ -76,11 +76,15 @@ def sample_downloaded_videos(
     limit: int = 10,
     exclude: list[str] | None = None,
 ) -> list[str]:
-    """Return random sample of approved video IDs that have local files."""
+    """Return random sample of video IDs that have stored clips and local files.
+
+    Only returns videos with entries in video_clips — avoids triggering the
+    full segmenter (which takes minutes per video) during interactive evals.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT video_id FROM youtube_videos WHERE screening_status = 'approved'"
+                "SELECT DISTINCT video_id FROM video_clips"
             )
             all_ids = [row[0] for row in cur.fetchall()]
 
@@ -216,13 +220,15 @@ def inspect_segmentation(video_id: str) -> dict:
                     "overlay_detected": False,
                     "grid_found": False,
                     "pieces_readable": False,
+                    "thumbnail_b64": None,
                 })
                 total_segment_frames += 1
                 continue
 
-            # Save base64 thumbnail of middle frame only
+            thumb = _frame_to_base64(frame, max_width=200)
+            # Save middle frame as segment-level thumbnail too
             if idx == middle_idx:
-                middle_frame_b64 = _frame_to_base64(frame)
+                middle_frame_b64 = thumb
 
             # Detect overlay
             det = detect_overlay_in_frame(frame)
@@ -259,6 +265,7 @@ def inspect_segmentation(video_id: str) -> dict:
                 "overlay_detected": overlay_found,
                 "grid_found": grid_found,
                 "pieces_readable": pieces_readable,
+                "thumbnail_b64": thumb,
             })
 
         segment_results.append({
@@ -299,6 +306,7 @@ def inspect_segmentation(video_id: str) -> dict:
                 frame_validations.append({
                     "time": round(t, 2),
                     "overlay_detected": False,
+                    "thumbnail_b64": None,
                 })
                 total_gap_frames += 1
                 gap_no_overlay_count += 1
@@ -316,6 +324,7 @@ def inspect_segmentation(video_id: str) -> dict:
             frame_validations.append({
                 "time": round(t, 2),
                 "overlay_detected": overlay_found,
+                "thumbnail_b64": _frame_to_base64(frame, max_width=200),
             })
 
         if any_overlay:

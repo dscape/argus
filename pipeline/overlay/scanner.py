@@ -228,6 +228,72 @@ def _refine_alignment(
     return best
 
 
+# Lightweight scan parameters for fast_overlay_check().
+FAST_SCAN_SCALES = [0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
+FAST_SCAN_STEP_FRACTION = 0.25
+
+
+def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
+    """Fast overlay presence check — ~20x faster than detect_overlay_in_frame.
+
+    Scans only 3 scales with larger step size.  Skips expansion and
+    refinement.  Returns an approximate bbox suitable for segmentation
+    (calibration refines it later).
+    """
+    h, w = frame.shape[:2]
+    resolution = (w, h)
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+
+    candidates: list[tuple[float, tuple[int, int, int, int]]] = []
+
+    for scale in FAST_SCAN_SCALES:
+        win_size = int(min(h, w) * scale)
+        if win_size < 64:
+            continue
+
+        step = max(1, int(win_size * FAST_SCAN_STEP_FRACTION))
+        scale_best_score = 0.0
+        scale_best_bbox = None
+
+        for y in range(0, h - win_size + 1, step):
+            for x in range(0, w - win_size + 1, step):
+                region = gray[y : y + win_size, x : x + win_size]
+                regularity = compute_grid_regularity(region)
+
+                if regularity > MIN_LOW_VARIANCE_RATIO:
+                    has_pattern = check_alternating_pattern(region)
+                    score = regularity + (0.2 if has_pattern else 0.0)
+
+                    if score > scale_best_score:
+                        scale_best_score = score
+                        scale_best_bbox = (x, y, win_size, win_size)
+
+        if scale_best_bbox is not None:
+            candidates.append((scale_best_score, scale_best_bbox))
+
+    # Pick the largest detection above threshold.
+    best_score = 0.0
+    best_bbox = None
+    for score, bbox in candidates:
+        bbox_area = bbox[2] * bbox[3]
+        best_area = best_bbox[2] * best_bbox[3] if best_bbox else 0
+        if bbox_area > best_area or (bbox_area == best_area and score > best_score):
+            best_score = score
+            best_bbox = bbox
+
+    if best_bbox is not None and best_score > MIN_LOW_VARIANCE_RATIO:
+        return OverlayDetection(
+            found=True,
+            bbox=best_bbox,
+            seed_bbox=best_bbox,
+            score=best_score,
+            frame_resolution=resolution,
+        )
+
+    return OverlayDetection(found=False, frame_resolution=resolution)
+
+
 def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
     """Detect a 2D chess board overlay in a video frame.
 

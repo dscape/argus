@@ -13,3 +13,4 @@ torch>=2.2
 transformers>=4.40
 Pillow>=10.0
 scipy>=1.11
+transnetv2-pytorch>=1.0.5

@@ -52,25 +52,23 @@ def auto_segment_video(
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
 
-    # Optionally delete existing clips
-    if replace_existing:
-        existing = crawl_service.list_video_clips(video_id)
-        for clip in existing:
-            crawl_service.delete_video_clip(clip["id"])
-
-    t0 = time.monotonic()
-    segments, gaps = segment_video_layouts(video_path, sample_interval_sec)
-    elapsed = time.monotonic() - t0
-
-    # Count existing clips to check for overlap
+    # Guard: refuse early if clips exist and caller hasn't opted in to replace
     existing_clips = crawl_service.list_video_clips(video_id)
     if existing_clips and not replace_existing:
-        # Don't create clips if some already exist (user should use replace_existing)
         return {
             "error": f"Video already has {len(existing_clips)} clip(s). "
             "Set replace_existing=true to replace them.",
             "existing_clips": len(existing_clips),
         }
+
+    # Optionally delete existing clips before re-segmenting
+    if replace_existing:
+        for clip in existing_clips:
+            crawl_service.delete_video_clip(clip["id"])
+
+    t0 = time.monotonic()
+    segments, gaps = segment_video_layouts(video_path, sample_interval_sec)
+    elapsed = time.monotonic() - t0
 
     # Create video_clips entries
     created_segments = []

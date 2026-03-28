@@ -109,6 +109,11 @@ export default function SegmentationEvalInspector({
   const [expandedSegDetails, setExpandedSegDetails] = useState<Set<string>>(
     new Set()
   );
+  const [selectedFrames, setSelectedFrames] = useState<{
+    videoId: string;
+    frames: any[];
+    label: string;
+  } | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(
     initialSession?.id ?? null
   );
@@ -370,36 +375,101 @@ export default function SegmentationEvalInspector({
     const { duration, segments, gaps } = result;
     if (duration <= 0) return null;
 
+    const activeKey = selectedFrames?.videoId === result.video_id ? selectedFrames.label : null;
+
     return (
-      <div className="relative h-6 bg-muted rounded overflow-hidden w-full">
-        {segments.map((seg, i) => (
-          <div
-            key={`seg-${i}`}
-            className="absolute top-0 bottom-0 bg-green-500/70 border-r border-green-600/30"
-            style={{
-              left: `${(seg.start / duration) * 100}%`,
-              width: `${((seg.end - seg.start) / duration) * 100}%`,
-            }}
-            title={`Segment ${i + 1}: ${formatTime(seg.start)} - ${formatTime(seg.end)}`}
-          />
-        ))}
-        {gaps.map((gap, i) => (
-          <div
-            key={`gap-${i}`}
-            className={`absolute top-0 bottom-0 ${
-              gap.has_overlay
-                ? "bg-red-500/50 border border-red-500"
-                : "bg-gray-400/30"
-            }`}
-            style={{
-              left: `${(gap.start / duration) * 100}%`,
-              width: `${((gap.end - gap.start) / duration) * 100}%`,
-            }}
-            title={`Gap ${i + 1}: ${formatTime(gap.start)} - ${formatTime(gap.end)}${
-              gap.has_overlay ? " (FALSE NEGATIVE)" : ""
-            }`}
-          />
-        ))}
+      <div className="space-y-1">
+        <div className="relative h-6 bg-muted rounded overflow-hidden w-full">
+          {segments.map((seg, i) => {
+            const key = `seg-${i}`;
+            const isActive = activeKey === key;
+            return (
+              <div
+                key={key}
+                className={`absolute top-0 bottom-0 cursor-pointer transition-opacity ${
+                  isActive ? "bg-green-500 ring-1 ring-green-300" : "bg-green-500/70 hover:bg-green-500/90"
+                } border-r border-green-600/30`}
+                style={{
+                  left: `${(seg.start / duration) * 100}%`,
+                  width: `${((seg.end - seg.start) / duration) * 100}%`,
+                }}
+                title={`Segment ${i + 1}: ${formatTime(seg.start)} - ${formatTime(seg.end)} — click to inspect frames`}
+                onClick={() =>
+                  setSelectedFrames(
+                    isActive ? null :
+                    { videoId: result.video_id, frames: seg.frames ?? [], label: key }
+                  )
+                }
+              />
+            );
+          })}
+          {gaps.map((gap, i) => {
+            const key = `gap-${i}`;
+            const isActive = activeKey === key;
+            return (
+              <div
+                key={key}
+                className={`absolute top-0 bottom-0 cursor-pointer transition-opacity ${
+                  gap.has_overlay
+                    ? isActive ? "bg-red-500 ring-1 ring-red-300" : "bg-red-500/50 hover:bg-red-500/70 border border-red-500"
+                    : isActive ? "bg-gray-400/60" : "bg-gray-400/30 hover:bg-gray-400/50"
+                }`}
+                style={{
+                  left: `${(gap.start / duration) * 100}%`,
+                  width: `${((gap.end - gap.start) / duration) * 100}%`,
+                }}
+                title={`Gap ${i + 1}: ${formatTime(gap.start)} - ${formatTime(gap.end)}${
+                  gap.has_overlay ? " (FALSE NEGATIVE)" : ""
+                } — click to inspect frames`}
+                onClick={() =>
+                  setSelectedFrames(
+                    isActive ? null :
+                    { videoId: result.video_id, frames: gap.frames ?? [], label: key }
+                  )
+                }
+              />
+            );
+          })}
+        </div>
+
+        {/* Frame strip for selected region */}
+        {selectedFrames?.videoId === result.video_id && selectedFrames.frames.length > 0 && (
+          <div className="flex gap-1 overflow-x-auto pb-1">
+            {selectedFrames.frames.map((f: any, i: number) => (
+              <div key={i} className="flex-shrink-0 text-center">
+                {f.thumbnail_b64 ? (
+                  <img
+                    src={`data:image/jpeg;base64,${f.thumbnail_b64}`}
+                    alt={`t=${f.time}s`}
+                    className="h-20 w-auto rounded border object-cover"
+                  />
+                ) : (
+                  <div className="h-20 w-28 rounded border bg-muted flex items-center justify-center text-xs text-muted-foreground">
+                    no frame
+                  </div>
+                )}
+                <div className="text-[10px] text-muted-foreground mt-0.5">{formatTime(f.time)}</div>
+                <div className="flex gap-0.5 justify-center mt-0.5">
+                  {f.overlay_detected !== undefined && (
+                    <span className={`text-[9px] px-1 rounded ${f.overlay_detected ? "bg-green-500/20 text-green-700" : "bg-red-500/20 text-red-700"}`}>
+                      {f.overlay_detected ? "ov✓" : "ov✗"}
+                    </span>
+                  )}
+                  {f.grid_found !== undefined && (
+                    <span className={`text-[9px] px-1 rounded ${f.grid_found ? "bg-green-500/20 text-green-700" : "bg-gray-500/20 text-gray-600"}`}>
+                      {f.grid_found ? "grid✓" : "grid✗"}
+                    </span>
+                  )}
+                  {f.pieces_readable !== undefined && (
+                    <span className={`text-[9px] px-1 rounded ${f.pieces_readable ? "bg-green-500/20 text-green-700" : "bg-gray-500/20 text-gray-600"}`}>
+                      {f.pieces_readable ? "pc✓" : "pc✗"}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     );
   }

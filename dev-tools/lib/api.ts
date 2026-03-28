@@ -825,6 +825,47 @@ export async function sampleSegmentationVideos(
   return res.json();
 }
 
+function normalizeSegmentEvalResult(raw: any): any {
+  const metrics = raw.metrics ?? {};
+  return {
+    video_id: raw.video_id,
+    duration: raw.duration_sec ?? 0,
+    segments: (raw.segments ?? []).map((s: any) => {
+      const frames: any[] = s.frames ?? [];
+      const framesCount = frames.length;
+      const overlayCount = frames.filter((f) => f.overlay_detected).length;
+      const gridCount = frames.filter((f) => f.grid_found).length;
+      const piecesCount = frames.filter((f) => f.pieces_readable).length;
+      return {
+        start: s.start_time,
+        end: s.end_time,
+        overlay_bbox: s.overlay_bbox,
+        thumbnail_b64: s.thumbnail_b64,
+        frames,
+        validation: {
+          frames_sampled: framesCount,
+          overlay_detected: overlayCount,
+          grid_found: gridCount,
+          pieces_readable: piecesCount,
+        },
+        segment_consistency: framesCount > 0 ? overlayCount / framesCount : 0,
+        piece_readability: framesCount > 0 ? piecesCount / framesCount : 0,
+      };
+    }),
+    gaps: (raw.gaps ?? []).map((g: any) => ({
+      start: g.start_time,
+      end: g.end_time,
+      has_overlay: g.has_overlay ?? false,
+      frames: g.frames ?? [],
+    })),
+    segment_consistency: metrics.segment_consistency ?? 0,
+    gap_consistency: metrics.gap_consistency ?? 1,
+    piece_readability: metrics.piece_readability ?? 0,
+    false_negative_count: metrics.false_negative_count ?? 0,
+    coverage_ratio: metrics.coverage_ratio ?? 0,
+  };
+}
+
 export async function inspectSegmentation(
   videoId: string
 ): Promise<any> {
@@ -834,7 +875,7 @@ export async function inspectSegmentation(
     body: JSON.stringify({ video_id: videoId }),
   });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return normalizeSegmentEvalResult(await res.json());
 }
 
 export async function saveSegmentationEval(body: {

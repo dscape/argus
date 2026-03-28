@@ -1,9 +1,9 @@
-"""Auto-segment a video into layout regions based on overlay detection.
+"""Auto-segment a video into layout regions using scene detection.
 
-Samples frames at regular intervals and groups consecutive frames with
-similar overlay positions into segments.  Each segment becomes a
-``video_clip`` entry with a preliminary overlay bbox that the calibration
-step later refines.
+Uses TransNetV2 for fast shot boundary detection, then runs a lightweight
+overlay check on one representative frame per scene.  Consecutive scenes
+with the same overlay layout are merged into ``LayoutSegment`` objects
+that become ``video_clip`` entries.
 """
 
 import logging
@@ -13,7 +13,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from pipeline.overlay.scanner import detect_overlay_in_frame
+from pipeline.overlay.scanner import fast_overlay_check
+from pipeline.overlay.scene_detector import detect_scenes
 
 logger = logging.getLogger(__name__)
 
@@ -59,17 +60,121 @@ def _median_bbox(
     return (int(med[0]), int(med[1]), int(med[2]), int(med[3]))
 
 
+def _classify_scenes(
+    video_path: str,
+    scenes: list,
+    fps: float,
+) -> list[dict]:
+    """Run fast overlay check on one representative frame per scene.
+
+    Returns a list of dicts with keys: start_time, end_time, bbox, score,
+    has_overlay.
+    """
+    cap = cv2.VideoCapture(video_path)
+    results = []
+    found_count = 0
+
+    for i, scene in enumerate(scenes):
+        mid_frame = (scene.start_frame + scene.end_frame) // 2
+        cap.set(cv2.CAP_PROP_POS_FRAMES, mid_frame)
+        ret, frame = cap.read()
+
+        if not ret or frame is None:
+            logger.debug(
+                f"Scene {i}: {scene.start_time:.1f}-{scene.end_time:.1f}s "
+                f"frame {mid_frame} unreadable"
+            )
+            results.append({
+                "start_time": scene.start_time,
+                "end_time": scene.end_time,
+                "bbox": None,
+                "score": 0.0,
+                "has_overlay": False,
+            })
+            continue
+
+        det = fast_overlay_check(frame)
+        if det.found:
+            found_count += 1
+        logger.debug(
+            f"Scene {i}: {scene.start_time:.1f}-{scene.end_time:.1f}s "
+            f"overlay={'YES' if det.found else 'no'} "
+            f"score={det.score:.3f} bbox={det.bbox}"
+        )
+        results.append({
+            "start_time": scene.start_time,
+            "end_time": scene.end_time,
+            "bbox": det.bbox if det.found else None,
+            "score": det.score if det.found else 0.0,
+            "has_overlay": det.found,
+        })
+
+    cap.release()
+    logger.info(
+        f"Classified {len(scenes)} scenes: {found_count} with overlay, "
+        f"{len(scenes) - found_count} without"
+    )
+    return results
+
+
+def _fallback_classify(
+    video_path: str,
+    duration: float,
+    fps: float,
+    sample_interval_sec: float,
+) -> list[dict]:
+    """Fallback: uniform sampling with fast_overlay_check when scene detection fails."""
+    cap = cv2.VideoCapture(video_path)
+    results = []
+    ts = 0.0
+
+    while ts < duration:
+        frame_idx = int(ts * fps)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+
+        end_time = min(ts + sample_interval_sec, duration)
+
+        if not ret or frame is None:
+            results.append({
+                "start_time": ts,
+                "end_time": end_time,
+                "bbox": None,
+                "score": 0.0,
+                "has_overlay": False,
+            })
+            ts += sample_interval_sec
+            continue
+
+        det = fast_overlay_check(frame)
+        results.append({
+            "start_time": ts,
+            "end_time": end_time,
+            "bbox": det.bbox if det.found else None,
+            "score": det.score if det.found else 0.0,
+            "has_overlay": det.found,
+        })
+        ts += sample_interval_sec
+
+    cap.release()
+    return results
+
+
 def segment_video_layouts(
     video_path: str,
     sample_interval_sec: float = 30.0,
     bbox_shift_threshold: float = 0.15,
     min_overlay_fraction: float = 0.55,
 ) -> tuple[list[LayoutSegment], list[tuple[float, float]]]:
-    """Segment a video into layout regions by sampling overlay detection.
+    """Segment a video into layout regions using scene detection + fast overlay check.
+
+    Uses TransNetV2 to find shot boundaries, then classifies each scene
+    with a lightweight overlay detector.  Falls back to uniform sampling
+    if scene detection fails.
 
     Args:
         video_path: Path to the local video file.
-        sample_interval_sec: Seconds between sampled frames (default 30).
+        sample_interval_sec: Seconds between sampled frames (fallback only).
         bbox_shift_threshold: Max relative bbox shift to consider "same layout".
         min_overlay_fraction: Minimum overlay height as a fraction of frame
             height.  Segments with smaller overlays are treated as gaps
@@ -87,55 +192,46 @@ def segment_video_layouts(
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    cap.release()
 
     if fps <= 0 or total_frames <= 0:
-        cap.release()
         raise ValueError(f"Invalid video: fps={fps}, frames={total_frames}")
 
     duration = total_frames / fps
     logger.info(
-        f"Segmenting {video_path}: {duration:.0f}s, {width}x{height}, "
-        f"sampling every {sample_interval_sec}s"
+        f"Segmenting {video_path}: {duration:.0f}s, {width}x{height}"
     )
 
-    # ── Sample frames and run overlay detection ──────────────
-    detections: list[tuple[float, tuple[int, int, int, int] | None, float]] = []
-    ts = 0.0
-    while ts < duration:
-        frame_idx = int(ts * fps)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-        ret, frame = cap.read()
-        if not ret:
-            ts += sample_interval_sec
-            continue
+    # ── Phase 1: Scene detection ──────────────────────────────
+    try:
+        scenes = detect_scenes(video_path)
+        logger.info(f"TransNetV2 detected {len(scenes)} scene(s)")
+        classified = _classify_scenes(video_path, scenes, fps)
+    except Exception as e:
+        logger.warning(f"Scene detection failed, using fallback sampling: {e}")
+        classified = _fallback_classify(video_path, duration, fps, sample_interval_sec)
 
-        det = detect_overlay_in_frame(frame)
-        bbox = det.bbox if det.found else None
-        score = det.score if det.found else 0.0
-        detections.append((ts, bbox, score))
-
-        ts += sample_interval_sec
-
-    cap.release()
-
-    if not detections:
+    if not classified:
         return [], []
 
-    logger.info(f"Sampled {len(detections)} frames in {time.monotonic() - t0:.1f}s")
+    logger.info(
+        f"Classified {len(classified)} scene(s) in {time.monotonic() - t0:.1f}s"
+    )
 
-    # ── Group into raw segments ──────────────────────────────
-    raw_segments: list[dict] = []  # {start, end, bboxes, scores, has_overlay}
+    # ── Phase 2: Merge consecutive same-type scenes ───────────
+    raw_segments: list[dict] = []
 
-    for ts_val, bbox, score in detections:
-        has_overlay = bbox is not None
-        end_time = min(ts_val + sample_interval_sec, duration)
+    for scene in classified:
+        has_overlay = scene["has_overlay"]
+        bbox = scene["bbox"]
+        score = scene["score"]
 
         if not raw_segments:
             raw_segments.append({
-                "start": ts_val,
-                "end": end_time,
+                "start": scene["start_time"],
+                "end": scene["end_time"],
                 "bboxes": [bbox] if bbox else [],
                 "scores": [score] if bbox else [],
                 "has_overlay": has_overlay,
@@ -145,54 +241,39 @@ def segment_video_layouts(
         prev = raw_segments[-1]
         same_type = prev["has_overlay"] == has_overlay
 
-        if same_type and has_overlay and bbox is not None and prev["bboxes"]:
-            # Both have overlay — check if bbox shifted
-            shift = _bbox_relative_shift(prev["bboxes"][-1], bbox)
-            if shift < bbox_shift_threshold:
-                prev["end"] = end_time
-                prev["bboxes"].append(bbox)
-                prev["scores"].append(score)
-                continue
-
-        if same_type and not has_overlay:
-            # Both gaps — extend
-            prev["end"] = end_time
+        if same_type and has_overlay and bbox is not None:
+            # Merge consecutive overlay scenes unconditionally.
+            # fast_overlay_check returns approximate sub-region bboxes
+            # that vary between scenes; the calibration step refines
+            # the actual overlay position later.
+            prev["end"] = scene["end_time"]
+            prev["bboxes"].append(bbox)
+            prev["scores"].append(score)
             continue
 
-        # Layout change — start new segment
+        if same_type and not has_overlay:
+            prev["end"] = scene["end_time"]
+            continue
+
         raw_segments.append({
-            "start": ts_val,
-            "end": end_time,
+            "start": scene["start_time"],
+            "end": scene["end_time"],
             "bboxes": [bbox] if bbox else [],
             "scores": [score] if bbox else [],
             "has_overlay": has_overlay,
         })
 
-    # ── Merge tiny segments (< 2 samples) into neighbors ────
-    merged: list[dict] = []
-    for seg in raw_segments:
-        n_samples = len(seg["bboxes"]) if seg["has_overlay"] else max(1, int((seg["end"] - seg["start"]) / sample_interval_sec))
-        if n_samples < 2 and merged:
-            # Absorb into previous segment
-            merged[-1]["end"] = seg["end"]
-            if seg["has_overlay"]:
-                merged[-1]["bboxes"].extend(seg["bboxes"])
-                merged[-1]["scores"].extend(seg["scores"])
-                if not merged[-1]["has_overlay"] and seg["bboxes"]:
-                    merged[-1]["has_overlay"] = True
-        else:
-            merged.append(seg)
-
-    # ── Build output ─────────────────────────────────────────
-    min_overlay_px = int(height * min_overlay_fraction)
+    # ── Phase 3: Build output ─────────────────────────────────
+    # fast_overlay_check skips bbox expansion, so its bboxes are scan
+    # windows (sub-regions of the actual overlay).  Use a lower size
+    # threshold — any grid-regularity-passing detection is real.
+    min_overlay_px = int(height * min_overlay_fraction * 0.5)
     segments: list[LayoutSegment] = []
     gaps: list[tuple[float, float]] = []
 
-    for seg in merged:
+    for seg in raw_segments:
         if seg["has_overlay"] and seg["bboxes"]:
             bbox = _median_bbox(seg["bboxes"])
-            # Skip segments where the overlay is too small — likely an
-            # intro, outro, or transition rather than actual gameplay.
             if bbox[2] < min_overlay_px or bbox[3] < min_overlay_px:
                 logger.info(
                     f"Skipping segment {seg['start']:.0f}-{seg['end']:.0f}s: "
