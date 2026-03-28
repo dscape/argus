@@ -4,7 +4,7 @@
     {
       "name": "dev",
       "runtimeExecutable": "docker",
-      "runtimeArgs": ["compose", "--profile", "dev-tools", "up", "--build"],
+      "runtimeArgs": ["compose", "--profile", "dev-tools", "up"],
       "port": 3000,
       "autoPort": false
     }

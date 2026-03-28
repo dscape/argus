@@ -13,9 +13,9 @@ logging.basicConfig(
     format="%(levelname)s:%(name)s:%(message)s",
 )
 from fastapi.middleware.cors import CORSMiddleware
+from pipeline.db.connection import migrate
 
 from api.routers import calibration, clips, crawl, models, overlay, synthetic, video
-from pipeline.db.connection import migrate
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ def run_migrations():
         migrate()
     except Exception as e:
         logger.warning("Migration failed (database may be unavailable): %s", e)
+
 
 app.add_middleware(
     CORSMiddleware,

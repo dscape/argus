@@ -966,7 +966,7 @@ export default function SegmentationEvalInspector({
 
       {/* Summary bar */}
       {total > 0 && (
-        <div className="border rounded-lg p-3 space-y-2 bg-muted/20">
+        <div className="border rounded-lg p-3 space-y-2 bg-background">
           <div className="flex items-center gap-4">
             <span className="text-sm font-medium flex items-center">
               Segment consistency:{" "}

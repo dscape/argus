@@ -20,10 +20,8 @@ import {
   listOverlayTestSessions,
   updateOverlaySessionPins,
   overlayBoardImageUrl,
-  validateOverlayDetection,
   type OverlayTestResult,
   type OverlayTestSession,
-  type OverlayValidationResponse,
 } from "@/lib/api";
 
 interface EvalPoint {
@@ -46,10 +44,28 @@ interface OverlayInspectorProps {
   };
 }
 
-export default function OverlayInspector({ initialSession }: OverlayInspectorProps) {
+/** Small inline info icon with a CSS tooltip. */
+function InfoIcon({ tip }: { tip: string }) {
+  return (
+    <span className="relative group inline-flex items-center ml-1 cursor-default">
+      <span className="inline-flex items-center justify-center w-4 h-4 rounded-full border text-[10px] text-muted-foreground select-none">
+        i
+      </span>
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-56 rounded bg-popover border text-popover-foreground text-xs px-2 py-1 shadow-md opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-normal">
+        {tip}
+      </span>
+    </span>
+  );
+}
+
+export default function OverlayInspector({
+  initialSession,
+}: OverlayInspectorProps) {
   const router = useRouter();
   const [sampleSize, setSampleSize] = useState(20);
-  const [results, setResults] = useState<OverlayTestResult[]>(initialSession?.results ?? []);
+  const [results, setResults] = useState<OverlayTestResult[]>(
+    initialSession?.results ?? [],
+  );
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [evalHistory, setEvalHistory] = useState<EvalPoint[]>([]);
@@ -59,35 +75,20 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
         ? Object.entries(initialSession.pin_state)
             .filter(([, v]) => v)
             .map(([k]) => k)
-        : []
-    )
+        : [],
+    ),
   );
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const [sessionId, setSessionId] = useState<string | null>(initialSession?.id ?? null);
-  const [recentSessions, setRecentSessions] = useState<OverlayTestSession[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(
+    initialSession?.id ?? null,
+  );
+  const [recentSessions, setRecentSessions] = useState<OverlayTestSession[]>(
+    [],
+  );
   const [showSessionList, setShowSessionList] = useState(false);
   const inspectedFiles = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const sessionListRef = useRef<HTMLDivElement>(null);
-
-  // Overlay detection validation state
-  const [validationResult, setValidationResult] = useState<OverlayValidationResponse | null>(null);
-  const [validating, setValidating] = useState(false);
-  const [validationLimit, setValidationLimit] = useState(100);
-
-  async function runValidation() {
-    setValidating(true);
-    setValidationResult(null);
-    try {
-      const result = await validateOverlayDetection(validationLimit);
-      setValidationResult(result);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Unknown error";
-      alert(`Validation failed: ${msg}`);
-    } finally {
-      setValidating(false);
-    }
-  }
 
   useEffect(() => {
     fetchHistory();
@@ -96,7 +97,10 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
   useEffect(() => {
     if (!showSessionList) return;
     const handleClick = (e: MouseEvent) => {
-      if (sessionListRef.current && !sessionListRef.current.contains(e.target as Node)) {
+      if (
+        sessionListRef.current &&
+        !sessionListRef.current.contains(e.target as Node)
+      ) {
         setShowSessionList(false);
       }
     };
@@ -106,7 +110,9 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
 
   async function fetchHistory() {
     try {
-      const res = await fetch("/api/models/evaluations?model_name=piece_classifier");
+      const res = await fetch(
+        "/api/models/evaluations?model_name=piece_classifier",
+      );
       if (res.ok) {
         const data = await res.json();
         setEvalHistory(data.evaluations);
@@ -134,7 +140,9 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
         else next.add(filename);
 
         if (sessionId) {
-          updateOverlaySessionPins(sessionId, { [filename]: !prev.has(filename) }).catch(() => {});
+          updateOverlaySessionPins(sessionId, {
+            [filename]: !prev.has(filename),
+          }).catch(() => {});
         }
         return next;
       });
@@ -144,7 +152,7 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
         return next;
       });
     },
-    [sessionId]
+    [sessionId],
   );
 
   const toggleExpand = useCallback((filename: string) => {
@@ -188,8 +196,8 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
         setResults((prev) => [...prev, result]);
         inspectedFiles.current.add(filenames[i]);
 
-        // Auto-pin mismatches
-        if (!result.match) {
+        // Auto-pin mismatches (skip video frames with match=null)
+        if (result.match === false) {
           autoPinned.add(result.filename);
           setPinnedIds((prev) => new Set([...prev, result.filename]));
         }
@@ -197,15 +205,18 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
         setProgress({ current: i + 1, total: filenames.length });
       }
 
-      // Step 3: compute accuracy & save
+      // Step 3: compute accuracy & save (only scored samples)
       const total = collected.length;
       if (total > 0) {
-        const matches = collected.filter((r) => r.match).length;
-        const accuracy = matches / total;
+        const scored = collected.filter((r) => r.match != null);
+        const scoredTotal = scored.length || 1;
+        const matches = scored.filter((r) => r.match).length;
+        const accuracy = matches / scoredTotal;
         const avgPieceAccuracy =
-          collected.reduce((s, r) => s + r.piece_accuracy, 0) / total;
+          scored.reduce((s, r) => s + (r.piece_accuracy ?? 0), 0) / scoredTotal;
         const elapsedMin = (performance.now() - batchStartTime) / 60000;
-        const imagesPerMinute = elapsedMin > 0 ? Math.round(total / elapsedMin) : null;
+        const imagesPerMinute =
+          elapsedMin > 0 ? Math.round(total / elapsedMin) : null;
 
         const saveRes = await fetch("/api/models/overlay-test/save-eval", {
           method: "POST",
@@ -252,12 +263,14 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
     }
   }
 
-  // Accuracy summary
+  // Accuracy summary (only count samples with ground truth)
   const total = results.length;
-  const matches = results.filter((r) => r.match).length;
+  const scoredResults = results.filter((r) => r.match != null);
+  const scoredTotal = scoredResults.length;
+  const matches = scoredResults.filter((r) => r.match).length;
   const avgPieceAccuracy =
-    total > 0
-      ? results.reduce((s, r) => s + r.piece_accuracy, 0) / total
+    scoredTotal > 0
+      ? scoredResults.reduce((s, r) => s + (r.piece_accuracy ?? 0), 0) / scoredTotal
       : 0;
 
   // Sort into pinned / unpinned
@@ -272,21 +285,19 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
   }, [results, pinnedIds]);
 
   // Chart data
-  const chartData = [...evalHistory]
-    .reverse()
-    .map((ev) => ({
-      date: new Date(ev.evaluated_at).toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-      }),
-      accuracy: Math.round(ev.accuracy * 1000) / 10,
-      piece_accuracy: ev.per_class?.piece_accuracy
-        ? Math.round(ev.per_class.piece_accuracy * 1000) / 10
-        : null,
-      images_per_minute: ev.per_class?.images_per_minute ?? null,
-      notes: ev.notes,
-      sample_size: ev.sample_size,
-    }));
+  const chartData = [...evalHistory].reverse().map((ev) => ({
+    date: new Date(ev.evaluated_at).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    }),
+    accuracy: Math.round(ev.accuracy * 1000) / 10,
+    piece_accuracy: ev.per_class?.piece_accuracy
+      ? Math.round(ev.per_class.piece_accuracy * 1000) / 10
+      : null,
+    images_per_minute: ev.per_class?.images_per_minute ?? null,
+    notes: ev.notes,
+    sample_size: ev.sample_size,
+  }));
 
   const hasPerformanceData = chartData.some((d) => d.images_per_minute != null);
 
@@ -296,144 +307,11 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
 
   return (
     <div className="space-y-4">
-      {/* ── Overlay Detection Validation ─────────────────────── */}
-      <div className="border rounded-lg p-4 space-y-3">
-        <h3 className="text-sm font-medium">Overlay Detection Validation</h3>
-        <p className="text-xs text-muted-foreground">
-          Test fast_overlay_check on real video frames from downloaded overlay videos.
-        </p>
-        <div className="flex gap-2 items-center">
-          <input
-            type="number"
-            value={validationLimit}
-            onChange={(e) => setValidationLimit(Number(e.target.value))}
-            min={10}
-            max={500}
-            className="w-20 px-2 py-1.5 border rounded text-sm"
-          />
-          <span className="text-xs text-muted-foreground">frames</span>
-          <button
-            onClick={runValidation}
-            disabled={validating}
-            className="px-4 py-1.5 bg-foreground text-background rounded text-sm disabled:opacity-50"
-          >
-            {validating ? "Validating..." : "Validate on Real Videos"}
-          </button>
-        </div>
-
-        {validationResult && !validationResult.error && (
-          <div className="space-y-3">
-            {/* Summary metrics */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="text-center p-2 rounded bg-muted/30">
-                <div className={`text-lg font-bold ${
-                  validationResult.detection_rate >= 0.95
-                    ? "text-green-600"
-                    : validationResult.detection_rate >= 0.80
-                    ? "text-yellow-600"
-                    : "text-red-600"
-                }`}>
-                  {(validationResult.detection_rate * 100).toFixed(1)}%
-                </div>
-                <div className="text-xs text-muted-foreground">Detection Rate</div>
-              </div>
-              <div className="text-center p-2 rounded bg-muted/30">
-                <div className="text-lg font-bold">
-                  {validationResult.detected}/{validationResult.total_frames}
-                </div>
-                <div className="text-xs text-muted-foreground">Frames Detected</div>
-              </div>
-              <div className="text-center p-2 rounded bg-muted/30">
-                <div className={`text-lg font-bold ${
-                  validationResult.avg_time_ms <= 50
-                    ? "text-green-600"
-                    : "text-yellow-600"
-                }`}>
-                  {validationResult.avg_time_ms}ms
-                </div>
-                <div className="text-xs text-muted-foreground">Avg Time</div>
-              </div>
-              <div className="text-center p-2 rounded bg-muted/30">
-                <div className="text-lg font-bold">{validationResult.p95_time_ms}ms</div>
-                <div className="text-xs text-muted-foreground">P95 Time</div>
-              </div>
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {validationResult.num_videos} videos across {validationResult.num_channels} channels
-              {" \u00b7 "}
-              {validationResult.elapsed_ms}ms total
-            </div>
-
-            {/* Per-channel breakdown */}
-            <details>
-              <summary className="text-xs font-medium text-muted-foreground cursor-pointer">
-                Per-channel breakdown ({validationResult.per_channel.length} channels)
-              </summary>
-              <div className="mt-2 overflow-x-auto">
-                <table className="text-xs w-full">
-                  <thead>
-                    <tr className="border-b text-left text-muted-foreground">
-                      <th className="py-1 pr-3">Channel</th>
-                      <th className="py-1 pr-3">Frames</th>
-                      <th className="py-1 pr-3">Detected</th>
-                      <th className="py-1 pr-3">Rate</th>
-                      <th className="py-1">Avg Time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {validationResult.per_channel.map((ch) => (
-                      <tr key={ch.channel} className="border-b border-muted/30">
-                        <td className="py-1 pr-3 font-mono">{ch.channel}</td>
-                        <td className="py-1 pr-3">{ch.total}</td>
-                        <td className="py-1 pr-3">{ch.found}</td>
-                        <td className={`py-1 pr-3 font-medium ${
-                          ch.detection_rate >= 0.95
-                            ? "text-green-600"
-                            : ch.detection_rate >= 0.80
-                            ? "text-yellow-600"
-                            : "text-red-600"
-                        }`}>
-                          {(ch.detection_rate * 100).toFixed(0)}%
-                        </td>
-                        <td className="py-1">{ch.avg_time_ms}ms</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </details>
-
-            {/* Failed frames */}
-            {validationResult.results.filter((r) => !r.found).length > 0 && (
-              <details>
-                <summary className="text-xs font-medium text-red-600 cursor-pointer">
-                  Failed frames ({validationResult.results.filter((r) => !r.found).length})
-                </summary>
-                <div className="mt-2 space-y-1">
-                  {validationResult.results
-                    .filter((r) => !r.found)
-                    .map((r, i) => (
-                      <div key={i} className="text-xs font-mono text-muted-foreground">
-                        {r.channel} / {r.video_id} @ {r.timestamp}s ({r.resolution})
-                      </div>
-                    ))}
-                </div>
-              </details>
-            )}
-          </div>
-        )}
-
-        {validationResult?.error && (
-          <p className="text-xs text-red-600">{validationResult.error}</p>
-        )}
-      </div>
-
-      {/* ── Piece Classifier Testing ─────────────────────────── */}
-
       {/* Controls */}
       <div className="flex gap-2 items-center flex-wrap">
         <span className="text-sm text-muted-foreground">
-          Sample from chess-positions test set:
+          Samples from overlays:
+          <InfoIcon tip="Randomly samples chess-position boards: 80% synthetic (400×400 rendered boards) and 20% real overlay crops extracted from video footage." />
         </span>
         <input
           type="number"
@@ -480,7 +358,9 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-mono text-muted-foreground">{s.id}</span>
+                      <span className="font-mono text-muted-foreground">
+                        {s.id}
+                      </span>
                       {s.accuracy != null && (
                         <span className="font-medium">
                           {(s.accuracy * 100).toFixed(1)}%
@@ -539,13 +419,21 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
 
       {/* Charts: accuracy + performance side-by-side */}
       {chartData.length >= 2 && (
-        <div className={`grid gap-4 ${hasPerformanceData ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}>
+        <div
+          className={`grid gap-4 ${hasPerformanceData ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}
+        >
           <div className="border rounded-lg p-3">
-            <h3 className="text-sm font-medium mb-2">Board accuracy over time</h3>
+            <h3 className="text-sm font-medium mb-2">
+              Board accuracy over time
+            </h3>
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
-                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                />
                 <YAxis
                   domain={[0, 100]}
                   tick={{ fontSize: 10 }}
@@ -591,11 +479,19 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
           </div>
           {hasPerformanceData && (
             <div className="border rounded-lg p-3">
-              <h3 className="text-sm font-medium mb-2">Performance over time</h3>
+              <h3 className="text-sm font-medium mb-2">
+                Performance over time
+              </h3>
               <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={chartData.filter((d) => d.images_per_minute != null)}>
+                <LineChart
+                  data={chartData.filter((d) => d.images_per_minute != null)}
+                >
                   <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
-                  <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 10 }}
+                    tickLine={false}
+                  />
                   <YAxis
                     tick={{ fontSize: 10 }}
                     tickLine={false}
@@ -625,22 +521,68 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
       )}
 
       {/* Accuracy summary */}
-      {total > 0 && (
-        <div className="border rounded-lg p-3 space-y-2 bg-muted/20">
+      {scoredTotal > 0 && (
+        <div className="border rounded-lg p-3 space-y-2 bg-background">
           <div className="flex items-center gap-4">
             <span className="text-sm font-medium">
-              Board accuracy: {matches}/{total}{" "}
-              ({((matches / total) * 100).toFixed(1)}%)
+              Board accuracy: {matches}/{scoredTotal} (
+              {((matches / scoredTotal) * 100).toFixed(1)}%)
             </span>
             <div className="flex-1 h-2 bg-muted rounded overflow-hidden max-w-xs">
               <div
                 className="h-full bg-green-500 rounded"
-                style={{ width: `${(matches / total) * 100}%` }}
+                style={{ width: `${(matches / scoredTotal) * 100}%` }}
               />
             </div>
           </div>
           <div className="text-xs text-muted-foreground">
-            Square accuracy: {(avgPieceAccuracy * 100).toFixed(2)}% ({Math.round(avgPieceAccuracy * 64)}/64 avg)
+            Square accuracy: {(avgPieceAccuracy * 100).toFixed(2)}% (
+            {Math.round(avgPieceAccuracy * 64)}/64 avg)
+          </div>
+        </div>
+      )}
+
+      {/* Per-step timing summary */}
+      {total > 0 && results.some((r) => r.overlay_detect_ms != null) && (
+        <div className="border rounded-lg p-3 space-y-2 bg-background">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            Per-step average timing
+          </p>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="text-center p-2 rounded bg-muted/30">
+              <div className="text-lg font-bold">
+                {(
+                  results.reduce((s, r) => s + (r.overlay_detect_ms ?? 0), 0) /
+                  total
+                ).toFixed(1)}
+                ms
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Overlay Detect
+              </div>
+            </div>
+            <div className="text-center p-2 rounded bg-muted/30">
+              <div className="text-lg font-bold">
+                {(
+                  results.reduce((s, r) => s + (r.grid_detect_ms ?? 0), 0) /
+                  total
+                ).toFixed(1)}
+                ms
+              </div>
+              <div className="text-xs text-muted-foreground">Grid Detect</div>
+            </div>
+            <div className="text-center p-2 rounded bg-muted/30">
+              <div className="text-lg font-bold">
+                {(
+                  results.reduce((s, r) => s + (r.piece_classify_ms ?? 0), 0) /
+                  total
+                ).toFixed(1)}
+                ms
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Piece Classify
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -682,33 +624,45 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
                   .map((r) => (
                     <button
                       key={r.filename}
-                      onClick={() => !r.match ? togglePin(r.filename) : toggleExpand(r.filename)}
-                      title={`${r.filename}\n${r.match ? "\u2713 match" : `\u2717 ${r.square_diffs.length} wrong`}`}
+                      onClick={() =>
+                        r.match === false
+                          ? togglePin(r.filename)
+                          : toggleExpand(r.filename)
+                      }
+                      title={`${r.filename}\n${r.match == null ? "video frame" : r.match ? "\u2713 match" : `\u2717 ${r.square_diffs.length} wrong`}`}
                       className="relative w-16 h-16 rounded border overflow-hidden flex-shrink-0 transition-all hover:ring-2 hover:ring-foreground/30"
                     >
                       <img
-                        src={r.board_image_b64
-                          ? `data:image/jpeg;base64,${r.board_image_b64}`
-                          : overlayBoardImageUrl(r.filename)}
+                        src={
+                          r.board_image_b64
+                            ? `data:image/jpeg;base64,${r.board_image_b64}`
+                            : overlayBoardImageUrl(r.filename)
+                        }
                         alt={r.filename}
                         className="w-full h-full object-cover"
                         loading="lazy"
                       />
                       <div
                         className={`absolute inset-0 ${
-                          r.match ? "bg-green-500/25" : "bg-red-500/35"
+                          r.source === "video"
+                            ? r.predicted_fen ? "bg-purple-500/20" : "bg-red-500/35"
+                            : r.match ? "bg-green-500/25" : "bg-red-500/35"
                         }`}
                       />
                       <span
                         className={`absolute top-0 left-0 text-[9px] leading-none px-0.5 py-px ${
-                          r.match
+                          r.source === "video"
+                            ? r.predicted_fen ? "bg-purple-500/80 text-white" : "bg-red-500/80 text-white"
+                            : r.match
                             ? "bg-green-500/80 text-white"
                             : "bg-red-500/80 text-white"
                         }`}
                       >
-                        {r.match ? "\u2713" : "\u2717"}
+                        {r.source === "video"
+                          ? r.predicted_fen ? "\u25B6" : "\u2717"
+                          : r.match ? "\u2713" : "\u2717"}
                       </span>
-                      {!r.match && (
+                      {r.match === false && (
                         <span className="absolute bottom-0 right-0 text-[9px] leading-none bg-black/60 text-white px-0.5 py-px">
                           {r.square_diffs.length}
                         </span>
@@ -718,7 +672,8 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
               </div>
 
               {/* Expanded cards */}
-              {unpinned.filter((r) => expandedIds.has(r.filename)).length > 0 && (
+              {unpinned.filter((r) => expandedIds.has(r.filename)).length >
+                0 && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-2">
                   {unpinned
                     .filter((r) => expandedIds.has(r.filename))
