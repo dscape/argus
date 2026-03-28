@@ -455,7 +455,7 @@ export default function CalibrationEvalInspector({
       )}
 
       {/* Chart: accuracy over time */}
-      {chartData.length >= 2 && (
+      {chartData.length >= 1 && (
         <div className="grid gap-4 grid-cols-1">
           <div className="border rounded-lg p-3">
             <h3 className="text-sm font-medium mb-2">
@@ -688,14 +688,16 @@ function CalibrationResultCard({
         <div className="flex items-center gap-2 text-xs min-w-0">
           <button
             onClick={onPin}
-            className={`shrink-0 w-5 h-5 flex items-center justify-center rounded text-xs transition-colors ${
+            title={pinned ? "Unpin from top" : "Pin to top"}
+            className={`flex-shrink-0 w-5 h-5 flex items-center justify-center rounded transition-colors ${
               pinned
-                ? "bg-foreground text-background"
-                : "bg-muted text-muted-foreground hover:bg-muted/80"
+                ? "text-foreground"
+                : "text-muted-foreground/40 hover:text-foreground"
             }`}
-            title={pinned ? "Unpin" : "Pin"}
           >
-            {"\u{1F4CC}"}
+            <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
+              <path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707l-.71-.71-3.18 3.18a5.5 5.5 0 0 1-1.32 4.988.5.5 0 0 1-.707 0L5.464 10.94l-3.89 3.89a.5.5 0 0 1-.707-.708l3.89-3.889L1.714 7.19a.5.5 0 0 1 0-.707 5.5 5.5 0 0 1 4.988-1.32L9.88 1.985l-.71-.71a.5.5 0 0 1 .5-.853z" />
+            </svg>
           </button>
           <span className="font-mono truncate">
             clip {r.clip_id}

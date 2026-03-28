@@ -1,11 +1,13 @@
 """Service layer for overlay (piece classifier) accuracy testing.
 
 Uses the chess_positions dataset (400×400 board images with FEN in filenames)
-to evaluate the DINOv2 piece classifier. Mirrors the screening inspector
-pattern: sample → inspect → save session.
+to evaluate the DINOv2 piece classifier. Also supports real video overlay crops
+extracted from stored video_clips. Mirrors the screening inspector pattern:
+sample → inspect → save session.
 """
 
 import base64
+import glob as glob_mod
 import logging
 import os
 import random
@@ -19,18 +21,25 @@ import json
 import numpy as np
 
 from pipeline.db.connection import get_conn
+from pipeline.overlay.scanner import fast_overlay_check
 from pipeline.overlay.chess_positions_data import (
     BOARD_SIZE,
     SQ_SIZE,
     parse_fen_from_filename,
 )
-from pipeline.overlay.grid_detector import GridResult
-from pipeline.overlay.piece_classifier import read_fen_with_grid
+from pipeline.overlay.grid_detector import GridResult, detect_grid
+from pipeline.overlay.piece_classifier import classify_squares, read_fen_with_grid
 
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 CHESS_POSITIONS_TEST_DIR = _PROJECT_ROOT / "data" / "chess_positions" / "test"
+# Real overlay crops extracted from video_clips
+REAL_OVERLAY_TEST_DIR = _PROJECT_ROOT / "data" / "chess_positions" / "test_real"
+# Prefix prepended to real sample filenames in the sample list so inspect_board
+# can route to the right directory without path separators (which the board-image
+# endpoint rejects for security).
+_REAL_PREFIX = "real__"
 
 # Uniform grid for 400×400 chess-positions boards (50px squares)
 _GRID = GridResult(
@@ -76,52 +85,109 @@ def sample_board_filenames(
     limit: int = 20,
     exclude: list[str] | None = None,
 ) -> list[str]:
-    """Return random sample of board image filenames from test set."""
+    """Return random sample of board image filenames from the test set.
+
+    Mixes synthetic (chess-positions) and real (video overlay crops) samples.
+    Real sample filenames are prefixed with ``real__`` so ``inspect_board``
+    can route them to the correct directory.  Up to 50% of the sample will be
+    real when real samples are available.
+    """
     if not CHESS_POSITIONS_TEST_DIR.exists():
         raise FileNotFoundError(
             f"Chess positions test directory not found: {CHESS_POSITIONS_TEST_DIR}"
         )
 
-    files = [
+    exclude_set = set(exclude or [])
+    _IMG_EXTS = (".jpeg", ".jpg", ".png")
+
+    synthetic = [
         f
         for f in os.listdir(CHESS_POSITIONS_TEST_DIR)
-        if f.endswith((".jpeg", ".jpg", ".png"))
+        if f.endswith(_IMG_EXTS) and f not in exclude_set
     ]
 
-    if exclude:
-        exclude_set = set(exclude)
-        files = [f for f in files if f not in exclude_set]
+    real: list[str] = []
+    if REAL_OVERLAY_TEST_DIR.exists():
+        real = [
+            _REAL_PREFIX + f
+            for f in os.listdir(REAL_OVERLAY_TEST_DIR)
+            if f.endswith(_IMG_EXTS) and (_REAL_PREFIX + f) not in exclude_set
+        ]
 
-    if limit < len(files):
-        files = random.sample(files, limit)
+    # Mix: up to 50% real samples when available
+    real_quota = min(len(real), limit // 2)
+    synth_quota = limit - real_quota
 
-    return files
+    chosen_real = random.sample(real, real_quota) if real_quota else []
+    chosen_synth = random.sample(synthetic, min(synth_quota, len(synthetic)))
+
+    combined = chosen_real + chosen_synth
+    random.shuffle(combined)
+    return combined
 
 
 # ── Inspection ──────────────────────────────────────────────
 
 
 def inspect_board(filename: str) -> dict:
-    """Inspect a single board image: classify pieces and compare to ground truth."""
-    image_path = CHESS_POSITIONS_TEST_DIR / filename
+    """Inspect a single board image: classify pieces and compare to ground truth.
+
+    Handles both synthetic (chess-positions) and real (video overlay crop)
+    samples.  Real samples have a ``real__`` prefix and are stored in
+    ``REAL_OVERLAY_TEST_DIR``.  For real samples the grid is detected
+    dynamically rather than assumed to be a uniform 50-px grid.
+    """
+    is_real = filename.startswith(_REAL_PREFIX)
+    if is_real:
+        actual_name = filename[len(_REAL_PREFIX):]
+        image_path = REAL_OVERLAY_TEST_DIR / actual_name
+        source = "real"
+        # FEN encoded in filename as "r{clip_id}_{fen_hyphenated}.ext"
+        stem = Path(actual_name).stem
+        fen_hyphenated = stem.split("_", 1)[1] if "_" in stem else stem
+        expected_fen = fen_hyphenated.replace("-", "/")
+    else:
+        image_path = CHESS_POSITIONS_TEST_DIR / filename
+        source = "synthetic"
+        expected_fen = parse_fen_from_filename(filename)
+
     if not image_path.exists():
         raise FileNotFoundError(f"Board image not found: {image_path}")
 
     image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-    if image is None or image.shape[:2] != (BOARD_SIZE, BOARD_SIZE):
-        raise ValueError(f"Invalid board image: {filename}")
+    if image is None:
+        raise ValueError(f"Could not read board image: {filename}")
 
-    expected_fen = parse_fen_from_filename(filename)
+    if is_real:
+        grid = detect_grid(image)
+        if grid is None:
+            return {
+                "filename": filename,
+                "source": source,
+                "expected_fen": expected_fen,
+                "predicted_fen": None,
+                "match": False,
+                "piece_accuracy": 0.0,
+                "square_diffs": ["grid detection failed"],
+                "board_image_b64": _frame_to_base64(image),
+                "elapsed_ms": 0.0,
+                "error": "grid detection failed",
+            }
+    else:
+        if image.shape[:2] != (BOARD_SIZE, BOARD_SIZE):
+            raise ValueError(f"Invalid board image size: {filename}")
+        grid = _GRID
 
     start = time.monotonic()
     try:
         predicted_fen = read_fen_with_grid(
-            image, _GRID, device="cpu", detect_orientation=False
+            image, grid, device="cpu", detect_orientation=False
         )
     except Exception as e:
         elapsed_ms = round((time.monotonic() - start) * 1000, 1)
         return {
             "filename": filename,
+            "source": source,
             "expected_fen": expected_fen,
             "predicted_fen": None,
             "match": False,
@@ -143,6 +209,7 @@ def inspect_board(filename: str) -> dict:
 
     return {
         "filename": filename,
+        "source": source,
         "expected_fen": expected_fen,
         "predicted_fen": predicted_fen,
         "match": len(mismatches) == 0,
@@ -150,6 +217,331 @@ def inspect_board(filename: str) -> dict:
         "square_diffs": mismatches,
         "board_image_b64": _frame_to_base64(image),
         "elapsed_ms": elapsed_ms,
+    }
+
+
+# ── Real overlay extraction ─────────────────────────────────
+
+
+def _get_video_path(video_id: str) -> str | None:
+    """Find the local path for a downloaded video, or None."""
+    base_dirs = [
+        "data/videos",
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "videos"),
+    ]
+    for base in base_dirs:
+        base = os.path.normpath(base)
+        for ext in ("mp4", "mkv", "webm"):
+            pattern = os.path.join(base, "*", f"{video_id}.{ext}")
+            matches = glob_mod.glob(pattern)
+            if matches:
+                return matches[0]
+    return None
+
+
+def _is_valid_fen_placement(fen: str) -> bool:
+    """Return True if the FEN piece-placement string has both kings."""
+    try:
+        board = chess.Board(fen + " w - - 0 1" if " " not in fen else fen)
+        return (
+            board.king(chess.WHITE) is not None
+            and board.king(chess.BLACK) is not None
+        )
+    except Exception:
+        return False
+
+
+def extract_real_overlay_samples(limit: int = 200) -> dict:
+    """Extract real board crops from stored video_clips and save as test samples.
+
+    For each video_clip:
+    1. Opens the local video file at the clip mid-point.
+    2. Crops the overlay region using the stored overlay_bbox.
+    3. Runs detect_grid() + classify_squares() to produce a pseudo-label FEN.
+    4. Saves the crop to REAL_OVERLAY_TEST_DIR as r{clip_id}_{fen_hyphenated}.jpg.
+
+    Returns a dict with counts of processed / saved / skipped clips.
+    """
+    REAL_OVERLAY_TEST_DIR.mkdir(parents=True, exist_ok=True)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT id, video_id, start_time, end_time,
+                          overlay_bbox, ref_resolution
+                   FROM video_clips
+                   ORDER BY id
+                   LIMIT %s""",
+                (limit,),
+            )
+            rows = cur.fetchall()
+
+    processed = 0
+    saved = 0
+    skipped = 0
+
+    for row in rows:
+        clip_id, video_id, start_time, end_time, overlay_bbox_raw, ref_res_raw = row
+        t0 = time.monotonic()
+
+        try:
+            overlay_bbox = (
+                overlay_bbox_raw
+                if isinstance(overlay_bbox_raw, dict)
+                else json.loads(overlay_bbox_raw)
+            )
+            ref_res = (
+                ref_res_raw
+                if isinstance(ref_res_raw, dict)
+                else json.loads(ref_res_raw)
+            )
+        except Exception:
+            skipped += 1
+            continue
+
+        video_path = _get_video_path(video_id)
+        if video_path is None:
+            skipped += 1
+            continue
+
+        # Sample at the clip mid-point
+        mid_time = (start_time + (end_time or start_time + 30)) / 2
+
+        cap = cv2.VideoCapture(video_path)
+        fps = max(cap.get(cv2.CAP_PROP_FPS), 1)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(mid_time * fps))
+        ret, frame = cap.read()
+        cap.release()
+
+        if not ret or frame is None:
+            skipped += 1
+            continue
+
+        processed += 1
+
+        # Scale bbox from reference resolution to actual frame size
+        fh, fw = frame.shape[:2]
+        ref_w = ref_res.get("width", fw)
+        ref_h = ref_res.get("height", fh)
+        sx = fw / ref_w
+        sy = fh / ref_h
+
+        ox = int(overlay_bbox.get("x", 0) * sx)
+        oy = int(overlay_bbox.get("y", 0) * sy)
+        ow = int(overlay_bbox.get("w", fw) * sx)
+        oh = int(overlay_bbox.get("h", fh) * sy)
+        x1, y1 = max(0, ox), max(0, oy)
+        x2, y2 = min(fw, ox + ow), min(fh, oy + oh)
+        crop = frame[y1:y2, x1:x2]
+
+        if crop.size == 0:
+            skipped += 1
+            continue
+
+        # Detect grid and classify pieces for pseudo-label
+        grid = detect_grid(crop)
+        if grid is None:
+            skipped += 1
+            continue
+
+        try:
+            squares = grid.crop_squares(crop)
+            class_grid = classify_squares(squares)
+            # Build FEN piece-placement from class grid
+            fen_rows = []
+            for row_squares in class_grid:
+                empties = 0
+                fen_row = ""
+                piece_map = {
+                    1: "P", 2: "N", 3: "B", 4: "R", 5: "Q", 6: "K",
+                    7: "p", 8: "n", 9: "b", 10: "r", 11: "q", 12: "k",
+                }
+                for cls in row_squares:
+                    if cls == 0:
+                        empties += 1
+                    else:
+                        if empties:
+                            fen_row += str(empties)
+                            empties = 0
+                        fen_row += piece_map.get(cls, "?")
+                if empties:
+                    fen_row += str(empties)
+                fen_rows.append(fen_row)
+            fen = "/".join(fen_rows)
+        except Exception:
+            skipped += 1
+            continue
+
+        if not _is_valid_fen_placement(fen):
+            skipped += 1
+            continue
+
+        fen_hyphenated = fen.replace("/", "-")
+        out_filename = f"r{clip_id}_{fen_hyphenated}.jpg"
+        out_path = REAL_OVERLAY_TEST_DIR / out_filename
+
+        _, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        with open(out_path, "wb") as f:
+            f.write(buf.tobytes())
+
+        saved += 1
+        logger.debug(
+            f"Saved real sample clip={clip_id} video={video_id} "
+            f"in {(time.monotonic() - t0)*1000:.0f}ms → {out_filename}"
+        )
+
+    logger.info(
+        f"extract_real_overlay_samples: processed={processed} saved={saved} skipped={skipped}"
+    )
+    return {"processed": processed, "saved": saved, "skipped": skipped}
+
+
+# ── Overlay Detection Validation ───────────────────────────
+
+
+def validate_overlay_detection(limit: int = 100) -> dict:
+    """Validate fast_overlay_check accuracy on real video frames.
+
+    Samples frames from downloaded overlay videos across diverse channels.
+    For each frame, runs fast_overlay_check and records whether the overlay
+    was detected, the score, and the time taken.
+
+    Args:
+        limit: Target number of frames to test.
+
+    Returns:
+        Dict with per-frame results and aggregate metrics.
+    """
+    t0 = time.monotonic()
+
+    # Find downloaded overlay videos across diverse channels
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT video_id, channel_handle
+                FROM youtube_videos
+                WHERE layout_type = 'overlay'
+                  AND channel_handle IS NOT NULL
+                ORDER BY random()
+                """
+            )
+            all_videos = cur.fetchall()
+
+    # Find videos that are actually downloaded
+    available: list[tuple[str, str, str]] = []  # (video_id, channel, path)
+    for video_id, channel_handle in all_videos:
+        path = _get_video_path(video_id)
+        if path is not None:
+            available.append((video_id, channel_handle, path))
+
+    if not available:
+        return {"error": "No downloaded overlay videos found", "results": []}
+
+    # Sample 2-3 frames per video, distribute across channels
+    frames_per_video = max(2, min(3, limit // max(1, len(available))))
+    rng = random.Random(42)
+
+    results: list[dict] = []
+    channel_stats: dict[str, dict] = {}
+
+    for video_id, channel_handle, video_path in available:
+        if len(results) >= limit:
+            break
+
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            continue
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = total_frames / fps if fps > 0 else 0.0
+
+        if duration < 90:
+            cap.release()
+            continue
+
+        # Sample random timestamps, skipping first/last 30s
+        safe_start = 30.0
+        safe_end = max(safe_start + 10, duration - 30.0)
+        timestamps = sorted(
+            rng.uniform(safe_start, safe_end) for _ in range(frames_per_video)
+        )
+
+        for ts in timestamps:
+            if len(results) >= limit:
+                break
+
+            frame_no = int(ts * fps)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+
+            fh, fw = frame.shape[:2]
+
+            t_start = time.monotonic()
+            det = fast_overlay_check(frame)
+            elapsed_ms = round((time.monotonic() - t_start) * 1000, 1)
+
+            result = {
+                "video_id": video_id,
+                "channel": channel_handle,
+                "timestamp": round(ts, 1),
+                "found": det.found,
+                "score": round(det.score, 4) if det.found else 0.0,
+                "bbox": det.bbox if det.found else None,
+                "time_ms": elapsed_ms,
+                "resolution": f"{fw}x{fh}",
+            }
+            results.append(result)
+
+            # Track per-channel stats
+            ch = channel_handle
+            if ch not in channel_stats:
+                channel_stats[ch] = {"total": 0, "found": 0, "times": []}
+            channel_stats[ch]["total"] += 1
+            if det.found:
+                channel_stats[ch]["found"] += 1
+            channel_stats[ch]["times"].append(elapsed_ms)
+
+        cap.release()
+
+    # Compute aggregate metrics
+    total = len(results)
+    found_count = sum(1 for r in results if r["found"])
+    detection_rate = found_count / total if total > 0 else 0.0
+    all_times = [r["time_ms"] for r in results]
+    avg_time = sum(all_times) / len(all_times) if all_times else 0.0
+    sorted_times = sorted(all_times)
+    p95_time = sorted_times[int(len(sorted_times) * 0.95)] if sorted_times else 0.0
+
+    # Per-channel summary
+    per_channel = []
+    for ch, stats in sorted(channel_stats.items(), key=lambda x: x[0]):
+        rate = stats["found"] / stats["total"] if stats["total"] > 0 else 0.0
+        ch_times = stats["times"]
+        per_channel.append({
+            "channel": ch,
+            "total": stats["total"],
+            "found": stats["found"],
+            "detection_rate": round(rate, 4),
+            "avg_time_ms": round(sum(ch_times) / len(ch_times), 1),
+        })
+
+    elapsed_total = round((time.monotonic() - t0) * 1000, 1)
+
+    return {
+        "total_frames": total,
+        "detected": found_count,
+        "detection_rate": round(detection_rate, 4),
+        "avg_time_ms": round(avg_time, 1),
+        "p95_time_ms": round(p95_time, 1),
+        "per_channel": per_channel,
+        "num_channels": len(channel_stats),
+        "num_videos": len({r["video_id"] for r in results}),
+        "elapsed_ms": elapsed_total,
+        "results": results,
     }
 
 

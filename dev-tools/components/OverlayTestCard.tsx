@@ -47,6 +47,17 @@ export default function OverlayTestCard({ result, pinned, onPin }: OverlayTestCa
             <span>
               {Math.round(result.piece_accuracy * 100)}% squares correct
             </span>
+            {result.source && (
+              <span
+                className={`px-1 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide ${
+                  result.source === "real"
+                    ? "bg-blue-100 text-blue-700"
+                    : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {result.source}
+              </span>
+            )}
           </div>
         </div>
         <div className="text-right shrink-0">

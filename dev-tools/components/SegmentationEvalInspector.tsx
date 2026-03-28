@@ -10,6 +10,7 @@ import {
   CartesianGrid,
   Tooltip,
   ReferenceLine,
+  Legend,
   ResponsiveContainer,
 } from "recharts";
 import {
@@ -25,7 +26,7 @@ import {
 interface EvalPoint {
   id: number;
   evaluated_at: string;
-  accuracy: number;
+  accuracy: number; // balanced_accuracy = (seg_cons + gap_cons) / 2
   sample_size: number;
   notes: string | null;
   per_class: {
@@ -44,6 +45,8 @@ interface SegmentResult {
     start: number;
     end: number;
     overlay_bbox: number[] | null;
+    thumbnail_b64?: string;
+    frames?: any[];
     validation: {
       frames_sampled: number;
       overlay_detected: number;
@@ -57,12 +60,20 @@ interface SegmentResult {
     start: number;
     end: number;
     has_overlay: boolean;
+    frames?: any[];
   }[];
   segment_consistency: number;
+  fast_check_consistency: number;
   gap_consistency: number;
   piece_readability: number;
+  balanced_accuracy: number;
   false_negative_count: number;
   coverage_ratio: number;
+  overlay_miss_count: number;
+  fast_check_miss_count: number;
+  grid_miss_count: number;
+  fen_miss_count: number;
+  elapsed_ms?: number;
 }
 
 interface SegmentationEvalInspectorProps {
@@ -85,11 +96,37 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+/** Small inline info icon with a CSS tooltip (reliable cross-browser). */
+function InfoIcon({ tip }: { tip: string }) {
+  return (
+    <span className="relative group inline-flex items-center ml-1 cursor-default">
+      <span className="inline-flex items-center justify-center w-4 h-4 rounded-full border text-[10px] text-muted-foreground select-none">
+        i
+      </span>
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-56 rounded bg-popover border text-popover-foreground text-xs px-2 py-1 shadow-md opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-normal">
+        {tip}
+      </span>
+    </span>
+  );
+}
+
+const METRIC_TIPS = {
+  segment_consistency:
+    "% of sampled frames inside detected segments where the overlay is actually visible. " +
+    "Low = segmenter is including non-overlay time in segments.",
+  gap_consistency:
+    "% of sampled frames inside gaps where overlay is absent. " +
+    "Low = segmenter is misclassifying overlay regions as gaps (false negatives).",
+  piece_readability:
+    "% of segment frames where a valid chess position (FEN with both kings) can be extracted. " +
+    "Low = grid detector or piece classifier is failing on detected overlays.",
+};
+
 export default function SegmentationEvalInspector({
   initialSession,
 }: SegmentationEvalInspectorProps) {
   const router = useRouter();
-  const [sampleSize, setSampleSize] = useState(5);
+  const [sampleSize, setSampleSize] = useState(10);
   const [results, setResults] = useState<SegmentResult[]>(
     initialSession?.results ?? []
   );
@@ -121,6 +158,8 @@ export default function SegmentationEvalInspector({
     SegmentEvalSessionSummary[]
   >([]);
   const [showSessionList, setShowSessionList] = useState(false);
+  // Sort pinned by gap_consistency ascending (worst first) when true
+  const [sortByGapWorst, setSortByGapWorst] = useState(false);
   const inspectedVideos = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const sessionListRef = useRef<HTMLDivElement>(null);
@@ -243,11 +282,12 @@ export default function SegmentationEvalInspector({
         setResults((prev) => [...prev, result]);
         inspectedVideos.current.add(video_ids[i]);
 
-        // Auto-pin: false negatives or low segment consistency
+        // Auto-pin: false negatives or low gap consistency or low segment consistency
         const hasFalseNeg = result.gaps?.some(
           (g: any) => g.has_overlay === true
         );
-        const lowConsistency = result.segment_consistency < 0.8;
+        const lowConsistency =
+          result.segment_consistency < 0.8 || result.gap_consistency < 0.8;
         if (hasFalseNeg || lowConsistency) {
           autoPinned.add(result.video_id);
           setPinnedIds((prev) => new Set([...prev, result.video_id]));
@@ -349,10 +389,14 @@ export default function SegmentationEvalInspector({
       if (pinnedIds.has(r.video_id)) p.push(r);
       else u.push(r);
     }
+    // Sort pinned by gap_consistency ascending (worst first) when toggle is on
+    if (sortByGapWorst) {
+      p.sort((a, b) => a.gap_consistency - b.gap_consistency);
+    }
     return { pinned: p, unpinned: u };
-  }, [results, pinnedIds]);
+  }, [results, pinnedIds, sortByGapWorst]);
 
-  // Chart data
+  // Chart data: balanced accuracy (primary) + per-class secondary lines
   const chartData = [...evalHistory]
     .reverse()
     .map((ev) => ({
@@ -360,7 +404,20 @@ export default function SegmentationEvalInspector({
         month: "short",
         day: "numeric",
       }),
+      // accuracy column now stores balanced_accuracy
       accuracy: Math.round(ev.accuracy * 1000) / 10,
+      gap_consistency:
+        ev.per_class?.gap_consistency != null
+          ? Math.round(ev.per_class.gap_consistency * 1000) / 10
+          : null,
+      segment_consistency:
+        ev.per_class?.segment_consistency != null
+          ? Math.round(ev.per_class.segment_consistency * 1000) / 10
+          : null,
+      piece_readability:
+        ev.per_class?.piece_readability != null
+          ? Math.round(ev.per_class.piece_readability * 1000) / 10
+          : null,
       notes: ev.notes,
       sample_size: ev.sample_size,
     }));
@@ -369,13 +426,18 @@ export default function SegmentationEvalInspector({
     .map((d, i) => ({ ...d, idx: i }))
     .filter((d) => d.notes && /^v\d/i.test(d.notes));
 
+  const hasSecondaryLines = chartData.some(
+    (d) => d.gap_consistency != null || d.piece_readability != null
+  );
+
   // --- Render helpers ---
 
   function renderTimelineBar(result: SegmentResult) {
     const { duration, segments, gaps } = result;
     if (duration <= 0) return null;
 
-    const activeKey = selectedFrames?.videoId === result.video_id ? selectedFrames.label : null;
+    const activeKey =
+      selectedFrames?.videoId === result.video_id ? selectedFrames.label : null;
 
     return (
       <div className="space-y-1">
@@ -387,7 +449,9 @@ export default function SegmentationEvalInspector({
               <div
                 key={key}
                 className={`absolute top-0 bottom-0 cursor-pointer transition-opacity ${
-                  isActive ? "bg-green-500 ring-1 ring-green-300" : "bg-green-500/70 hover:bg-green-500/90"
+                  isActive
+                    ? "bg-green-500 ring-1 ring-green-300"
+                    : "bg-green-500/70 hover:bg-green-500/90"
                 } border-r border-green-600/30`}
                 style={{
                   left: `${(seg.start / duration) * 100}%`,
@@ -396,8 +460,13 @@ export default function SegmentationEvalInspector({
                 title={`Segment ${i + 1}: ${formatTime(seg.start)} - ${formatTime(seg.end)} — click to inspect frames`}
                 onClick={() =>
                   setSelectedFrames(
-                    isActive ? null :
-                    { videoId: result.video_id, frames: seg.frames ?? [], label: key }
+                    isActive
+                      ? null
+                      : {
+                          videoId: result.video_id,
+                          frames: seg.frames ?? [],
+                          label: key,
+                        }
                   )
                 }
               />
@@ -411,8 +480,12 @@ export default function SegmentationEvalInspector({
                 key={key}
                 className={`absolute top-0 bottom-0 cursor-pointer transition-opacity ${
                   gap.has_overlay
-                    ? isActive ? "bg-red-500 ring-1 ring-red-300" : "bg-red-500/50 hover:bg-red-500/70 border border-red-500"
-                    : isActive ? "bg-gray-400/60" : "bg-gray-400/30 hover:bg-gray-400/50"
+                    ? isActive
+                      ? "bg-red-500 ring-1 ring-red-300"
+                      : "bg-red-500/50 hover:bg-red-500/70 border border-red-500"
+                    : isActive
+                      ? "bg-gray-400/60"
+                      : "bg-gray-400/30 hover:bg-gray-400/50"
                 }`}
                 style={{
                   left: `${(gap.start / duration) * 100}%`,
@@ -423,8 +496,13 @@ export default function SegmentationEvalInspector({
                 } — click to inspect frames`}
                 onClick={() =>
                   setSelectedFrames(
-                    isActive ? null :
-                    { videoId: result.video_id, frames: gap.frames ?? [], label: key }
+                    isActive
+                      ? null
+                      : {
+                          videoId: result.video_id,
+                          frames: gap.frames ?? [],
+                          label: key,
+                        }
                   )
                 }
               />
@@ -433,43 +511,64 @@ export default function SegmentationEvalInspector({
         </div>
 
         {/* Frame strip for selected region */}
-        {selectedFrames?.videoId === result.video_id && selectedFrames.frames.length > 0 && (
-          <div className="flex gap-1 overflow-x-auto pb-1">
-            {selectedFrames.frames.map((f: any, i: number) => (
-              <div key={i} className="flex-shrink-0 text-center">
-                {f.thumbnail_b64 ? (
-                  <img
-                    src={`data:image/jpeg;base64,${f.thumbnail_b64}`}
-                    alt={`t=${f.time}s`}
-                    className="h-20 w-auto rounded border object-cover"
-                  />
-                ) : (
-                  <div className="h-20 w-28 rounded border bg-muted flex items-center justify-center text-xs text-muted-foreground">
-                    no frame
+        {selectedFrames?.videoId === result.video_id &&
+          selectedFrames.frames.length > 0 && (
+            <div className="flex gap-1 overflow-x-auto pb-1">
+              {selectedFrames.frames.map((f: any, i: number) => (
+                <div key={i} className="flex-shrink-0 text-center">
+                  {f.thumbnail_b64 ? (
+                    <img
+                      src={`data:image/jpeg;base64,${f.thumbnail_b64}`}
+                      alt={`t=${f.time}s`}
+                      className="h-20 w-auto rounded border object-cover"
+                    />
+                  ) : (
+                    <div className="h-20 w-28 rounded border bg-muted flex items-center justify-center text-xs text-muted-foreground">
+                      no frame
+                    </div>
+                  )}
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    {formatTime(f.time)}
                   </div>
-                )}
-                <div className="text-[10px] text-muted-foreground mt-0.5">{formatTime(f.time)}</div>
-                <div className="flex gap-0.5 justify-center mt-0.5">
-                  {f.overlay_detected !== undefined && (
-                    <span className={`text-[9px] px-1 rounded ${f.overlay_detected ? "bg-green-500/20 text-green-700" : "bg-red-500/20 text-red-700"}`}>
-                      {f.overlay_detected ? "ov✓" : "ov✗"}
-                    </span>
-                  )}
-                  {f.grid_found !== undefined && (
-                    <span className={`text-[9px] px-1 rounded ${f.grid_found ? "bg-green-500/20 text-green-700" : "bg-gray-500/20 text-gray-600"}`}>
-                      {f.grid_found ? "grid✓" : "grid✗"}
-                    </span>
-                  )}
-                  {f.pieces_readable !== undefined && (
-                    <span className={`text-[9px] px-1 rounded ${f.pieces_readable ? "bg-green-500/20 text-green-700" : "bg-gray-500/20 text-gray-600"}`}>
-                      {f.pieces_readable ? "pc✓" : "pc✗"}
-                    </span>
-                  )}
+                  <div className="flex gap-0.5 justify-center mt-0.5">
+                    {f.overlay_detected !== undefined && (
+                      <span
+                        className={`text-[9px] px-1 rounded ${
+                          f.overlay_detected
+                            ? "bg-green-500/20 text-green-700"
+                            : "bg-red-500/20 text-red-700"
+                        }`}
+                      >
+                        {f.overlay_detected ? "ov✓" : "ov✗"}
+                      </span>
+                    )}
+                    {f.grid_found !== undefined && (
+                      <span
+                        className={`text-[9px] px-1 rounded ${
+                          f.grid_found
+                            ? "bg-green-500/20 text-green-700"
+                            : "bg-gray-500/20 text-gray-600"
+                        }`}
+                      >
+                        {f.grid_found ? "grid✓" : "grid✗"}
+                      </span>
+                    )}
+                    {f.pieces_readable !== undefined && (
+                      <span
+                        className={`text-[9px] px-1 rounded ${
+                          f.pieces_readable
+                            ? "bg-green-500/20 text-green-700"
+                            : "bg-gray-500/20 text-gray-600"
+                        }`}
+                      >
+                        {f.pieces_readable ? "pc✓" : "pc✗"}
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
       </div>
     );
   }
@@ -477,6 +576,17 @@ export default function SegmentationEvalInspector({
   function renderVideoCard(result: SegmentResult, isPinned: boolean) {
     const hasFalseNegs = result.gaps?.some((g) => g.has_overlay === true);
     const showDetails = expandedSegDetails.has(result.video_id);
+
+    // Compute per-video ov → grid → fen breakdown from frame data
+    const allSegFrames = result.segments.flatMap((s) => s.frames ?? []);
+    const ovCount = allSegFrames.filter((f) => f.overlay_detected).length;
+    const gridCount = allSegFrames.filter((f) => f.grid_found).length;
+    const fenCount = allSegFrames.filter((f) => f.pieces_readable).length;
+    const totalSeg = allSegFrames.length;
+    const ovPct = totalSeg > 0 ? Math.round((ovCount / totalSeg) * 100) : null;
+    const gridPct = ovCount > 0 ? Math.round((gridCount / ovCount) * 100) : null;
+    const fenPct = gridCount > 0 ? Math.round((fenCount / gridCount) * 100) : null;
+    const hasBreakdown = ovPct !== null && (gridPct !== null || fenPct !== null);
 
     return (
       <div
@@ -494,10 +604,16 @@ export default function SegmentationEvalInspector({
               </span>
               <button
                 onClick={() => togglePin(result.video_id)}
-                className="text-xs px-1.5 py-0.5 rounded border hover:bg-muted transition-colors flex-shrink-0"
-                title={isPinned ? "Unpin" : "Pin"}
+                title={isPinned ? "Unpin from top" : "Pin to top"}
+                className={`flex-shrink-0 w-5 h-5 flex items-center justify-center rounded transition-colors ${
+                  isPinned
+                    ? "text-foreground"
+                    : "text-muted-foreground/40 hover:text-foreground"
+                }`}
               >
-                {isPinned ? "\u2605" : "\u2606"}
+                <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
+                  <path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707l-.71-.71-3.18 3.18a5.5 5.5 0 0 1-1.32 4.988.5.5 0 0 1-.707 0L5.464 10.94l-3.89 3.89a.5.5 0 0 1-.707-.708l3.89-3.889L1.714 7.19a.5.5 0 0 1 0-.707 5.5 5.5 0 0 1 4.988-1.32L9.88 1.985l-.71-.71a.5.5 0 0 1 .5-.853z" />
+                </svg>
               </button>
             </div>
             <div className="text-xs text-muted-foreground mt-0.5">
@@ -505,7 +621,34 @@ export default function SegmentationEvalInspector({
               {result.segments.length} segment
               {result.segments.length !== 1 ? "s" : ""} &middot;{" "}
               {result.gaps.length} gap{result.gaps.length !== 1 ? "s" : ""}
+              {result.elapsed_ms != null && (
+                <span className="ml-1 text-muted-foreground/60">
+                  &middot; {(result.elapsed_ms / 1000).toFixed(1)}s
+                </span>
+              )}
             </div>
+            {/* Breakdown: ov → grid → fen */}
+            {hasBreakdown && (
+              <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">
+                ov:{ovPct}%
+                {gridPct !== null && (
+                  <>
+                    {" → "}
+                    <span className={gridPct < 80 ? "text-yellow-600" : ""}>
+                      grid:{gridPct}%
+                    </span>
+                  </>
+                )}
+                {fenPct !== null && (
+                  <>
+                    {" → "}
+                    <span className={fenPct < 80 ? "text-orange-600" : ""}>
+                      fen:{fenPct}%
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Metrics badges */}
@@ -584,7 +727,8 @@ export default function SegmentationEvalInspector({
                   </div>
                   {seg.overlay_bbox && (
                     <div className="text-muted-foreground">
-                      bbox: [{seg.overlay_bbox.map((v) => v.toFixed(0)).join(", ")}]
+                      bbox: [
+                      {seg.overlay_bbox.map((v) => v.toFixed(0)).join(", ")}]
                     </div>
                   )}
                   <div className="text-muted-foreground">
@@ -716,66 +860,107 @@ export default function SegmentationEvalInspector({
         </div>
       )}
 
-      {/* Chart: segment consistency over time */}
-      {chartData.length >= 2 && (
-        <div className="grid gap-4 grid-cols-1">
-          <div className="border rounded-lg p-3">
-            <h3 className="text-sm font-medium mb-2">
-              Segment consistency over time
-            </h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 10 }}
-                  tickLine={false}
-                />
-                <YAxis
-                  domain={[0, 100]}
-                  tick={{ fontSize: 10 }}
-                  tickLine={false}
-                  tickFormatter={(v) => `${v}%`}
-                  width={40}
-                />
-                <Tooltip
-                  formatter={(value, name) => [
-                    `${value}%`,
-                    name === "accuracy"
-                      ? "Segment consistency"
-                      : String(name),
-                  ]}
-                  labelFormatter={(label, payload) => {
-                    const d = payload?.[0]?.payload;
-                    return `${label}${d?.notes ? ` \u2014 ${d.notes}` : ""} (n=${d?.sample_size ?? "?"})`;
+      {/* Chart: accuracy over time (consistent with Screening and Overlay tabs) */}
+      {chartData.length >= 1 && (
+        <div className="border rounded-lg p-3">
+          <h3 className="text-sm font-medium mb-2">Accuracy over time</h3>
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
+              <XAxis
+                dataKey="date"
+                tick={{ fontSize: 10 }}
+                tickLine={false}
+              />
+              <YAxis
+                domain={[0, 100]}
+                tick={{ fontSize: 10 }}
+                tickLine={false}
+                tickFormatter={(v) => `${v}%`}
+                width={40}
+              />
+              <Tooltip
+                formatter={(value, name) => [
+                  `${Number(value).toFixed(1)}%`,
+                  name === "accuracy"
+                    ? "Balanced accuracy"
+                    : name === "gap_consistency"
+                      ? "Gap consistency"
+                      : name === "segment_consistency"
+                        ? "Seg consistency"
+                        : name === "piece_readability"
+                          ? "Piece readability"
+                          : String(name),
+                ]}
+                labelFormatter={(label, payload) => {
+                  const d = payload?.[0]?.payload;
+                  return `${label}${d?.notes ? ` \u2014 ${d.notes}` : ""} (n=${d?.sample_size ?? "?"})`;
+                }}
+              />
+              {hasSecondaryLines && <Legend iconSize={8} />}
+              {versionLines.map((v) => (
+                <ReferenceLine
+                  key={v.idx}
+                  x={v.date}
+                  stroke="currentColor"
+                  strokeDasharray="4 4"
+                  strokeOpacity={0.4}
+                  label={{
+                    value: v.notes!.split(":")[0].trim(),
+                    position: "top",
+                    fontSize: 10,
+                    fontWeight: "bold",
                   }}
                 />
-                {versionLines.map((v) => (
-                  <ReferenceLine
-                    key={v.idx}
-                    x={v.date}
-                    stroke="currentColor"
-                    strokeDasharray="4 4"
-                    strokeOpacity={0.4}
-                    label={{
-                      value: v.notes!.split(":")[0].trim(),
-                      position: "top",
-                      fontSize: 10,
-                      fontWeight: "bold",
-                    }}
+              ))}
+              {/* Primary: balanced accuracy */}
+              <Line
+                type="monotone"
+                dataKey="accuracy"
+                name="Balanced accuracy"
+                stroke="hsl(var(--foreground))"
+                strokeWidth={2}
+                dot={{ r: 3 }}
+                activeDot={{ r: 5 }}
+                connectNulls
+              />
+              {/* Secondary lines from per_class (shown when available) */}
+              {hasSecondaryLines && (
+                <>
+                  <Line
+                    type="monotone"
+                    dataKey="gap_consistency"
+                    name="Gap consistency"
+                    stroke="#ef4444"
+                    strokeWidth={1.5}
+                    strokeDasharray="4 2"
+                    dot={{ r: 2 }}
+                    connectNulls
                   />
-                ))}
-                <Line
-                  type="monotone"
-                  dataKey="accuracy"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                  dot={{ r: 3 }}
-                  activeDot={{ r: 5 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+                  <Line
+                    type="monotone"
+                    dataKey="segment_consistency"
+                    name="Seg consistency"
+                    stroke="#22c55e"
+                    strokeWidth={1.5}
+                    strokeDasharray="4 2"
+                    dot={{ r: 2 }}
+                    connectNulls
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="piece_readability"
+                    name="Piece readability"
+                    stroke="#3b82f6"
+                    strokeWidth={1.5}
+                    strokeDasharray="4 2"
+                    dot={{ r: 2 }}
+                    connectNulls
+                  />
+                </>
+              )}
+            </LineChart>
+          </ResponsiveContainer>
         </div>
       )}
 
@@ -783,9 +968,10 @@ export default function SegmentationEvalInspector({
       {total > 0 && (
         <div className="border rounded-lg p-3 space-y-2 bg-muted/20">
           <div className="flex items-center gap-4">
-            <span className="text-sm font-medium">
+            <span className="text-sm font-medium flex items-center">
               Segment consistency:{" "}
               {(avgSegConsistency * 100).toFixed(1)}%
+              <InfoIcon tip={METRIC_TIPS.segment_consistency} />
             </span>
             <div className="flex-1 h-2 bg-muted rounded overflow-hidden max-w-xs">
               <div
@@ -795,9 +981,10 @@ export default function SegmentationEvalInspector({
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-sm font-medium">
+            <span className="text-sm font-medium flex items-center">
               Gap consistency:{" "}
               {(avgGapConsistency * 100).toFixed(1)}%
+              <InfoIcon tip={METRIC_TIPS.gap_consistency} />
             </span>
             <div className="flex-1 h-2 bg-muted rounded overflow-hidden max-w-xs">
               <div
@@ -807,9 +994,10 @@ export default function SegmentationEvalInspector({
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-sm font-medium">
+            <span className="text-sm font-medium flex items-center">
               Piece readability:{" "}
               {(avgPieceReadability * 100).toFixed(1)}%
+              <InfoIcon tip={METRIC_TIPS.piece_readability} />
             </span>
             <div className="flex-1 h-2 bg-muted rounded overflow-hidden max-w-xs">
               <div
@@ -820,7 +1008,9 @@ export default function SegmentationEvalInspector({
           </div>
           <div className="text-xs text-muted-foreground">
             False negatives:{" "}
-            <span className={totalFalseNegs > 0 ? "text-red-600 font-medium" : ""}>
+            <span
+              className={totalFalseNegs > 0 ? "text-red-600 font-medium" : ""}
+            >
               {totalFalseNegs}
             </span>
           </div>
@@ -833,9 +1023,22 @@ export default function SegmentationEvalInspector({
           {/* Pinned section */}
           {pinned.length > 0 && (
             <div className="space-y-2">
-              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
-                Pinned ({pinned.length})
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
+                  Pinned ({pinned.length})
+                </p>
+                <button
+                  onClick={() => setSortByGapWorst((v) => !v)}
+                  className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                    sortByGapWorst
+                      ? "bg-red-500/10 border-red-500/30 text-red-700"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  title="Sort pinned by gap consistency (worst first)"
+                >
+                  {sortByGapWorst ? "↑ gap worst first" : "sort by gap ↑"}
+                </button>
+              </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {pinned.map((r) => renderVideoCard(r, true))}
               </div>
@@ -857,7 +1060,8 @@ export default function SegmentationEvalInspector({
                   .filter((r) => !expandedIds.has(r.video_id))
                   .map((r) => {
                     const hasFN = r.gaps?.some((g) => g.has_overlay);
-                    const lowCons = r.segment_consistency < 0.8;
+                    const lowCons =
+                      r.segment_consistency < 0.8 || r.gap_consistency < 0.8;
                     const isOk = !hasFN && !lowCons;
 
                     return (
@@ -868,7 +1072,7 @@ export default function SegmentationEvalInspector({
                             ? togglePin(r.video_id)
                             : toggleExpand(r.video_id)
                         }
-                        title={`${r.video_id}\n${r.segments.length} segments, ${r.gaps.length} gaps\nconsistency: ${(r.segment_consistency * 100).toFixed(0)}%`}
+                        title={`${r.video_id}\n${r.segments.length} segments, ${r.gaps.length} gaps\nseg: ${(r.segment_consistency * 100).toFixed(0)}% gap: ${(r.gap_consistency * 100).toFixed(0)}%`}
                         className={`relative px-2 py-1.5 rounded border text-xs font-mono overflow-hidden flex-shrink-0 transition-all hover:ring-2 hover:ring-foreground/30 ${
                           isOk
                             ? "bg-green-500/10 border-green-500/30"

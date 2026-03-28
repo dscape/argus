@@ -618,6 +618,8 @@ export async function updateSessionPins(
 
 export interface OverlayTestResult {
   filename: string;
+  /** "synthetic" = chess-positions dataset; "real" = video overlay crop */
+  source?: "synthetic" | "real";
   expected_fen: string;
   predicted_fen: string | null;
   match: boolean;
@@ -717,6 +719,59 @@ export async function updateOverlaySessionPins(
 
 export function overlayBoardImageUrl(filename: string): string {
   return `/api/models/overlay-test/board-image/${encodeURIComponent(filename)}`;
+}
+
+export interface OverlayValidationResult {
+  video_id: string;
+  channel: string;
+  timestamp: number;
+  found: boolean;
+  score: number;
+  bbox: [number, number, number, number] | null;
+  time_ms: number;
+  resolution: string;
+}
+
+export interface OverlayValidationResponse {
+  total_frames: number;
+  detected: number;
+  detection_rate: number;
+  avg_time_ms: number;
+  p95_time_ms: number;
+  per_channel: {
+    channel: string;
+    total: number;
+    found: number;
+    detection_rate: number;
+    avg_time_ms: number;
+  }[];
+  num_channels: number;
+  num_videos: number;
+  elapsed_ms: number;
+  results: OverlayValidationResult[];
+  error?: string;
+}
+
+export async function validateOverlayDetection(
+  limit = 100
+): Promise<OverlayValidationResponse> {
+  const res = await fetch(
+    `/api/models/overlay-test/validate-real?limit=${limit}`,
+    { method: "POST" }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function extractRealOverlaySamples(
+  limit = 200
+): Promise<{ processed: number; saved: number; skipped: number }> {
+  const res = await fetch(
+    `/api/models/overlay-test/extract-real-samples?limit=${limit}`,
+    { method: "POST" }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 // ── AI Classification ───────────────────────────────────────
@@ -827,6 +882,8 @@ export async function sampleSegmentationVideos(
 
 function normalizeSegmentEvalResult(raw: any): any {
   const metrics = raw.metrics ?? {};
+  const segCons = metrics.segment_consistency ?? 0;
+  const gapCons = metrics.gap_consistency ?? 1;
   return {
     video_id: raw.video_id,
     duration: raw.duration_sec ?? 0,
@@ -858,11 +915,22 @@ function normalizeSegmentEvalResult(raw: any): any {
       has_overlay: g.has_overlay ?? false,
       frames: g.frames ?? [],
     })),
-    segment_consistency: metrics.segment_consistency ?? 0,
-    gap_consistency: metrics.gap_consistency ?? 1,
+    // Core metrics
+    segment_consistency: segCons,
+    fast_check_consistency: metrics.fast_check_consistency ?? segCons,
+    gap_consistency: gapCons,
     piece_readability: metrics.piece_readability ?? 0,
     false_negative_count: metrics.false_negative_count ?? 0,
     coverage_ratio: metrics.coverage_ratio ?? 0,
+    // Balanced accuracy = (segment_consistency + gap_consistency) / 2
+    balanced_accuracy: (segCons + gapCons) / 2,
+    // Sub-step breakdown for diagnosing piece readability failures
+    overlay_miss_count: metrics.overlay_miss_count ?? 0,
+    fast_check_miss_count: metrics.fast_check_miss_count ?? 0,
+    grid_miss_count: metrics.grid_miss_count ?? 0,
+    fen_miss_count: metrics.fen_miss_count ?? 0,
+    // Raw timing
+    elapsed_ms: raw.elapsed_ms ?? 0,
   };
 }
 
@@ -980,6 +1048,29 @@ export async function sampleCalibrationClips(
   return res.json();
 }
 
+function normalizeCalibrationResult(raw: any): any {
+  const metrics = raw.metrics ?? {};
+  const validation = raw.validation ?? {};
+  const frames = (validation.frames ?? []).map((f: any) => ({
+    ...f,
+    // API returns grid_found; component reads grid_success
+    grid_success: f.grid_found ?? f.grid_success,
+  }));
+  return {
+    ...raw,
+    // Flatten nested metrics
+    overlay_iou: metrics.overlay_iou ?? null,
+    grid_success_rate: metrics.grid_success_rate ?? null,
+    fen_validity_rate: metrics.fen_validity_rate ?? null,
+    theme_accuracy: metrics.theme_accuracy ?? null,
+    orientation_accuracy: metrics.orientation_accuracy ?? null,
+    camera_iou: metrics.camera_iou ?? validation.camera_iou ?? null,
+    // Flatten validation
+    frames,
+    fresh_camera_bbox: validation.fresh_camera_bbox ?? null,
+  };
+}
+
 export async function inspectCalibration(
   clipId: number
 ): Promise<any> {
@@ -989,7 +1080,7 @@ export async function inspectCalibration(
     body: JSON.stringify({ clip_id: clipId }),
   });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return normalizeCalibrationResult(await res.json());
 }
 
 export async function saveCalibrationEval(body: {

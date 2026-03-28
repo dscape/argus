@@ -20,8 +20,10 @@ import {
   listOverlayTestSessions,
   updateOverlaySessionPins,
   overlayBoardImageUrl,
+  validateOverlayDetection,
   type OverlayTestResult,
   type OverlayTestSession,
+  type OverlayValidationResponse,
 } from "@/lib/api";
 
 interface EvalPoint {
@@ -67,6 +69,25 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
   const inspectedFiles = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const sessionListRef = useRef<HTMLDivElement>(null);
+
+  // Overlay detection validation state
+  const [validationResult, setValidationResult] = useState<OverlayValidationResponse | null>(null);
+  const [validating, setValidating] = useState(false);
+  const [validationLimit, setValidationLimit] = useState(100);
+
+  async function runValidation() {
+    setValidating(true);
+    setValidationResult(null);
+    try {
+      const result = await validateOverlayDetection(validationLimit);
+      setValidationResult(result);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      alert(`Validation failed: ${msg}`);
+    } finally {
+      setValidating(false);
+    }
+  }
 
   useEffect(() => {
     fetchHistory();
@@ -275,6 +296,140 @@ export default function OverlayInspector({ initialSession }: OverlayInspectorPro
 
   return (
     <div className="space-y-4">
+      {/* ── Overlay Detection Validation ─────────────────────── */}
+      <div className="border rounded-lg p-4 space-y-3">
+        <h3 className="text-sm font-medium">Overlay Detection Validation</h3>
+        <p className="text-xs text-muted-foreground">
+          Test fast_overlay_check on real video frames from downloaded overlay videos.
+        </p>
+        <div className="flex gap-2 items-center">
+          <input
+            type="number"
+            value={validationLimit}
+            onChange={(e) => setValidationLimit(Number(e.target.value))}
+            min={10}
+            max={500}
+            className="w-20 px-2 py-1.5 border rounded text-sm"
+          />
+          <span className="text-xs text-muted-foreground">frames</span>
+          <button
+            onClick={runValidation}
+            disabled={validating}
+            className="px-4 py-1.5 bg-foreground text-background rounded text-sm disabled:opacity-50"
+          >
+            {validating ? "Validating..." : "Validate on Real Videos"}
+          </button>
+        </div>
+
+        {validationResult && !validationResult.error && (
+          <div className="space-y-3">
+            {/* Summary metrics */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="text-center p-2 rounded bg-muted/30">
+                <div className={`text-lg font-bold ${
+                  validationResult.detection_rate >= 0.95
+                    ? "text-green-600"
+                    : validationResult.detection_rate >= 0.80
+                    ? "text-yellow-600"
+                    : "text-red-600"
+                }`}>
+                  {(validationResult.detection_rate * 100).toFixed(1)}%
+                </div>
+                <div className="text-xs text-muted-foreground">Detection Rate</div>
+              </div>
+              <div className="text-center p-2 rounded bg-muted/30">
+                <div className="text-lg font-bold">
+                  {validationResult.detected}/{validationResult.total_frames}
+                </div>
+                <div className="text-xs text-muted-foreground">Frames Detected</div>
+              </div>
+              <div className="text-center p-2 rounded bg-muted/30">
+                <div className={`text-lg font-bold ${
+                  validationResult.avg_time_ms <= 50
+                    ? "text-green-600"
+                    : "text-yellow-600"
+                }`}>
+                  {validationResult.avg_time_ms}ms
+                </div>
+                <div className="text-xs text-muted-foreground">Avg Time</div>
+              </div>
+              <div className="text-center p-2 rounded bg-muted/30">
+                <div className="text-lg font-bold">{validationResult.p95_time_ms}ms</div>
+                <div className="text-xs text-muted-foreground">P95 Time</div>
+              </div>
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {validationResult.num_videos} videos across {validationResult.num_channels} channels
+              {" \u00b7 "}
+              {validationResult.elapsed_ms}ms total
+            </div>
+
+            {/* Per-channel breakdown */}
+            <details>
+              <summary className="text-xs font-medium text-muted-foreground cursor-pointer">
+                Per-channel breakdown ({validationResult.per_channel.length} channels)
+              </summary>
+              <div className="mt-2 overflow-x-auto">
+                <table className="text-xs w-full">
+                  <thead>
+                    <tr className="border-b text-left text-muted-foreground">
+                      <th className="py-1 pr-3">Channel</th>
+                      <th className="py-1 pr-3">Frames</th>
+                      <th className="py-1 pr-3">Detected</th>
+                      <th className="py-1 pr-3">Rate</th>
+                      <th className="py-1">Avg Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {validationResult.per_channel.map((ch) => (
+                      <tr key={ch.channel} className="border-b border-muted/30">
+                        <td className="py-1 pr-3 font-mono">{ch.channel}</td>
+                        <td className="py-1 pr-3">{ch.total}</td>
+                        <td className="py-1 pr-3">{ch.found}</td>
+                        <td className={`py-1 pr-3 font-medium ${
+                          ch.detection_rate >= 0.95
+                            ? "text-green-600"
+                            : ch.detection_rate >= 0.80
+                            ? "text-yellow-600"
+                            : "text-red-600"
+                        }`}>
+                          {(ch.detection_rate * 100).toFixed(0)}%
+                        </td>
+                        <td className="py-1">{ch.avg_time_ms}ms</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+
+            {/* Failed frames */}
+            {validationResult.results.filter((r) => !r.found).length > 0 && (
+              <details>
+                <summary className="text-xs font-medium text-red-600 cursor-pointer">
+                  Failed frames ({validationResult.results.filter((r) => !r.found).length})
+                </summary>
+                <div className="mt-2 space-y-1">
+                  {validationResult.results
+                    .filter((r) => !r.found)
+                    .map((r, i) => (
+                      <div key={i} className="text-xs font-mono text-muted-foreground">
+                        {r.channel} / {r.video_id} @ {r.timestamp}s ({r.resolution})
+                      </div>
+                    ))}
+                </div>
+              </details>
+            )}
+          </div>
+        )}
+
+        {validationResult?.error && (
+          <p className="text-xs text-red-600">{validationResult.error}</p>
+        )}
+      </div>
+
+      {/* ── Piece Classifier Testing ─────────────────────────── */}
+
       {/* Controls */}
       <div className="flex gap-2 items-center flex-wrap">
         <span className="text-sm text-muted-foreground">

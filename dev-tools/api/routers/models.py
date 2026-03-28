@@ -314,13 +314,54 @@ async def update_overlay_pins(session_id: str, body: UpdateOverlayPinsRequest):
 
 @router.get("/overlay-test/board-image/{filename}")
 async def get_board_image(filename: str):
-    """Serve a chess-positions test image by filename."""
-    if "/" in filename or ".." in filename:
+    """Serve a test board image by filename.
+
+    Real samples are prefixed with ``real__`` and served from the real overlay
+    test directory; all other filenames are served from the synthetic test dir.
+    """
+    if ".." in filename:
         raise HTTPException(400, "Invalid filename")
-    path = overlay_test_service.CHESS_POSITIONS_TEST_DIR / filename
+    _REAL_PREFIX = overlay_test_service._REAL_PREFIX
+    if filename.startswith(_REAL_PREFIX):
+        actual = filename[len(_REAL_PREFIX):]
+        if ".." in actual or "/" in actual:
+            raise HTTPException(400, "Invalid filename")
+        path = overlay_test_service.REAL_OVERLAY_TEST_DIR / actual
+    else:
+        if "/" in filename:
+            raise HTTPException(400, "Invalid filename")
+        path = overlay_test_service.CHESS_POSITIONS_TEST_DIR / filename
     if not path.exists():
         raise HTTPException(404, f"Board image not found: {filename}")
     return FileResponse(path, media_type="image/jpeg")
+
+
+@router.post("/overlay-test/validate-real")
+async def validate_overlay_detection(limit: int = 100):
+    """Validate fast_overlay_check accuracy on real video frames.
+
+    Samples frames from downloaded overlay videos across diverse channels
+    and tests whether the overlay detector correctly identifies them.
+    """
+    result = await run_in_threadpool(
+        overlay_test_service.validate_overlay_detection, limit
+    )
+    return result
+
+
+@router.post("/overlay-test/extract-real-samples")
+async def extract_real_overlay_samples(limit: int = 200):
+    """Extract real board crops from video_clips and save to the real test directory.
+
+    This is a one-time (or periodic) operation.  Each clip's mid-point frame is
+    cropped to the overlay region, the grid is detected, pieces are classified
+    for a pseudo-label FEN, and the crop is saved to
+    ``data/chess_positions/test_real/``.
+    """
+    result = await run_in_threadpool(
+        overlay_test_service.extract_real_overlay_samples, limit
+    )
+    return result
 
 
 # ── Segmentation Evaluation ────────────────────────────────

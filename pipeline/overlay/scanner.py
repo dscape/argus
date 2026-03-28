@@ -229,21 +229,52 @@ def _refine_alignment(
 
 
 # Lightweight scan parameters for fast_overlay_check().
-FAST_SCAN_SCALES = [0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
+# Include small scales (0.20-0.30) for low-resolution video where
+# compression artifacts prevent detection at board-sized windows.
+# The small windows act as "seed" detections — grid regularity passes
+# on small sub-regions where per-cell pixel counts are low enough that
+# compression noise averages out.
+FAST_SCAN_SCALES = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
 FAST_SCAN_STEP_FRACTION = 0.25
+
+# Only downscale frames significantly larger than this threshold.
+# Low-res video (360p, 480p) must NOT be downscaled — compression
+# artifacts already make grid regularity fragile at those resolutions.
+FAST_CHECK_MAX_DIM = 810
 
 
 def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
     """Fast overlay presence check — ~20x faster than detect_overlay_in_frame.
 
-    Scans only 3 scales with larger step size.  Skips expansion and
-    refinement.  Returns an approximate bbox suitable for segmentation
+    Scans 8 scales (0.20-0.90) with larger step size.  Skips expansion
+    and refinement.  Returns an approximate bbox suitable for segmentation
     (calibration refines it later).
+
+    Automatically downscales frames larger than 810p for speed.  Applies
+    a light Gaussian blur to mitigate video compression artifacts that
+    inflate per-cell variance.  Returned bbox coordinates are scaled back
+    to the original resolution.
     """
     h, w = frame.shape[:2]
     resolution = (w, h)
 
+    # Downscale high-res frames for speed.  Don't downscale small frames
+    # — compression artifacts are already worse at low resolution.
+    scale_factor = 1.0
+    if max(h, w) > FAST_CHECK_MAX_DIM:
+        scale_factor = FAST_CHECK_MAX_DIM / max(h, w)
+        new_w = int(w * scale_factor)
+        new_h = int(h * scale_factor)
+        frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        h, w = new_h, new_w
+
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+
+    # Light blur to smooth video compression artifacts (JPEG blocking,
+    # color quantization).  This is critical for low-res video (360p/480p)
+    # where per-cell variance can exceed the threshold due to compression
+    # noise alone.
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
 
     candidates: list[tuple[float, tuple[int, int, int, int]]] = []
 
@@ -283,6 +314,15 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
             best_bbox = bbox
 
     if best_bbox is not None and best_score > MIN_LOW_VARIANCE_RATIO:
+        # Scale bbox back to original resolution if frame was downscaled
+        if scale_factor < 1.0:
+            inv = 1.0 / scale_factor
+            best_bbox = (
+                int(best_bbox[0] * inv),
+                int(best_bbox[1] * inv),
+                int(best_bbox[2] * inv),
+                int(best_bbox[3] * inv),
+            )
         return OverlayDetection(
             found=True,
             bbox=best_bbox,
