@@ -364,6 +364,32 @@ async def extract_real_overlay_samples(limit: int = 200):
     return result
 
 
+@router.get("/overlay-test/extract-preview")
+async def preview_overlay_extractions(limit: int = 200):
+    """Preview overlay crops from video_clips with auto-labeled FENs.
+
+    Returns crops as base64 images with predicted FENs for user review
+    before saving to disk.
+    """
+    results = await run_in_threadpool(
+        overlay_test_service.preview_real_overlay_extractions, limit
+    )
+    return {"results": results}
+
+
+class SaveExtractionsRequest(BaseModel):
+    confirmations: list[dict]
+
+
+@router.post("/overlay-test/extract-save")
+async def save_confirmed_overlay_extractions(body: SaveExtractionsRequest):
+    """Save user-confirmed overlay extractions to test_real/ directory."""
+    result = await run_in_threadpool(
+        overlay_test_service.save_confirmed_extractions, body.confirmations
+    )
+    return result
+
+
 # ── Segmentation Evaluation ────────────────────────────────
 
 

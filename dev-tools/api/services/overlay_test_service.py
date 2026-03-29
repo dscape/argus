@@ -444,6 +444,243 @@ def _is_valid_fen_placement(fen: str) -> bool:
         return False
 
 
+def _parse_bbox(raw) -> tuple[int, int, int, int]:
+    """Parse overlay_bbox from either list [x,y,w,h] or dict {x,y,w,h}."""
+    if isinstance(raw, (list, tuple)):
+        return int(raw[0]), int(raw[1]), int(raw[2]), int(raw[3])
+    if isinstance(raw, dict):
+        return (
+            int(raw.get("x", 0)),
+            int(raw.get("y", 0)),
+            int(raw.get("w", 0)),
+            int(raw.get("h", 0)),
+        )
+    parsed = json.loads(raw)
+    return _parse_bbox(parsed)
+
+
+def _parse_ref_res(raw) -> tuple[int, int]:
+    """Parse ref_resolution from either list [w,h] or dict {width,height}."""
+    if isinstance(raw, (list, tuple)):
+        return int(raw[0]), int(raw[1])
+    if isinstance(raw, dict):
+        return int(raw.get("width", 1920)), int(raw.get("height", 1080))
+    parsed = json.loads(raw)
+    return _parse_ref_res(parsed)
+
+
+def _build_fen_from_class_grid(class_grid: list[list[int]]) -> str:
+    """Build a FEN piece-placement string from a classify_squares grid."""
+    piece_map = {
+        1: "P", 2: "N", 3: "B", 4: "R", 5: "Q", 6: "K",
+        7: "p", 8: "n", 9: "b", 10: "r", 11: "q", 12: "k",
+    }
+    fen_rows = []
+    for row_squares in class_grid:
+        empties = 0
+        fen_row = ""
+        for cls in row_squares:
+            if cls == 0:
+                empties += 1
+            else:
+                if empties:
+                    fen_row += str(empties)
+                    empties = 0
+                fen_row += piece_map.get(cls, "?")
+        if empties:
+            fen_row += str(empties)
+        fen_rows.append(fen_row)
+    return "/".join(fen_rows)
+
+
+def preview_real_overlay_extractions(limit: int = 200) -> list[dict]:
+    """Extract and preview overlay crops from video_clips WITHOUT saving.
+
+    Returns a list of dicts with clip_id, video_id, crop as base64,
+    auto-labeled FEN, and status information for user review.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT id, video_id, start_time, end_time,
+                          overlay_bbox, ref_resolution
+                   FROM video_clips
+                   ORDER BY id
+                   LIMIT %s""",
+                (limit,),
+            )
+            rows = cur.fetchall()
+
+    results: list[dict] = []
+
+    for row in rows:
+        clip_id, video_id, start_time, end_time, overlay_bbox_raw, ref_res_raw = row
+        entry: dict = {
+            "clip_id": clip_id,
+            "video_id": video_id,
+            "status": "pending",
+        }
+
+        try:
+            bx, by, bw, bh = _parse_bbox(overlay_bbox_raw)
+            ref_w, ref_h = _parse_ref_res(ref_res_raw)
+        except Exception as e:
+            entry["status"] = "error"
+            entry["error"] = f"bad bbox/ref: {e}"
+            results.append(entry)
+            continue
+
+        video_path = _get_video_path(video_id)
+        if video_path is None:
+            entry["status"] = "error"
+            entry["error"] = "video not found"
+            results.append(entry)
+            continue
+
+        mid_time = (start_time + (end_time or start_time + 30)) / 2
+
+        cap = cv2.VideoCapture(video_path)
+        fps = max(cap.get(cv2.CAP_PROP_FPS), 1)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(mid_time * fps))
+        ret, frame = cap.read()
+        cap.release()
+
+        if not ret or frame is None:
+            entry["status"] = "error"
+            entry["error"] = "could not read frame"
+            results.append(entry)
+            continue
+
+        fh, fw = frame.shape[:2]
+        sx, sy = fw / ref_w, fh / ref_h
+        ox, oy = int(bx * sx), int(by * sy)
+        ow, oh = int(bw * sx), int(bh * sy)
+        x1, y1 = max(0, ox), max(0, oy)
+        x2, y2 = min(fw, ox + ow), min(fh, oy + oh)
+        crop = frame[y1:y2, x1:x2]
+
+        if crop.size == 0:
+            entry["status"] = "error"
+            entry["error"] = "empty crop"
+            results.append(entry)
+            continue
+
+        entry["image_b64"] = _frame_to_base64(crop, max_width=400)
+
+        grid = detect_grid(crop)
+        if grid is None:
+            entry["status"] = "error"
+            entry["error"] = "grid detection failed"
+            results.append(entry)
+            continue
+
+        try:
+            squares = grid.crop_squares(crop)
+            class_grid = classify_squares(squares)
+            fen = _build_fen_from_class_grid(class_grid)
+        except Exception as e:
+            entry["status"] = "error"
+            entry["error"] = f"classification failed: {e}"
+            results.append(entry)
+            continue
+
+        if not _is_valid_fen_placement(fen):
+            entry["status"] = "error"
+            entry["error"] = "invalid FEN (missing king)"
+            entry["predicted_fen"] = fen
+            results.append(entry)
+            continue
+
+        entry["status"] = "ok"
+        entry["predicted_fen"] = fen
+        results.append(entry)
+
+    return results
+
+
+def save_confirmed_extractions(confirmations: list[dict]) -> dict:
+    """Save confirmed overlay extractions to test_real/ directory.
+
+    Each confirmation should have: clip_id, video_id, fen (confirmed by user).
+    Re-extracts the crop from video and saves with FEN-based filename.
+    """
+    REAL_OVERLAY_TEST_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Look up clip data
+    clip_ids = [c["clip_id"] for c in confirmations]
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT id, video_id, start_time, end_time,
+                          overlay_bbox, ref_resolution
+                   FROM video_clips
+                   WHERE id = ANY(%s)""",
+                (clip_ids,),
+            )
+            rows = {row[0]: row for row in cur.fetchall()}
+
+    fen_lookup = {c["clip_id"]: c["fen"] for c in confirmations}
+    saved = 0
+    errors: list[str] = []
+
+    for clip_id, fen in fen_lookup.items():
+        row = rows.get(clip_id)
+        if row is None:
+            errors.append(f"clip {clip_id}: not found in DB")
+            continue
+
+        _, video_id, start_time, end_time, overlay_bbox_raw, ref_res_raw = row
+
+        try:
+            bx, by, bw, bh = _parse_bbox(overlay_bbox_raw)
+            ref_w, ref_h = _parse_ref_res(ref_res_raw)
+        except Exception:
+            errors.append(f"clip {clip_id}: bad bbox")
+            continue
+
+        video_path = _get_video_path(video_id)
+        if video_path is None:
+            errors.append(f"clip {clip_id}: video not found")
+            continue
+
+        mid_time = (start_time + (end_time or start_time + 30)) / 2
+        cap = cv2.VideoCapture(video_path)
+        fps = max(cap.get(cv2.CAP_PROP_FPS), 1)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(mid_time * fps))
+        ret, frame = cap.read()
+        cap.release()
+
+        if not ret or frame is None:
+            errors.append(f"clip {clip_id}: could not read frame")
+            continue
+
+        fh, fw = frame.shape[:2]
+        sx, sy = fw / ref_w, fh / ref_h
+        ox, oy = int(bx * sx), int(by * sy)
+        ow, oh = int(bw * sx), int(bh * sy)
+        x1, y1 = max(0, ox), max(0, oy)
+        x2, y2 = min(fw, ox + ow), min(fh, oy + oh)
+        crop = frame[y1:y2, x1:x2]
+
+        if crop.size == 0:
+            errors.append(f"clip {clip_id}: empty crop")
+            continue
+
+        # Filename uses FEN with / replaced by - (same pattern as synthetic)
+        fen_hyphenated = fen.replace("/", "-")
+        out_filename = f"r{clip_id}_{fen_hyphenated}.jpg"
+        out_path = REAL_OVERLAY_TEST_DIR / out_filename
+
+        _, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        with open(out_path, "wb") as f:
+            f.write(buf.tobytes())
+
+        saved += 1
+        logger.info(f"Saved real sample: {out_filename}")
+
+    return {"saved": saved, "errors": errors}
+
+
 def extract_real_overlay_samples(limit: int = 200) -> dict:
     """Extract real board crops from stored video_clips and save as test samples.
 
