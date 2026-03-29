@@ -13,32 +13,23 @@ interface ExtractionResult {
   predicted_fen?: string;
 }
 
-interface Confirmation {
-  clip_id: number;
-  video_id: string;
-  fen: string;
-}
-
 export default function ExtractOverlaysPage() {
   const [results, setResults] = useState<ExtractionResult[]>([]);
   const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [savingId, setSavingId] = useState<number | null>(null);
   const [videoIdsInput, setVideoIdsInput] = useState("");
-  const [saveResult, setSaveResult] = useState<{
-    saved: number;
-    errors: string[];
-  } | null>(null);
 
-  // Track user decisions: confirmed FEN edits, or rejected
+  // Track user decisions: confirmed FEN edits, rejected, or saved
   const [editedFens, setEditedFens] = useState<Record<number, string>>({});
   const [rejected, setRejected] = useState<Set<number>>(new Set());
+  const [saved, setSaved] = useState<Set<number>>(new Set());
 
   async function runExtraction() {
     setLoading(true);
     setResults([]);
     setEditedFens({});
     setRejected(new Set());
-    setSaveResult(null);
+    setSaved(new Set());
     try {
       const params = new URLSearchParams();
       const trimmed = videoIdsInput.trim();
@@ -65,39 +56,30 @@ export default function ExtractOverlaysPage() {
     }
   }
 
-  async function saveConfirmed() {
-    const confirmations: Confirmation[] = [];
-    for (const r of results) {
-      if (r.status !== "ok" && r.status !== "warning") continue;
-      if (rejected.has(r.clip_id)) continue;
-      const fen = editedFens[r.clip_id];
-      if (!fen) continue;
-      confirmations.push({
-        clip_id: r.clip_id,
-        video_id: r.video_id,
-        fen,
-      });
-    }
+  async function saveOne(r: ExtractionResult) {
+    const fen = editedFens[r.clip_id];
+    if (!fen) return;
 
-    if (confirmations.length === 0) {
-      alert("No confirmed extractions to save");
-      return;
-    }
-
-    setSaving(true);
+    setSavingId(r.clip_id);
     try {
       const res = await fetch("/api/models/overlay-test/extract-save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmations }),
+        body: JSON.stringify({
+          confirmations: [{ clip_id: r.clip_id, video_id: r.video_id, fen }],
+        }),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      setSaveResult(data);
+      if (data.errors?.length > 0) {
+        alert(data.errors.join("\n"));
+      } else {
+        setSaved((prev) => new Set(prev).add(r.clip_id));
+      }
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to save");
     } finally {
-      setSaving(false);
+      setSavingId(null);
     }
   }
 
@@ -105,10 +87,6 @@ export default function ExtractOverlaysPage() {
     (r) => r.status === "ok" || r.status === "warning",
   );
   const errorResults = results.filter((r) => r.status === "error");
-  const confirmedCount = reviewableResults.filter(
-    (r) => !rejected.has(r.clip_id),
-  ).length;
-
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
@@ -151,33 +129,10 @@ export default function ExtractOverlaysPage() {
               {errorResults.length} errors
             </span>
           )}
-          <span className="text-muted-foreground">
-            {confirmedCount} confirmed
-          </span>
-          <div className="flex-1" />
-          <button
-            onClick={saveConfirmed}
-            disabled={saving || confirmedCount === 0}
-            className="px-4 py-1.5 bg-green-600 text-white rounded text-sm disabled:opacity-50"
-          >
-            {saving
-              ? "Saving..."
-              : `Save ${confirmedCount} Confirmed`}
-          </button>
-        </div>
-      )}
-
-      {saveResult && (
-        <div className="border rounded-lg p-3 bg-green-50 text-sm">
-          <p className="font-medium text-green-700">
-            Saved {saveResult.saved} images to test_real/
-          </p>
-          {saveResult.errors.length > 0 && (
-            <ul className="mt-1 text-red-600 text-xs">
-              {saveResult.errors.map((e, i) => (
-                <li key={i}>{e}</li>
-              ))}
-            </ul>
+          {saved.size > 0 && (
+            <span className="text-muted-foreground">
+              {saved.size} saved
+            </span>
           )}
         </div>
       )}
@@ -215,13 +170,16 @@ export default function ExtractOverlaysPage() {
       <div className="space-y-4">
         {reviewableResults.map((r) => {
           const isRejected = rejected.has(r.clip_id);
+          const isSaved = saved.has(r.clip_id);
+          const isSaving = savingId === r.clip_id;
           const currentFen = editedFens[r.clip_id] ?? r.predicted_fen ?? "";
           const isWarning = r.status === "warning";
+          const locked = isRejected || isSaved;
 
           return (
             <div
               key={r.clip_id}
-              className={`border rounded-lg p-3 space-y-3 ${isRejected ? "opacity-40" : ""} ${isWarning ? "border-yellow-400" : ""}`}
+              className={`border rounded-lg p-3 space-y-3 ${isRejected ? "opacity-40" : ""} ${isSaved ? "border-green-400" : ""} ${isWarning && !isSaved ? "border-yellow-400" : ""}`}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -231,29 +189,44 @@ export default function ExtractOverlaysPage() {
                   <span className="text-xs text-muted-foreground">
                     {r.video_id}
                   </span>
-                  {isWarning && (
+                  {isWarning && !isSaved && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-700 font-medium">
                       {r.warning}
                     </span>
                   )}
+                  {isSaved && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-medium">
+                      Saved
+                    </span>
+                  )}
                 </div>
-                <button
-                  onClick={() =>
-                    setRejected((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(r.clip_id)) next.delete(r.clip_id);
-                      else next.add(r.clip_id);
-                      return next;
-                    })
-                  }
-                  className={`text-xs px-2 py-1 rounded border ${
-                    isRejected
-                      ? "bg-red-100 text-red-700 border-red-300"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {isRejected ? "Rejected" : "Reject"}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => saveOne(r)}
+                    disabled={locked || isSaving || !currentFen}
+                    className="text-xs px-2 py-1 rounded border bg-green-600 text-white border-green-600 disabled:opacity-40"
+                  >
+                    {isSaving ? "Saving..." : "Save"}
+                  </button>
+                  <button
+                    onClick={() =>
+                      setRejected((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(r.clip_id)) next.delete(r.clip_id);
+                        else next.add(r.clip_id);
+                        return next;
+                      })
+                    }
+                    disabled={isSaved}
+                    className={`text-xs px-2 py-1 rounded border ${
+                      isRejected
+                        ? "bg-red-100 text-red-700 border-red-300"
+                        : "text-muted-foreground hover:text-foreground"
+                    } disabled:opacity-40`}
+                  >
+                    {isRejected ? "Rejected" : "Reject"}
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-3 gap-3">
@@ -294,7 +267,7 @@ export default function ExtractOverlaysPage() {
                     }
                     rows={3}
                     className="w-full text-xs font-mono px-2 py-1 border rounded resize-none"
-                    disabled={isRejected}
+                    disabled={locked}
                   />
                   {currentFen !== r.predicted_fen && (
                     <p className="text-[10px] text-blue-600 mt-0.5">

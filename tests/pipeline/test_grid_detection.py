@@ -6,7 +6,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
-from pipeline.overlay.grid_detector import GridResult, detect_grid, find_board_in_frame
+from pipeline.overlay.grid_detector import (
+    GridResult,
+    _clamp_grid_to_image,
+    _uniform_grid,
+    detect_grid,
+    find_board_in_frame,
+)
 
 # ---------------------------------------------------------------------------
 # Fixture data
@@ -109,3 +115,108 @@ class TestGridDetection:
             assert len(row) == 8, f"row {r}: expected 8 cols, got {len(row)}"
             for c, sq in enumerate(row):
                 assert sq.size > 0, f"square ({r},{c}) is empty"
+
+
+class TestClampGridToImage:
+    """Grid clamping must fix lines that extend past the image boundary."""
+
+    def test_h_lines_shifted_when_overshoot_exceeds_half_square(self) -> None:
+        """h_lines overshooting by more than half a square get shifted back."""
+        # 9 lines with 100px spacing, starting at 120 — last line at 920
+        # Image is only 800px tall, overshoot = 920 - 799 = 121 > 50 (half)
+        # shift = ceil(121/100)*100 = 200
+        grid = GridResult(
+            v_lines=list(range(0, 801, 100)),
+            h_lines=[120 + i * 100 for i in range(9)],
+            sq_size=100,
+        )
+        result = _clamp_grid_to_image(grid, h=800, w=800)
+        # Shift of 200 → first line = 120-200 = -80, clamped to 0
+        assert result.h_lines[0] == 0
+        assert result.h_lines[1] == 20  # 220 - 200
+        assert result.h_lines[-1] == 720  # 920 - 200
+        # v_lines untouched (they fit)
+        assert result.v_lines == list(range(0, 801, 100))
+
+    def test_h_lines_not_shifted_when_overshoot_under_half_square(self) -> None:
+        """Small overshoot (< half square) should NOT trigger a shift."""
+        # Last line at 808, image 800px, overshoot = 9 < 50 (half)
+        grid = GridResult(
+            v_lines=list(range(8, 809, 100)),
+            h_lines=list(range(8, 809, 100)),
+            sq_size=100,
+        )
+        original_h = list(grid.h_lines)
+        result = _clamp_grid_to_image(grid, h=800, w=800)
+        assert result.h_lines == original_h  # no shift
+
+    def test_negative_first_line_clamped_to_zero(self) -> None:
+        """Negative first h_line gets clamped to 0."""
+        grid = GridResult(
+            v_lines=list(range(0, 577, 72)),
+            h_lines=[-2, 71, 144, 217, 290, 363, 436, 509, 582],
+            sq_size=73,
+        )
+        result = _clamp_grid_to_image(grid, h=576, w=576)
+        assert result.h_lines[0] == 0
+        # Rest unchanged (overshoot 582-575=7 < 36 half)
+        assert result.h_lines[1] == 71
+
+    def test_v_lines_shifted_when_overshooting(self) -> None:
+        """v_lines are clamped the same way as h_lines."""
+        grid = GridResult(
+            v_lines=[130 + i * 100 for i in range(9)],
+            h_lines=list(range(0, 801, 100)),
+            sq_size=100,
+        )
+        result = _clamp_grid_to_image(grid, h=800, w=800)
+        # v overshoot = 930 - 799 = 131 > 50 → shift by 200? No: round up
+        # (131 + 99) // 100 * 100 = 200.  130 - 200 = -70 → clamped to 0
+        assert result.v_lines[0] == 0
+        assert result.v_lines[-1] == 730  # 930 - 200
+
+    def test_no_clamping_when_grid_fits(self) -> None:
+        """Grid that fits entirely within the image is left unchanged."""
+        lines = list(range(0, 801, 100))
+        grid = GridResult(v_lines=list(lines), h_lines=list(lines), sq_size=100)
+        result = _clamp_grid_to_image(grid, h=810, w=810)
+        assert result.v_lines == lines
+        assert result.h_lines == lines
+
+
+class TestUniformGridFallback:
+    """Uniform grid fallback for borderless/flat board themes."""
+
+    def test_uniform_grid_on_square_image(self) -> None:
+        """Square image produces a valid uniform 8×8 grid."""
+        result = _uniform_grid(400, 400)
+        assert result is not None
+        assert len(result.v_lines) == 9
+        assert len(result.h_lines) == 9
+        assert result.v_lines[0] == 0
+        assert result.v_lines[-1] == 400
+        assert result.h_lines[0] == 0
+        assert result.h_lines[-1] == 400
+        assert result.sq_size == 50
+
+    def test_uniform_grid_rejected_for_wide_image(self) -> None:
+        """Non-square image (ratio > 1.3) returns None."""
+        result = _uniform_grid(400, 600)
+        assert result is None
+
+    def test_uniform_grid_accepted_for_slightly_rectangular(self) -> None:
+        """Slightly rectangular image (ratio ≤ 1.3) still works."""
+        result = _uniform_grid(520, 400)
+        assert result is not None
+        assert len(result.v_lines) == 9
+        assert len(result.h_lines) == 9
+
+    def test_detect_grid_falls_back_to_uniform(self) -> None:
+        """detect_grid returns uniform grid for a plain square image."""
+        # Create a plain gray image with no edges — Sobel + Hough will fail
+        img = np.full((400, 400, 3), 180, dtype=np.uint8)
+        result = detect_grid(img)
+        assert result is not None
+        assert result.sq_size == 50
+        assert result.v_lines[0] == 0
+        assert result.v_lines[-1] == 400

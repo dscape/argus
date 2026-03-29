@@ -226,10 +226,30 @@ def _clamp_grid_to_image(result: GridResult, h: int, w: int) -> GridResult:
     return result
 
 
+def _uniform_grid(h: int, w: int) -> GridResult | None:
+    """Generate a uniform 8×8 grid assuming the board fills the image.
+
+    Only activates when the image is roughly square (aspect ratio within 1.2).
+    Useful for overlays with borderless / flat themes where Sobel and Hough
+    find no grid lines.
+    """
+    ratio = max(h, w) / max(min(h, w), 1)
+    if ratio > 1.3:
+        return None
+
+    sq_w = w / 8
+    sq_h = h / 8
+    sq_size = int(round((sq_w + sq_h) / 2))
+    v_lines = [int(round(c * sq_w)) for c in range(9)]
+    h_lines = [int(round(r * sq_h)) for r in range(9)]
+    return GridResult(v_lines, h_lines, sq_size)
+
+
 def detect_grid(image: np.ndarray) -> GridResult | None:
     """Detect the 8×8 grid in a (possibly cropped) image.
 
-    Tries Sobel projection first, then falls back to HoughLinesP.
+    Tries Sobel projection first, then HoughLinesP, then falls back to a
+    uniform grid when the image is roughly square (for flat/borderless themes).
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
     h, w = gray.shape[:2]
@@ -242,7 +262,7 @@ def detect_grid(image: np.ndarray) -> GridResult | None:
     if result is not None:
         return _clamp_grid_to_image(result, h, w)
 
-    return None
+    return _uniform_grid(h, w)
 
 
 def find_board_in_frame(frame: np.ndarray) -> GridResult | None:
