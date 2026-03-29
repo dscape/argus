@@ -191,18 +191,58 @@ def _hough_detect(gray: np.ndarray) -> GridResult | None:
 # ---------------------------------------------------------------------------
 
 
+def _clamp_grid_to_image(result: GridResult, h: int, w: int) -> GridResult:
+    """Clamp grid lines so they fit inside the image ``[0, dim)``.
+
+    Handles two cases:
+    1. **Off-by-one overshoot**: the last line exceeds the image by more than
+       half a square — shift the entire axis back by one spacing.
+    2. **Negative start**: the least-squares fit placed the first line before
+       the image boundary — clamp it to 0.
+    """
+    sp = result.sq_size
+    half = sp // 2
+
+    # --- horizontal ---
+    if result.h_lines[-1] >= h:
+        excess = result.h_lines[-1] - (h - 1)
+        if excess > half:
+            shift = ((excess + sp - 1) // sp) * sp
+            result.h_lines = [l - shift for l in result.h_lines]
+
+    if result.h_lines[0] < 0:
+        result.h_lines[0] = 0
+
+    # --- vertical ---
+    if result.v_lines[-1] >= w:
+        excess = result.v_lines[-1] - (w - 1)
+        if excess > half:
+            shift = ((excess + sp - 1) // sp) * sp
+            result.v_lines = [l - shift for l in result.v_lines]
+
+    if result.v_lines[0] < 0:
+        result.v_lines[0] = 0
+
+    return result
+
+
 def detect_grid(image: np.ndarray) -> GridResult | None:
     """Detect the 8×8 grid in a (possibly cropped) image.
 
     Tries Sobel projection first, then falls back to HoughLinesP.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+    h, w = gray.shape[:2]
 
     result = _sobel_detect(gray)
     if result is not None:
-        return result
+        return _clamp_grid_to_image(result, h, w)
 
-    return _hough_detect(gray)
+    result = _hough_detect(gray)
+    if result is not None:
+        return _clamp_grid_to_image(result, h, w)
+
+    return None
 
 
 def find_board_in_frame(frame: np.ndarray) -> GridResult | None:
