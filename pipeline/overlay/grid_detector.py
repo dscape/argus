@@ -207,8 +207,7 @@ def _clamp_grid_to_image(result: GridResult, h: int, w: int) -> GridResult:
     if result.h_lines[-1] >= h:
         excess = result.h_lines[-1] - (h - 1)
         if excess > half:
-            shift = ((excess + sp - 1) // sp) * sp
-            result.h_lines = [l - shift for l in result.h_lines]
+            result.h_lines = [l - excess for l in result.h_lines]
 
     if result.h_lines[0] < 0:
         result.h_lines[0] = 0
@@ -217,8 +216,7 @@ def _clamp_grid_to_image(result: GridResult, h: int, w: int) -> GridResult:
     if result.v_lines[-1] >= w:
         excess = result.v_lines[-1] - (w - 1)
         if excess > half:
-            shift = ((excess + sp - 1) // sp) * sp
-            result.v_lines = [l - shift for l in result.v_lines]
+            result.v_lines = [l - excess for l in result.v_lines]
 
     if result.v_lines[0] < 0:
         result.v_lines[0] = 0
