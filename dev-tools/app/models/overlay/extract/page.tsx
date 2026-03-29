@@ -6,8 +6,9 @@ import { ChessBoard } from "@/components/ChessBoard";
 interface ExtractionResult {
   clip_id: number;
   video_id: string;
-  status: "ok" | "error" | "pending";
+  status: "ok" | "warning" | "error" | "pending";
   error?: string;
+  warning?: string;
   image_b64?: string;
   predicted_fen?: string;
 }
@@ -22,6 +23,7 @@ export default function ExtractOverlaysPage() {
   const [results, setResults] = useState<ExtractionResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [videoIdsInput, setVideoIdsInput] = useState("");
   const [saveResult, setSaveResult] = useState<{
     saved: number;
     errors: string[];
@@ -38,14 +40,20 @@ export default function ExtractOverlaysPage() {
     setRejected(new Set());
     setSaveResult(null);
     try {
-      const res = await fetch("/api/models/overlay-test/extract-preview");
+      const params = new URLSearchParams();
+      const trimmed = videoIdsInput.trim();
+      if (trimmed) {
+        params.set("video_ids", trimmed);
+      }
+      const url = `/api/models/overlay-test/extract-preview${params.toString() ? `?${params}` : ""}`;
+      const res = await fetch(url);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setResults(data.results);
-      // Pre-populate editedFens with predicted FENs
+      // Pre-populate editedFens with predicted FENs for ok + warning results
       const initial: Record<number, string> = {};
       for (const r of data.results) {
-        if (r.status === "ok" && r.predicted_fen) {
+        if ((r.status === "ok" || r.status === "warning") && r.predicted_fen) {
           initial[r.clip_id] = r.predicted_fen;
         }
       }
@@ -60,7 +68,7 @@ export default function ExtractOverlaysPage() {
   async function saveConfirmed() {
     const confirmations: Confirmation[] = [];
     for (const r of results) {
-      if (r.status !== "ok") continue;
+      if (r.status !== "ok" && r.status !== "warning") continue;
       if (rejected.has(r.clip_id)) continue;
       const fen = editedFens[r.clip_id];
       if (!fen) continue;
@@ -93,15 +101,17 @@ export default function ExtractOverlaysPage() {
     }
   }
 
-  const okResults = results.filter((r) => r.status === "ok");
+  const reviewableResults = results.filter(
+    (r) => r.status === "ok" || r.status === "warning",
+  );
   const errorResults = results.filter((r) => r.status === "error");
-  const confirmedCount = okResults.filter(
+  const confirmedCount = reviewableResults.filter(
     (r) => !rejected.has(r.clip_id),
   ).length;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <h2 className="text-lg font-semibold">Extract Overlay Annotations</h2>
         <button
           onClick={runExtraction}
@@ -110,6 +120,19 @@ export default function ExtractOverlaysPage() {
         >
           {loading ? "Extracting..." : "Extract from Video Clips"}
         </button>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <label className="text-sm text-muted-foreground whitespace-nowrap">
+          Video IDs:
+        </label>
+        <input
+          type="text"
+          value={videoIdsInput}
+          onChange={(e) => setVideoIdsInput(e.target.value)}
+          placeholder="e.g. Unu6antTBGs, ycitHs8_NY4 (leave empty for all)"
+          className="flex-1 px-2 py-1.5 border rounded text-sm font-mono"
+        />
       </div>
 
       <p className="text-sm text-muted-foreground">
@@ -121,7 +144,7 @@ export default function ExtractOverlaysPage() {
       {results.length > 0 && (
         <div className="flex items-center gap-4 text-sm">
           <span className="text-green-600 font-medium">
-            {okResults.length} extracted
+            {reviewableResults.length} extracted
           </span>
           {errorResults.length > 0 && (
             <span className="text-red-600 font-medium">
@@ -188,25 +211,31 @@ export default function ExtractOverlaysPage() {
         </details>
       )}
 
-      {/* OK results for review */}
+      {/* Reviewable results (ok + warning) */}
       <div className="space-y-4">
-        {okResults.map((r) => {
+        {reviewableResults.map((r) => {
           const isRejected = rejected.has(r.clip_id);
           const currentFen = editedFens[r.clip_id] ?? r.predicted_fen ?? "";
+          const isWarning = r.status === "warning";
 
           return (
             <div
               key={r.clip_id}
-              className={`border rounded-lg p-3 space-y-3 ${isRejected ? "opacity-40" : ""}`}
+              className={`border rounded-lg p-3 space-y-3 ${isRejected ? "opacity-40" : ""} ${isWarning ? "border-yellow-400" : ""}`}
             >
               <div className="flex items-center justify-between">
-                <div>
+                <div className="flex items-center gap-2">
                   <span className="text-sm font-mono font-medium">
                     clip {r.clip_id}
                   </span>
-                  <span className="text-xs text-muted-foreground ml-2">
+                  <span className="text-xs text-muted-foreground">
                     {r.video_id}
                   </span>
+                  {isWarning && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-700 font-medium">
+                      {r.warning}
+                    </span>
+                  )}
                 </div>
                 <button
                   onClick={() =>

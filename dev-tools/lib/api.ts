@@ -618,14 +618,12 @@ export async function updateSessionPins(
 
 export interface OverlayTestResult {
   filename: string;
-  /** "synthetic" = chess-positions dataset; "real" = video overlay crop; "video" = live video frame */
-  source?: "synthetic" | "real" | "video";
+  /** "synthetic" = chess-positions dataset; "real" = pre-extracted video overlay crop */
+  source?: "synthetic" | "real";
   expected_fen: string | null;
   predicted_fen: string | null;
-  /** null for video frames (no ground truth) */
-  match: boolean | null;
-  /** null for video frames (no ground truth) */
-  piece_accuracy: number | null;
+  match: boolean;
+  piece_accuracy: number;
   square_diffs: string[];
   board_image_b64?: string;
   elapsed_ms: number;

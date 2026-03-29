@@ -12,8 +12,6 @@ interface OverlayTestCardProps {
 
 export default function OverlayTestCard({ result, pinned, onPin }: OverlayTestCardProps) {
   const wrongSquares = result.square_diffs.length;
-  const isVideo = result.source === "video";
-  const videoFailed = isVideo && !result.predicted_fen;
 
   const imgSrc = result.board_image_b64
     ? `data:image/jpeg;base64,${result.board_image_b64}`
@@ -52,17 +50,13 @@ export default function OverlayTestCard({ result, pinned, onPin }: OverlayTestCa
             ) : (
               <span>{result.elapsed_ms}ms</span>
             )}
-            {!isVideo && (
-              <span>
-                {Math.round((result.piece_accuracy ?? 0) * 100)}% squares correct
-              </span>
-            )}
+            <span>
+              {Math.round((result.piece_accuracy ?? 0) * 100)}% squares correct
+            </span>
             {result.source && (
               <span
                 className={`px-1 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide ${
-                  result.source === "video"
-                    ? "bg-purple-100 text-purple-700"
-                    : result.source === "real"
+                  result.source === "real"
                     ? "bg-blue-100 text-blue-700"
                     : "bg-muted text-muted-foreground"
                 }`}
@@ -73,19 +67,13 @@ export default function OverlayTestCard({ result, pinned, onPin }: OverlayTestCa
           </div>
         </div>
         <div className="text-right shrink-0">
-          {videoFailed ? (
-            <span className="text-sm font-bold text-red-600">{"\u2717"} pipeline failed</span>
-          ) : isVideo ? (
-            <span className="text-sm font-bold text-muted-foreground">timing only</span>
-          ) : (
-            <span
-              className={`text-sm font-bold ${
-                result.match ? "text-green-600" : "text-red-600"
-              }`}
-            >
-              {result.match ? "\u2713 Match" : `\u2717 ${wrongSquares} wrong`}
-            </span>
-          )}
+          <span
+            className={`text-sm font-bold ${
+              result.match ? "text-green-600" : "text-red-600"
+            }`}
+          >
+            {result.match ? "\u2713 Match" : `\u2717 ${wrongSquares} wrong`}
+          </span>
         </div>
       </div>
 
@@ -116,9 +104,7 @@ export default function OverlayTestCard({ result, pinned, onPin }: OverlayTestCa
       <div className="flex items-center gap-2 flex-wrap">
         <span
           className={`text-xs px-2 py-0.5 rounded ${
-            isVideo
-              ? "bg-muted text-muted-foreground"
-              : result.match
+            result.match
               ? "bg-green-100 text-green-700"
               : "bg-red-100 text-red-700"
           }`}

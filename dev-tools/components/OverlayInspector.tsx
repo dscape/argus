@@ -196,7 +196,7 @@ export default function OverlayInspector({
         setResults((prev) => [...prev, result]);
         inspectedFiles.current.add(filenames[i]);
 
-        // Auto-pin mismatches (skip video frames with match=null)
+        // Auto-pin mismatches
         if (result.match === false) {
           autoPinned.add(result.filename);
           setPinnedIds((prev) => new Set([...prev, result.filename]));
@@ -205,15 +205,13 @@ export default function OverlayInspector({
         setProgress({ current: i + 1, total: filenames.length });
       }
 
-      // Step 3: compute accuracy & save (only scored samples)
+      // Step 3: compute accuracy & save
       const total = collected.length;
       if (total > 0) {
-        const scored = collected.filter((r) => r.match != null);
-        const scoredTotal = scored.length || 1;
-        const matches = scored.filter((r) => r.match).length;
-        const accuracy = matches / scoredTotal;
+        const matches = collected.filter((r) => r.match).length;
+        const accuracy = matches / total;
         const avgPieceAccuracy =
-          scored.reduce((s, r) => s + (r.piece_accuracy ?? 0), 0) / scoredTotal;
+          collected.reduce((s, r) => s + (r.piece_accuracy ?? 0), 0) / total;
         const elapsedMin = (performance.now() - batchStartTime) / 60000;
         const imagesPerMinute =
           elapsedMin > 0 ? Math.round(total / elapsedMin) : null;
@@ -263,14 +261,12 @@ export default function OverlayInspector({
     }
   }
 
-  // Accuracy summary (only count samples with ground truth)
+  // Accuracy summary
   const total = results.length;
-  const scoredResults = results.filter((r) => r.match != null);
-  const scoredTotal = scoredResults.length;
-  const matches = scoredResults.filter((r) => r.match).length;
+  const matches = results.filter((r) => r.match).length;
   const avgPieceAccuracy =
-    scoredTotal > 0
-      ? scoredResults.reduce((s, r) => s + (r.piece_accuracy ?? 0), 0) / scoredTotal
+    total > 0
+      ? results.reduce((s, r) => s + (r.piece_accuracy ?? 0), 0) / total
       : 0;
 
   // Sort into pinned / unpinned
@@ -521,17 +517,17 @@ export default function OverlayInspector({
       )}
 
       {/* Accuracy summary */}
-      {scoredTotal > 0 && (
+      {total > 0 && (
         <div className="border rounded-lg p-3 space-y-2 bg-background">
           <div className="flex items-center gap-4">
             <span className="text-sm font-medium">
-              Board accuracy: {matches}/{scoredTotal} (
-              {((matches / scoredTotal) * 100).toFixed(1)}%)
+              Board accuracy: {matches}/{total} (
+              {((matches / total) * 100).toFixed(1)}%)
             </span>
             <div className="flex-1 h-2 bg-muted rounded overflow-hidden max-w-xs">
               <div
                 className="h-full bg-green-500 rounded"
-                style={{ width: `${(matches / scoredTotal) * 100}%` }}
+                style={{ width: `${(matches / total) * 100}%` }}
               />
             </div>
           </div>
@@ -629,7 +625,7 @@ export default function OverlayInspector({
                           ? togglePin(r.filename)
                           : toggleExpand(r.filename)
                       }
-                      title={`${r.filename}\n${r.match == null ? "video frame" : r.match ? "\u2713 match" : `\u2717 ${r.square_diffs.length} wrong`}`}
+                      title={`${r.filename}\n${r.match ? "\u2713 match" : `\u2717 ${r.square_diffs.length} wrong`}`}
                       className="relative w-16 h-16 rounded border overflow-hidden flex-shrink-0 transition-all hover:ring-2 hover:ring-foreground/30"
                     >
                       <img
@@ -644,23 +640,17 @@ export default function OverlayInspector({
                       />
                       <div
                         className={`absolute inset-0 ${
-                          r.source === "video"
-                            ? r.predicted_fen ? "bg-purple-500/20" : "bg-red-500/35"
-                            : r.match ? "bg-green-500/25" : "bg-red-500/35"
+                          r.match ? "bg-green-500/25" : "bg-red-500/35"
                         }`}
                       />
                       <span
                         className={`absolute top-0 left-0 text-[9px] leading-none px-0.5 py-px ${
-                          r.source === "video"
-                            ? r.predicted_fen ? "bg-purple-500/80 text-white" : "bg-red-500/80 text-white"
-                            : r.match
+                          r.match
                             ? "bg-green-500/80 text-white"
                             : "bg-red-500/80 text-white"
                         }`}
                       >
-                        {r.source === "video"
-                          ? r.predicted_fen ? "\u25B6" : "\u2717"
-                          : r.match ? "\u2713" : "\u2717"}
+                        {r.match ? "\u2713" : "\u2717"}
                       </span>
                       {r.match === false && (
                         <span className="absolute bottom-0 right-0 text-[9px] leading-none bg-black/60 text-white px-0.5 py-px">
