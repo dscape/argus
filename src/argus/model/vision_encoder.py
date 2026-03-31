@@ -2,9 +2,24 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 from transformers import Dinov2Model
+
+# Offline weights directory: weights/dinov2-base/ relative to repo root.
+_WEIGHTS_ROOT = Path(__file__).resolve().parent.parent.parent.parent / "weights"
+
+
+def _resolve_model_path(model_name: str) -> str:
+    """Return a local weights path if available, otherwise the HF repo id."""
+    # "facebook/dinov2-base" → "dinov2-base"
+    short = model_name.split("/")[-1]
+    local = _WEIGHTS_ROOT / short
+    if (local / "config.json").exists():
+        return str(local)
+    return model_name
 
 
 class VisionEncoder(nn.Module):
@@ -17,10 +32,11 @@ class VisionEncoder(nn.Module):
         embed_dim: int = 768,
     ) -> None:
         super().__init__()
+        resolved = _resolve_model_path(model_name)
         try:
-            self.model = Dinov2Model.from_pretrained(model_name, local_files_only=True)
+            self.model = Dinov2Model.from_pretrained(resolved, local_files_only=True)
         except OSError:
-            # First run — model not yet downloaded locally
+            # Local weights missing — download from HuggingFace Hub
             self.model = Dinov2Model.from_pretrained(model_name)
         self.embed_dim = embed_dim
         if frozen:

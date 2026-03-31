@@ -4,7 +4,8 @@
        up down \
        docker-ai-extract docker-ai-train docker-ai-eval docker-ai-screen \
        docker-ai-extract-status docker-smoke-test \
-       backup check-backup
+       backup check-backup \
+       download-models
 
 # ── Use venv Python/pip so targets work without activation ──
 
@@ -14,7 +15,7 @@ PIP := .venv/bin/pip
 install:
 	$(PIP) install -e .
 
-dev: check-backup
+dev: check-backup download-models
 	$(PIP) install -e ".[dev]"
 
 test:
@@ -95,6 +96,9 @@ inspect:
 
 download:
 	$(PYTHON) -m pipeline.cli download $(ARGS)
+
+download-models:
+	$(PYTHON) scripts/download_model.py
 
 generate-clips:
 	$(PYTHON) -m pipeline.cli generate-clips $(ARGS)

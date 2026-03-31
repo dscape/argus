@@ -15,6 +15,12 @@ RUN pip install --no-cache-dir \
     -r /tmp/pipeline-requirements.txt \
     -r /tmp/api-requirements.txt
 
+# Download DINOv2-base weights into the image so the container works offline.
+RUN python -c "\
+from huggingface_hub import snapshot_download; \
+snapshot_download('facebook/dinov2-base', local_dir='/app/weights/dinov2-base', \
+    ignore_patterns=['*.h5','*.ot','*.msgpack','tf_*','flax_*'])"
+
 ENV PYTHONPATH=/app/src:/app
 
 CMD ["sh", "-c", "cd /app/dev-tools && uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload --timeout-keep-alive 300"]
