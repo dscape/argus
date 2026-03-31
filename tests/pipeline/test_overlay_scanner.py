@@ -3,9 +3,17 @@
 Verifies that the vectorized implementations of compute_grid_regularity,
 check_alternating_pattern, and detect_overlay_in_frame produce correct
 results on synthetic board images.
+
+Also includes regression tests for specific video clips that previously
+produced incorrect overlay detections.
 """
 
+from pathlib import Path
+
+import cv2
 import numpy as np
+import pytest
+from pipeline.overlay.grid_detector import detect_grid
 from pipeline.overlay.scanner import (
     MIN_LOW_VARIANCE_RATIO,
     OverlayDetection,
@@ -224,3 +232,108 @@ class TestDetectOverlayInFrame:
         result = detect_overlay_in_frame(frame)
         assert result.found is True
         assert result.bbox is not None
+
+
+# ---------------------------------------------------------------------------
+# Regression: real video clip overlay detection
+# ---------------------------------------------------------------------------
+
+FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "frames"
+
+
+class TestOverlayDetectionRegression:
+    """Regression tests for video clips that previously produced wrong detections.
+
+    clip 21 (vkoTN5DxRS0): Full-board overlay on the left side. The seed
+        detection found a sub-region but expansion failed to grow to the
+        full board.  Fixed by adding Gaussian blur before grid detection
+        in expansion and extending the multiplier range.
+
+    clip 42 (Unu6antTBGs): Chess24 Norway Chess layout with rendered board
+        on the left and camera views on the right.  The scanner incorrectly
+        picked the camera views as the largest candidate.  Fixed by trying
+        expansion from diverse seeds (including highest-scoring) and
+        disabling the uniform grid fallback during expansion.
+
+    clip 44 (ycitHs8_NY4): Low-res (640×360) OTB footage with a small
+        chess.com green overlay on a monitor between the players.  The
+        scanner must detect this small rendered overlay despite the
+        challenging resolution and competing physical board.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_fixtures(self):
+        """Skip if regression frames haven't been extracted."""
+        needed = [
+            FIXTURES_DIR / "vkoTN5DxRS0_t60.png",
+            FIXTURES_DIR / "Unu6antTBGs_t60.png",
+            FIXTURES_DIR / "ycitHs8_NY4_t170.png",
+        ]
+        for p in needed:
+            if not p.exists():
+                pytest.skip(f"Regression fixture not found: {p.name}")
+
+    def test_vko_full_board_detected(self) -> None:
+        """vkoTN5DxRS0: expansion must grow to the full board (~1056px)."""
+        frame = cv2.imread(str(FIXTURES_DIR / "vkoTN5DxRS0_t60.png"))
+        assert frame is not None
+
+        det = detect_overlay_in_frame(frame)
+        assert det.found, "vko: overlay should be found"
+        x, y, w, h = det.bbox
+        # Board should be large — at least 900px wide
+        assert w >= 900, f"vko: bbox width {w} too small, expected >= 900"
+        assert h >= 900, f"vko: bbox height {h} too small, expected >= 900"
+        # Board should be on the left side of the frame
+        assert x < 200, f"vko: bbox x={x} too far right, expected < 200"
+
+        # Verify the crop produces a valid grid with 64 non-empty squares
+        crop = frame[y : y + h, x : x + w]
+        grid = detect_grid(crop)
+        assert grid is not None, "vko: detect_grid on crop returned None"
+        assert len(grid.v_lines) == 9
+        assert len(grid.h_lines) == 9
+        squares = grid.crop_squares(crop)
+        for r in range(8):
+            for c in range(8):
+                assert squares[r][c].size > 0, f"vko: square ({r},{c}) is empty"
+
+    def test_unu_board_not_camera_views(self) -> None:
+        """Unu6antTBGs: detection must find the rendered board, not camera views."""
+        frame = cv2.imread(str(FIXTURES_DIR / "Unu6antTBGs_t60.png"))
+        assert frame is not None
+
+        det = detect_overlay_in_frame(frame)
+        assert det.found, "Unu: overlay should be found"
+        x, y, w, h = det.bbox
+        # The rendered board is in the left portion of the frame.
+        # Camera views are at x > 560.  The bbox must start before
+        # the camera view boundary.
+        assert x < 300, f"Unu: bbox x={x} too far right (camera view area)"
+        # Board should be at least 400px wide
+        assert w >= 400, f"Unu: bbox width {w} too small, expected >= 400"
+
+        # Verify a grid can be detected within the crop
+        crop = frame[y : y + h, x : x + w]
+        grid = detect_grid(crop)
+        assert grid is not None, "Unu: detect_grid on crop returned None"
+        assert len(grid.v_lines) == 9
+        assert len(grid.h_lines) == 9
+
+    def test_yci_chesscom_overlay_detected(self) -> None:
+        """ycitHs8_NY4 t=170: small chess.com green overlay must be detected.
+
+        The overlay is on a monitor between the players.  Despite the low
+        resolution (640×360) and the presence of a physical chess board,
+        the scanner should find the rendered overlay.
+        """
+        frame = cv2.imread(str(FIXTURES_DIR / "ycitHs8_NY4_t170.png"))
+        assert frame is not None
+
+        det = detect_overlay_in_frame(frame)
+        assert det.found, "yci: chess.com overlay should be detected at t=170"
+        assert det.bbox is not None
+        x, y, w, h = det.bbox
+        # The overlay is small at this resolution — should be 100-200px
+        assert w >= 100, f"yci: bbox width {w} too small"
+        assert h >= 100, f"yci: bbox height {h} too small"

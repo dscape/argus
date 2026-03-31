@@ -243,11 +243,20 @@ def _uniform_grid(h: int, w: int) -> GridResult | None:
     return GridResult(v_lines, h_lines, sq_size)
 
 
-def detect_grid(image: np.ndarray) -> GridResult | None:
+def detect_grid(
+    image: np.ndarray,
+    allow_uniform: bool = True,
+) -> GridResult | None:
     """Detect the 8×8 grid in a (possibly cropped) image.
 
     Tries Sobel projection first, then HoughLinesP, then falls back to a
     uniform grid when the image is roughly square (for flat/borderless themes).
+
+    Args:
+        image: BGR or grayscale image.
+        allow_uniform: If False, skip the uniform grid fallback.  Use this
+            when the image may contain non-board content (e.g. during bbox
+            expansion) so that a square crop isn't automatically accepted.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
     h, w = gray.shape[:2]
@@ -260,7 +269,10 @@ def detect_grid(image: np.ndarray) -> GridResult | None:
     if result is not None:
         return _clamp_grid_to_image(result, h, w)
 
-    return _uniform_grid(h, w)
+    if allow_uniform:
+        return _uniform_grid(h, w)
+
+    return None
 
 
 def find_board_in_frame(frame: np.ndarray) -> GridResult | None:

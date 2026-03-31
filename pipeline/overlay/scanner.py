@@ -152,10 +152,10 @@ def _expand_bbox(
 
     best = seed_bbox
 
-    # Try 125%, 150%, …, up to 4× the seed size.  Keep trying all
+    # Try 125%, 150%, …, up to 6× the seed size.  Keep trying all
     # sizes — don't stop early because the grid detector can fail at
     # intermediate sizes and then succeed at the correct one.
-    for multiplier_pct in range(125, 425, 25):
+    for multiplier_pct in range(125, 625, 25):
         size = int(sw * multiplier_pct / 100)
         if size > min(h, w):
             break
@@ -165,7 +165,12 @@ def _expand_bbox(
         size = min(size, w - ex, h - ey)
 
         crop = frame[ey : ey + size, ex : ex + size]
-        grid = detect_grid(crop)
+        # Apply light Gaussian blur to mitigate compression artifacts
+        # (same as fast_overlay_check) before grid detection.
+        blurred = cv2.GaussianBlur(crop, (3, 3), 0)
+        # Skip uniform grid fallback — expansion crops include non-board
+        # content, so a square crop should not auto-pass as a valid board.
+        grid = detect_grid(blurred, allow_uniform=False)
         if grid is not None and len(grid.v_lines) == 9 and len(grid.h_lines) == 9:
             best = (ex, ey, size, size)
 
@@ -174,7 +179,8 @@ def _expand_bbox(
     if best != seed_bbox:
         ex, ey, size, _ = best
         crop = frame[ey : ey + size, ex : ex + size]
-        grid = detect_grid(crop)
+        blurred = cv2.GaussianBlur(crop, (3, 3), 0)
+        grid = detect_grid(blurred, allow_uniform=False)
         if grid is not None and len(grid.v_lines) == 9 and len(grid.h_lines) == 9:
             gx = grid.v_lines[0]
             gy = grid.h_lines[0]
@@ -276,7 +282,8 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
     # noise alone.
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
 
-    candidates: list[tuple[float, tuple[int, int, int, int]]] = []
+    # (score, bbox, has_alternating_pattern)
+    candidates: list[tuple[float, tuple[int, int, int, int], bool]] = []
 
     for scale in FAST_SCAN_SCALES:
         win_size = int(min(h, w) * scale)
@@ -286,6 +293,7 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
         step = max(1, int(win_size * FAST_SCAN_STEP_FRACTION))
         scale_best_score = 0.0
         scale_best_bbox = None
+        scale_best_pattern = False
 
         for y in range(0, h - win_size + 1, step):
             for x in range(0, w - win_size + 1, step):
@@ -299,21 +307,43 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
                     if score > scale_best_score:
                         scale_best_score = score
                         scale_best_bbox = (x, y, win_size, win_size)
+                        scale_best_pattern = has_pattern
 
         if scale_best_bbox is not None:
-            candidates.append((scale_best_score, scale_best_bbox))
+            candidates.append((scale_best_score, scale_best_bbox, scale_best_pattern))
 
-    # Pick the largest detection above threshold.
+    # Prefer the largest detection that has the alternating light/dark
+    # pattern.  This avoids false positives from camera views of physical
+    # boards or solid-color UI panels that pass regularity but lack true
+    # checkerboard alternation.  Fall back to the largest regularity-only
+    # candidate if none have the pattern.
     best_score = 0.0
     best_bbox = None
-    for score, bbox in candidates:
+    best_has_pattern = False
+    for score, bbox, has_pattern in candidates:
         bbox_area = bbox[2] * bbox[3]
         best_area = best_bbox[2] * best_bbox[3] if best_bbox else 0
-        if bbox_area > best_area or (bbox_area == best_area and score > best_score):
+
+        # Prefer pattern candidates over non-pattern ones regardless of size.
+        if has_pattern and not best_has_pattern:
             best_score = score
             best_bbox = bbox
+            best_has_pattern = True
+        elif has_pattern == best_has_pattern:
+            if bbox_area > best_area or (bbox_area == best_area and score > best_score):
+                best_score = score
+                best_bbox = bbox
+                best_has_pattern = has_pattern
 
     if best_bbox is not None and best_score > MIN_LOW_VARIANCE_RATIO:
+        # Reject small detections that lack the alternating pattern —
+        # likely false positives from physical boards or compression
+        # artifacts at low resolution.
+        if not best_has_pattern:
+            best_fraction = best_bbox[2] / min(h, w)
+            if best_fraction < 0.50:
+                return OverlayDetection(found=False, frame_resolution=resolution)
+
         # Scale bbox back to original resolution if frame was downscaled
         if scale_factor < 1.0:
             inv = 1.0 / scale_factor
@@ -339,9 +369,14 @@ def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
 
     Slides a square window across the frame at multiple scales,
     scoring each candidate region for rendered-board properties.
-    Then expands the best detection outward to cover the full board
+    Then expands the best detections outward to cover the full board
     (the initial scan may find a sub-region if the board has labels
     or coordinates around the edges).
+
+    To handle frames with competing grid-like regions (e.g. camera views
+    of physical boards alongside a rendered overlay), expansion is tried
+    from the top candidates sorted by area.  The candidate whose expansion
+    produces the largest valid board wins.
     """
     h, w = frame.shape[:2]
     resolution = (w, h)
@@ -381,27 +416,69 @@ def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
         if scale_best_bbox is not None:
             candidates.append((scale_best_score, scale_best_bbox))
 
-    # Pick the largest detection that passes threshold.  Among ties in
-    # window size, pick the highest score.
-    best_score = 0.0
-    best_bbox = None
-    for score, bbox in candidates:
-        bbox_area = bbox[2] * bbox[3]
-        best_area = best_bbox[2] * best_bbox[3] if best_bbox else 0
-        if bbox_area > best_area or (bbox_area == best_area and score > best_score):
-            best_score = score
-            best_bbox = bbox
+    if not candidates:
+        return OverlayDetection(found=False, frame_resolution=resolution)
 
-    if best_bbox is not None and best_score > MIN_LOW_VARIANCE_RATIO:
-        # Expand the seed detection to cover the full board.
-        expanded = _expand_bbox(frame, best_bbox)
+    # Build a diverse set of seeds to try expansion from:
+    # - Top 3 by window area (may include large but wrong candidates)
+    # - Top 1 by score (highest confidence, often on the actual board)
+    # The correct seed will expand to the largest valid board; wrong
+    # seeds (camera views, UI elements) won't expand well because the
+    # grid detector won't find real grid lines at larger sizes.
+    by_area = sorted(candidates, key=lambda c: (c[1][2] * c[1][3], c[0]), reverse=True)
+    by_score = sorted(candidates, key=lambda c: c[0], reverse=True)
+
+    seeds_to_try: list[tuple[float, tuple[int, int, int, int]]] = []
+    seen_bboxes: set[tuple[int, int, int, int]] = set()
+    for c in by_area[:3]:
+        if c[1] not in seen_bboxes:
+            seeds_to_try.append(c)
+            seen_bboxes.add(c[1])
+    # Always include the highest-scoring candidate if not already present.
+    if by_score and by_score[0][1] not in seen_bboxes:
+        seeds_to_try.append(by_score[0])
+
+    best_expanded: tuple[int, int, int, int] | None = None
+    best_expanded_area = 0
+    best_seed_score = 0.0
+    best_seed_bbox: tuple[int, int, int, int] | None = None
+
+    for score, bbox in seeds_to_try:
+        expanded = _expand_bbox(frame, bbox)
+        exp_area = expanded[2] * expanded[3]
+        if exp_area > best_expanded_area:
+            best_expanded_area = exp_area
+            best_expanded = expanded
+            best_seed_score = score
+            best_seed_bbox = bbox
+
+    if best_expanded is not None and best_seed_bbox is not None:
+        # If a small seed didn't expand AND lacks the alternating pattern,
+        # the detection is likely a false positive (e.g. physical board at
+        # low resolution).  Legitimate rendered overlays have the
+        # alternating light/dark checkerboard pattern; physical boards
+        # at low resolution usually don't after compression.
+        gray_check = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+        bx, by, bw, bh = best_expanded
+        seed_has_pattern = check_alternating_pattern(
+            gray_check[by : by + bh, bx : bx + bw]
+        )
+        seed_area = best_seed_bbox[2] * best_seed_bbox[3]
+        seed_fraction = best_seed_bbox[2] / min(h, w)
+        if (
+            not seed_has_pattern
+            and seed_fraction < 0.50
+            and best_expanded_area <= seed_area * 1.2
+        ):
+            return OverlayDetection(found=False, frame_resolution=resolution)
+
         # Fine-tune alignment so the 8x8 grid lines up precisely.
-        expanded = _refine_alignment(frame, expanded)
+        refined = _refine_alignment(frame, best_expanded)
         return OverlayDetection(
             found=True,
-            bbox=expanded,
-            seed_bbox=best_bbox,
-            score=best_score,
+            bbox=refined,
+            seed_bbox=best_seed_bbox,
+            score=best_seed_score,
             frame_resolution=resolution,
         )
 
