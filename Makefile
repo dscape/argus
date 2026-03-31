@@ -2,7 +2,7 @@
        db-up db-down db-backup db-restore pipeline-install seed-channels crawl screen inspect download generate-clips pipeline-stats \
        dev-tools dev-tools-down blender-server blender-server-stop \
        up down \
-       docker-ai-extract docker-ai-train docker-ai-eval docker-ai-screen \
+       docker-ai-extract docker-ai-train docker-ai-eval docker-ai-screen docker-ai-retrain \
        docker-ai-extract-status docker-smoke-test \
        backup check-backup \
        download-models
@@ -180,6 +180,9 @@ docker-ai-eval:
 
 docker-ai-screen:
 	docker exec -it argus-dev-api python3 -m pipeline.cli ai-screen $(ARGS)
+
+docker-ai-retrain:
+	docker exec -it argus-dev-api python3 -m pipeline.cli ai-retrain $(ARGS)
 
 docker-ai-extract-status:
 	docker exec argus-dev-api python3 -m pipeline.cli ai-extract-status

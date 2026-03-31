@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS youtube_videos (
     ai_screening_confidence  FLOAT,
     ai_screening_auto_decided BOOLEAN DEFAULT false,
 
+    -- Who made the final screening decision: 'human' or 'ai'
+    screened_by              VARCHAR(10),
+
     created_at          TIMESTAMPTZ DEFAULT now(),
     updated_at          TIMESTAMPTZ DEFAULT now()
 );

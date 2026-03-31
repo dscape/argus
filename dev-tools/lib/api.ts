@@ -258,6 +258,19 @@ export async function getVideoCounts(
   return res.json();
 }
 
+export interface CorrectionStats {
+  total_labeled: number;
+  total_human: number;
+  total_ai: number;
+  corrections: number;
+}
+
+export async function getCorrectionStats(): Promise<CorrectionStats> {
+  const res = await fetch("/api/crawl/correction-stats");
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function listCrawlVideos(params: {
   channel_id?: string;
   status?: string;

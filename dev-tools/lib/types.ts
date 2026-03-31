@@ -139,6 +139,7 @@ export interface CrawlVideo {
   title_score: number;
   title_is_match: boolean;
   layout_type?: string | null;
+  screened_by?: string | null;
   annotations?: VideoAnnotations | null;
 }
 

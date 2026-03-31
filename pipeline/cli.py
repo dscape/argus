@@ -354,6 +354,39 @@ def cmd_ai_screen(args):
     )
 
 
+def cmd_ai_retrain(args):
+    """Full retrain: extract new features, train, evaluate, optionally screen."""
+    from pipeline.screen.ai_eval import calibrate_threshold, evaluate
+    from pipeline.screen.ai_train import extract_and_cache_features, train
+
+    print("=== Step 1/3: Extract features for new videos ===")
+    extract_and_cache_features(device=args.device)
+
+    print("\n=== Step 2/3: Train classifier ===")
+    checkpoint = train(
+        epochs=args.epochs, lr=args.lr,
+        batch_size=args.batch_size, device=args.device,
+    )
+
+    print("\n=== Step 3/3: Evaluate and calibrate ===")
+    evaluate(checkpoint_path=checkpoint)
+    print()
+    calibrate_threshold(
+        checkpoint_path=checkpoint,
+        target_precision=args.target_precision,
+    )
+
+    if args.screen:
+        from pipeline.screen.screen_pipeline import screen_with_ai
+        print("\n=== Screening unscreened videos with new weights ===")
+        screen_with_ai(
+            checkpoint_path=checkpoint,
+            threshold=args.threshold,
+            device=args.device,
+            limit=args.screen_limit,
+        )
+
+
 def cmd_ai_profile(args):
     """Profile AI screening pipeline for a single video."""
     from pipeline.screen.ai_profiler import format_profile, profile_video
@@ -694,6 +727,17 @@ def main():
     p.add_argument("--threshold", type=float, default=0.85, help="Confidence threshold for auto-deciding")
     p.add_argument("--device", type=str, default="cpu", help="Torch device")
 
+    # ai-retrain
+    p = subparsers.add_parser("ai-retrain", help="Full retrain: extract → train → eval (→ screen)")
+    p.add_argument("--epochs", type=int, default=50, help="Training epochs")
+    p.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    p.add_argument("--batch-size", type=int, default=32, help="Batch size")
+    p.add_argument("--device", type=str, default="cpu", help="Torch device")
+    p.add_argument("--target-precision", type=float, default=0.95, help="Target precision for threshold calibration")
+    p.add_argument("--screen", action="store_true", help="Also run ai-screen with new weights after training")
+    p.add_argument("--threshold", type=float, default=0.85, help="Confidence threshold (used with --screen)")
+    p.add_argument("--screen-limit", type=int, default=None, help="Max videos to screen (used with --screen)")
+
     # ai-profile
     p = subparsers.add_parser("ai-profile", help="Profile AI screening pipeline for a single video")
     p.add_argument("--video-id", type=str, required=True, help="YouTube video ID to profile")
@@ -748,6 +792,7 @@ def main():
         "ai-train": cmd_ai_train,
         "ai-eval": cmd_ai_eval,
         "ai-screen": cmd_ai_screen,
+        "ai-retrain": cmd_ai_retrain,
         "ai-profile": cmd_ai_profile,
         "auto-calibrate": cmd_auto_calibrate,
         "smoke-test": cmd_smoke_test,

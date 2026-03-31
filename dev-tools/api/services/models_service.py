@@ -623,6 +623,7 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
                                 SET screening_status = %s,
                                     screening_confidence = %s,
                                     layout_type = COALESCE(%s, layout_type),
+                                    screened_by = 'ai',
                                     updated_at = now()
                                 WHERE video_id = %s
                                   AND screening_status IS NULL

@@ -8,7 +8,9 @@ import {
   getVideoCounts,
   undoAutoReject,
   aiScreenBatch,
+  getCorrectionStats,
 } from "@/lib/api";
+import type { CorrectionStats } from "@/lib/api";
 import type { CrawlChannel, CrawlVideo } from "@/lib/types";
 import {
   VideoWithReason,
@@ -41,6 +43,7 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
   const [pageSize, setPageSize] = useState(() => computePageSize());
   const [autoRunning, setAutoRunning] = useState(false);
   const [aiScreenDone, setAiScreenDone] = useState(false);
+  const [correctionStats, setCorrectionStats] = useState<CorrectionStats | null>(null);
   const { toasts, addToast, removeToast } = useToasts();
 
   // Recompute page size on resize
@@ -56,6 +59,14 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
   const loadCounts = useCallback(async () => {
     try {
       await getVideoCounts();
+    } catch {
+      // best-effort
+    }
+  }, []);
+
+  const loadCorrectionStats = useCallback(async () => {
+    try {
+      setCorrectionStats(await getCorrectionStats());
     } catch {
       // best-effort
     }
@@ -194,7 +205,8 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
 
   useEffect(() => {
     loadVideos();
-  }, [loadVideos]);
+    loadCorrectionStats();
+  }, [loadVideos, loadCorrectionStats]);
 
   const updateVideoInPlace = useCallback(
     (videoId: string, newStatus: string | null, layoutType?: string | null, inspectReason?: string) => {
@@ -224,6 +236,7 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
         await updateVideoStatus(videoId, status, layoutType);
         updateVideoInPlace(videoId, status, layoutType ?? null);
         loadCounts();
+        loadCorrectionStats();
 
         const label =
           layoutType === "otb_only"
@@ -250,7 +263,7 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
         });
       }
     },
-    [videos, updateVideoInPlace, loadCounts, addToast]
+    [videos, updateVideoInPlace, loadCounts, loadCorrectionStats, addToast]
   );
 
   const handleRejectAction = useCallback(async () => {
@@ -430,6 +443,15 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
           <span className="text-xs text-muted-foreground px-2 tabular-nums">
             Showing {videos.length} of {total.toLocaleString()}
           </span>
+
+          {correctionStats && correctionStats.corrections > 0 && (
+            <span
+              className="text-xs text-amber-500 px-2 tabular-nums"
+              title={`${correctionStats.total_human} human, ${correctionStats.total_ai} AI, ${correctionStats.corrections} corrections of AI decisions`}
+            >
+              {correctionStats.corrections} correction{correctionStats.corrections !== 1 ? "s" : ""}
+            </span>
+          )}
 
           <div className="flex-1" />
 

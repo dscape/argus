@@ -334,7 +334,7 @@ def list_videos(
                 f"""
                 SELECT video_id, channel_id, channel_handle, title,
                        description, published_at, screening_status,
-                       screening_confidence, layout_type
+                       screening_confidence, layout_type, screened_by
                 FROM youtube_videos {where}
                 {order_clause}
                 LIMIT %s OFFSET %s
@@ -364,25 +364,28 @@ def update_video_status(
 
     with get_conn() as conn:
         with conn.cursor() as cur:
+            screened_by = "human" if status is not None else None
             if layout_type is not None:
                 cur.execute(
                     """
                     UPDATE youtube_videos
-                    SET screening_status = %s, layout_type = %s, updated_at = now()
+                    SET screening_status = %s, layout_type = %s,
+                        screened_by = %s, updated_at = now()
                     WHERE video_id = %s
                     RETURNING video_id, title, screening_status
                     """,
-                    (status, layout_type, video_id),
+                    (status, layout_type, screened_by, video_id),
                 )
             else:
                 cur.execute(
                     """
                     UPDATE youtube_videos
-                    SET screening_status = %s, updated_at = now()
+                    SET screening_status = %s, screened_by = %s,
+                        updated_at = now()
                     WHERE video_id = %s
                     RETURNING video_id, title, screening_status
                     """,
-                    (status, video_id),
+                    (status, screened_by, video_id),
                 )
             row = cur.fetchone()
             if not row:
@@ -403,7 +406,8 @@ def batch_update_status(video_ids: list[str], status: str) -> int:
             cur.execute(
                 """
                 UPDATE youtube_videos
-                SET screening_status = %s, updated_at = now()
+                SET screening_status = %s, screened_by = 'human',
+                    updated_at = now()
                 WHERE video_id = ANY(%s)
                 """,
                 (status, video_ids),
@@ -422,7 +426,8 @@ def undo_auto_rejections(video_ids: list[str]) -> int:
             cur.execute(
                 """
                 UPDATE youtube_videos
-                SET screening_status = NULL, updated_at = now()
+                SET screening_status = NULL, screened_by = NULL,
+                    updated_at = now()
                 WHERE video_id = ANY(%s)
                   AND screening_status = 'rejected'
                 """,
@@ -430,6 +435,29 @@ def undo_auto_rejections(video_ids: list[str]) -> int:
             )
             conn.commit()
             return cur.rowcount
+
+
+def get_correction_stats() -> dict:
+    """Return counts of human vs AI screening decisions."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    COUNT(*) FILTER (WHERE screening_status IS NOT NULL) AS total_labeled,
+                    COUNT(*) FILTER (WHERE screened_by = 'human') AS total_human,
+                    COUNT(*) FILTER (WHERE screened_by = 'ai') AS total_ai,
+                    COUNT(*) FILTER (
+                        WHERE screened_by = 'human' AND ai_screening_auto_decided = true
+                    ) AS corrections
+                FROM youtube_videos
+            """)
+            row = cur.fetchone()
+            return {
+                "total_labeled": row[0],
+                "total_human": row[1],
+                "total_ai": row[2],
+                "corrections": row[3],
+            }
 
 
 # ── Screening ──────────────────────────────────────────────
@@ -772,7 +800,8 @@ def get_video(video_id: str) -> dict | None:
                 """
                 SELECT video_id, channel_id, channel_handle, title,
                        description, published_at, screening_status,
-                       screening_confidence, layout_type, annotations
+                       screening_confidence, layout_type, annotations,
+                       screened_by
                 FROM youtube_videos
                 WHERE video_id = %s
                 """,

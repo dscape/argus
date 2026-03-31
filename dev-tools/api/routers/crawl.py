@@ -139,6 +139,11 @@ async def get_video_counts(channel_id: str | None = Query(None)):
     return await run_in_threadpool(crawl_service.get_video_counts, channel_id)
 
 
+@router.get("/correction-stats")
+async def get_correction_stats():
+    return await run_in_threadpool(crawl_service.get_correction_stats)
+
+
 @router.patch("/videos/{video_id}/status")
 async def update_video_status(video_id: str, body: UpdateStatusRequest):
     try:
