@@ -1,9 +1,6 @@
 "use client";
 
-const PIECE_UNICODE: Record<string, string> = {
-  K: "\u2654", Q: "\u2655", R: "\u2656", B: "\u2657", N: "\u2658", P: "\u2659",
-  k: "\u265A", q: "\u265B", r: "\u265C", b: "\u265D", n: "\u265E", p: "\u265F",
-};
+import { chessPieceSvg } from "./chess-pieces";
 
 const LIGHT = "#F0D9B5";
 const DARK = "#B58863";
@@ -46,15 +43,9 @@ export function ChessBoard({ fen, size = 280, flipped = false }: Props) {
           <g key={`${row}-${col}`}>
             <rect x={x} y={y} width={sqSize} height={sqSize} fill={isLight ? LIGHT : DARK} />
             {piece && (
-              <text
-                x={x + sqSize / 2}
-                y={y + sqSize * 0.62}
-                textAnchor="middle"
-                fontSize={sqSize * 0.75}
-                className="select-none"
-              >
-                {PIECE_UNICODE[piece] || piece}
-              </text>
+              <g transform={`translate(${x}, ${y}) scale(${sqSize / 45})`}>
+                {chessPieceSvg(piece)}
+              </g>
             )}
           </g>
         );

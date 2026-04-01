@@ -12,6 +12,7 @@ import logging
 import os
 import random
 import time
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -21,7 +22,7 @@ import json
 import numpy as np
 
 from pipeline.db.connection import get_conn
-from pipeline.overlay.scanner import fast_overlay_check
+from pipeline.overlay.scanner import OverlayDetection, detect_overlay_in_frame, fast_overlay_check
 from pipeline.overlay.chess_positions_data import (
     BOARD_SIZE,
     SQ_SIZE,
@@ -251,6 +252,57 @@ def inspect_board(filename: str) -> dict:
 # ── Real overlay extraction ─────────────────────────────────
 
 
+def _fetch_youtube_thumbnail(video_id: str, index: int) -> np.ndarray | None:
+    """Fetch YouTube timeline thumbnail {index} (0-3) for video_id.
+
+    YouTube provides 4 timeline thumbnails at different timestamps via
+    img.youtube.com/vi/{id}/{0-3}.jpg — no video download needed.
+    Returns None if the fetch fails or the image cannot be decoded.
+    """
+    url = f"https://img.youtube.com/vi/{video_id}/{index}.jpg"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "argus/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = resp.read()
+        arr = np.frombuffer(data, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        return img
+    except Exception as e:
+        logger.warning(f"Thumbnail {index} for {video_id} unavailable: {e}")
+        return None
+
+
+def _find_overlay_thumbnail(
+    video_id: str,
+) -> tuple[np.ndarray | None, OverlayDetection | None]:
+    """Try all 4 YouTube thumbnails and return the first one where overlay is detected.
+
+    Uses detect_overlay_in_frame (with grid-line validation) so that false
+    positives from non-chess content in thumbnails (faces, flags, scoreboards)
+    are rejected.  Stops early once a confirmed overlay is found.  Falls back
+    to returning the first available thumbnail (with found=False) if none of
+    the 4 has an overlay.
+    """
+    first_frame: np.ndarray | None = None
+    first_det: OverlayDetection | None = None
+
+    for index in range(4):
+        frame = _fetch_youtube_thumbnail(video_id, index)
+        if frame is None:
+            continue
+        if first_frame is None:
+            first_frame = frame
+
+        det = detect_overlay_in_frame(frame)
+        if det.found:
+            return frame, det
+
+        if first_det is None:
+            first_det = det
+
+    return first_frame, first_det
+
+
 def _get_video_path(video_id: str) -> str | None:
     """Find the local path for a downloaded video, or None."""
     base_dirs = [
@@ -265,6 +317,52 @@ def _get_video_path(video_id: str) -> str | None:
             if matches:
                 return matches[0]
     return None
+
+
+def _detect_from_video(
+    video_path: str,
+    start_time: float,
+    end_time: float,
+) -> tuple[np.ndarray | None, OverlayDetection | None]:
+    """Read frames at a few timestamps within [start_time, end_time] and return
+    the first frame where detect_overlay_in_frame succeeds.
+
+    Uses fast_overlay_check (~50ms each) to scan start_time and mid_time,
+    then runs detect_overlay_in_frame (~1.5s) only on the best candidate.
+    This keeps total latency to ~1.6s per clip regardless of timestamps tried.
+
+    Returns the first (frame, det) where det.found is True, or the
+    (frame, det) from start_time as fallback.
+    """
+    cap = cv2.VideoCapture(video_path)
+    fps = max(cap.get(cv2.CAP_PROP_FPS), 1)
+    mid_time = (start_time + end_time) / 2
+
+    # Fast pre-scan: find the timestamp most likely to have an overlay.
+    best_frame: np.ndarray | None = None
+    best_fast_score = -1.0
+    fallback_frame: np.ndarray | None = None
+
+    for ts in [start_time, mid_time]:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(ts * fps))
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            continue
+        if fallback_frame is None:
+            fallback_frame = frame
+        fast = fast_overlay_check(frame)
+        if fast.found and fast.score > best_fast_score:
+            best_fast_score = fast.score
+            best_frame = frame
+
+    cap.release()
+
+    # Accurate detection on the best candidate (or start_time fallback).
+    target = best_frame if best_frame is not None else fallback_frame
+    if target is None:
+        return None, None
+    det = detect_overlay_in_frame(target)
+    return target, det
 
 
 def _is_valid_fen_placement(fen: str) -> bool:
@@ -337,6 +435,12 @@ def preview_real_overlay_extractions(
     Returns a list of dicts with clip_id, video_id, crop as base64,
     auto-labeled FEN, and status information for user review.
 
+    For each clip, reads the local video at start_time (giving a distinct
+    frame per clip — no duplicate stills).  Falls back to YouTube thumbnails
+    (img.youtube.com/vi/{id}/{0-3}.jpg, all 4 tried, first with overlay wins)
+    when the local video is unavailable.  Stored overlay_bbox values are
+    intentionally ignored so scanner improvements are picked up automatically.
+
     When *video_ids* is provided only clips belonging to those videos are
     returned — this is much faster than processing the entire table.
     """
@@ -344,8 +448,7 @@ def preview_real_overlay_extractions(
         with conn.cursor() as cur:
             if video_ids:
                 cur.execute(
-                    """SELECT id, video_id, start_time, end_time,
-                              overlay_bbox, ref_resolution
+                    """SELECT id, video_id, clip_index, start_time, end_time
                        FROM video_clips
                        WHERE video_id = ANY(%s)
                        ORDER BY id
@@ -354,8 +457,7 @@ def preview_real_overlay_extractions(
                 )
             else:
                 cur.execute(
-                    """SELECT id, video_id, start_time, end_time,
-                              overlay_bbox, ref_resolution
+                    """SELECT id, video_id, clip_index, start_time, end_time
                        FROM video_clips
                        ORDER BY id
                        LIMIT %s""",
@@ -364,56 +466,57 @@ def preview_real_overlay_extractions(
             rows = cur.fetchall()
 
     results: list[dict] = []
+    # Thumbnail fallback cache: only used when no local video is available.
+    # All clips from the same video share the same thumbnail result.
+    video_thumb_cache: dict[str, tuple[np.ndarray | None, OverlayDetection | None]] = {}
 
     for row in rows:
-        clip_id, video_id, start_time, end_time, overlay_bbox_raw, ref_res_raw = row
+        clip_id, video_id, clip_index, start_time, end_time = row
         entry: dict = {
             "clip_id": clip_id,
             "video_id": video_id,
             "status": "pending",
         }
 
-        try:
-            bx, by, bw, bh = _parse_bbox(overlay_bbox_raw)
-            ref_w, ref_h = _parse_ref_res(ref_res_raw)
-        except Exception as e:
-            entry["status"] = "error"
-            entry["error"] = f"bad bbox/ref: {e}"
-            results.append(entry)
-            continue
+        frame: np.ndarray | None = None
+        det: OverlayDetection | None = None
 
+        # Primary: local video, trying a few timestamps within the clip range
+        # so a bad transition frame at start_time doesn't ruin the preview.
         video_path = _get_video_path(video_id)
-        if video_path is None:
+        if video_path is not None:
+            frame, det = _detect_from_video(video_path, start_time, end_time)
+
+        # Fallback: YouTube thumbnails (cached per video to avoid redundant requests).
+        if frame is None:
+            if video_id not in video_thumb_cache:
+                video_thumb_cache[video_id] = _find_overlay_thumbnail(video_id)
+            frame, det = video_thumb_cache[video_id]
+
+        if frame is None:
             entry["status"] = "error"
-            entry["error"] = "video not found"
+            entry["error"] = "no video source available (local video missing, thumbnails failed)"
             results.append(entry)
             continue
 
-        mid_time = (start_time + (end_time or start_time + 30)) / 2
-
-        cap = cv2.VideoCapture(video_path)
-        fps = max(cap.get(cv2.CAP_PROP_FPS), 1)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(mid_time * fps))
-        ret, frame = cap.read()
-        cap.release()
-
-        if not ret or frame is None:
-            entry["status"] = "error"
-            entry["error"] = "could not read frame"
+        if not det.found or det.bbox is None:
+            # Show the full thumbnail so the user can see what the frame looks like.
+            entry["image_b64"] = _frame_to_base64(frame, max_width=400)
+            entry["status"] = "no_overlay"
             results.append(entry)
             continue
 
+        bx, by, bw, bh = det.bbox
         fh, fw = frame.shape[:2]
-        sx, sy = fw / ref_w, fh / ref_h
-        ox, oy = int(bx * sx), int(by * sy)
-        ow, oh = int(bw * sx), int(bh * sy)
-        x1, y1 = max(0, ox), max(0, oy)
-        x2, y2 = min(fw, ox + ow), min(fh, oy + oh)
+        x1 = max(0, bx)
+        y1 = max(0, by)
+        x2 = min(fw, bx + bw)
+        y2 = min(fh, by + bh)
         crop = frame[y1:y2, x1:x2]
 
         if crop.size == 0:
             entry["status"] = "error"
-            entry["error"] = "empty crop"
+            entry["error"] = "empty crop after detection"
             results.append(entry)
             continue
 
@@ -422,7 +525,7 @@ def preview_real_overlay_extractions(
         grid = detect_grid(crop)
         if grid is None:
             entry["status"] = "error"
-            entry["error"] = "grid detection failed"
+            entry["error"] = "grid detection failed on detected crop"
             results.append(entry)
             continue
 
@@ -433,6 +536,15 @@ def preview_real_overlay_extractions(
         except Exception as e:
             entry["status"] = "error"
             entry["error"] = f"classification failed: {e}"
+            results.append(entry)
+            continue
+
+        # Fewer than 2 classified pieces means the crop is almost certainly
+        # a false positive (flag, scoreboard) — real boards always have kings.
+        piece_count = sum(c != 0 for row in class_grid for c in row)
+        if piece_count < 2:
+            entry["image_b64"] = _frame_to_base64(frame, max_width=400)
+            entry["status"] = "no_overlay"
             results.append(entry)
             continue
 

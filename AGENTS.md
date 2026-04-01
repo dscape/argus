@@ -62,7 +62,7 @@ For long-running tasks (generation, extraction), use the in-memory job pattern:
 ## Key Conventions
 
 - Python 3.10+, Ruff formatter (100 char lines), mypy strict mode
-- React/Next.js with shadcn/ui components
+- React/Next.js
 - PostgreSQL for persistence, in-memory dicts for ephemeral job state
 - Run `make format` before committing
 - **Validation**: Before completing any task that modifies code, always run `make typecheck` (covers both Python/mypy and TypeScript/tsc), `make lint`, and `make test` — both must pass with 0 errors
