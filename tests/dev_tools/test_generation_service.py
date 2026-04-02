@@ -3,7 +3,7 @@
 from unittest.mock import patch
 
 import pytest
-from api.services import generation_service
+from api.services.data import generation_service
 
 
 @pytest.fixture(autouse=True)
@@ -23,14 +23,14 @@ class TestGetStatus:
 
 
 class TestStartGeneration:
-    @patch("api.services.generation_service._run_generation")
+    @patch("api.services.data.generation_service._run_generation")
     def test_start_returns_running(self, mock_run):
         status = generation_service.start_generation(num_clips=10)
         assert status["status"] == "running"
         assert status["num_clips"] == 10
         assert status["completed"] == 0
 
-    @patch("api.services.generation_service._run_generation")
+    @patch("api.services.data.generation_service._run_generation")
     def test_cannot_start_while_running(self, mock_run):
         generation_service.start_generation(num_clips=10)
         with pytest.raises(ValueError, match="already in progress"):
@@ -42,7 +42,7 @@ class TestStopGeneration:
         result = generation_service.stop_generation()
         assert result["status"] == "no_job_running"
 
-    @patch("api.services.generation_service._run_generation")
+    @patch("api.services.data.generation_service._run_generation")
     def test_stop_sets_cancel_event(self, mock_run):
         generation_service.start_generation(num_clips=10)
         generation_service.stop_generation()

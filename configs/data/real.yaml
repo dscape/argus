@@ -1,7 +1,7 @@
 name: real
 type: video
-video_dir: data/real_videos
-annotation_dir: data/real_annotations
+video_dir: data/argus/real_videos
+annotation_dir: data/argus/real_annotations
 clip_length: 200
 fps: 1.0
 augmentations:

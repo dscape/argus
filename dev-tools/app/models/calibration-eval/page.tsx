@@ -1,7 +1,5 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import CalibrationEvalInspector from "@/components/CalibrationEvalInspector";
-
-export default function CalibrationEvalPage() {
-  return <CalibrationEvalInspector />;
+export default function CalibrationEvalRedirect() {
+  redirect("/evaluate/calibration");
 }

@@ -47,7 +47,7 @@ NUM_CLASSES = len(CLASS_NAMES)
 PIECE_TYPES = [chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING]
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DATASET_DIR = _PROJECT_ROOT / "data" / "piece_classifier_dataset"
+DATASET_DIR = _PROJECT_ROOT / "data" / "overlay" / "dataset" / "crops"
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +286,7 @@ def generate_dataset(
     """Generate a balanced dataset of piece square crops.
 
     If *output_dir* is given, saves the dataset there. Defaults to
-    ``data/piece_classifier_dataset/``.
+    ``data/overlay/dataset/``.
 
     Returns (images, labels) where:
     - images: (N, size, size, 3) uint8 BGR

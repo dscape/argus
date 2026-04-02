@@ -191,7 +191,7 @@ Hard cut detection splits clip segments when a video abruptly changes between ga
 python -m pipeline generate-clips --channel @STLChessClub --limit 1 -v
 
 # 3. Inspect a generated clip — verify move_confidence is present
-python -m pipeline inspect-clip --file data/training_clips/overlay_VIDEO_ID_0.pt
+python -m pipeline inspect-clip --file data/argus/training_clips/overlay_VIDEO_ID_0.pt
 
 # 4. Use the dev-tools Video Annotator (localhost:3000/videos/VIDEO_ID):
 #    - Open the video and run "Detect Moves"
@@ -223,7 +223,7 @@ python -m pipeline auto-calibrate --channel @NewChannel --apply
 
 ### Validating AI Screening
 
-The AI screening classifier automates the 3-way video review (overlay / otb_only / reject). Vertical videos are auto-rejected. Pre-trained weights are committed in `weights/ai_screening/`.
+The AI screening classifier automates the 3-way video review (overlay / otb_only / reject). Vertical videos are auto-rejected. Pre-trained weights are committed in `weights/screening/`.
 
 #### Model versioning
 
@@ -231,29 +231,29 @@ Versions follow the format `v{code}r{revision}` (e.g. `v2r3`):
 - **Code version** (`MODEL_CODE_VERSION` in `ai_classifier.py`): bump when architecture or feature extraction changes
 - **Revision**: auto-incremented on each training run
 
-Weights are saved to `weights/ai_screening/{version}.pt` and should be committed to the repo so the model is always available without retraining.
+Weights are saved to `weights/screening/{version}.pt` and should be committed to the repo so the model is always available without retraining.
 
 #### Training workflow
 
 ```bash
-# 1. Run the DB migration first (adds ai_screening_* columns)
+# 1. Run the DB migration first (adds screening columns)
 #    This runs automatically on API startup, or manually:
 #    psql $DATABASE_URL -f pipeline/db/migrations/002_add_ai_screening.sql
 
 # 2. Pre-compute DINOv2 features for all labelled videos
 #    This is the slow step (~4s/video, network-bound). Resumable — skips cached.
-#    Features are cached in data/ai_screening_cache/ (not committed).
+#    Features are cached in data/screening/dataset/torch/ (not committed).
 python -m pipeline ai-extract --device mps  # use 'cuda' on Linux, 'cpu' as fallback
 
 # 3. Train the classifier head (fast, ~30s — operates on cached features)
-#    Saves weights to both data/ (ephemeral) and weights/ai_screening/ (committed)
+#    Saves weights to both data/screening/checkpoints/ (ephemeral) and weights/screening/ (committed)
 python -m pipeline ai-train --epochs 50
 
 # 4. Evaluate and calibrate the confidence threshold
 python -m pipeline ai-eval --target-precision 0.95
 
 # 5. Verify in the dev-tools UI
-#    Models > AI Screening > "Sample & Inspect" — runs model on 20 random
+#    Evaluate > Screening > "Sample & Inspect" — runs model on 20 random
 #    labeled videos and shows accuracy, model vs human label per video,
 #    title score, and vertical detection
 
@@ -261,8 +261,8 @@ python -m pipeline ai-eval --target-precision 0.95
 python -m pipeline ai-screen --limit 10 --threshold 0.90
 
 # 7. Commit the new weights
-git add weights/ai_screening/
-git commit -m "ai-screening: train v2r3 (95% accuracy on N samples)"
+git add weights/screening/
+git commit -m "screening: train v2r3 (95% accuracy on N samples)"
 ```
 
 #### Running in Docker
@@ -282,20 +282,20 @@ make docker-ai-extract-status
 | Feature | Where to verify in dev-tools |
 |---------|------------------------------|
 | **Hard cuts** | `/videos/VIDEO_ID` → run "Detect Moves" → check segment count and per-move confidence in the move list |
-| **Auto-calibration** | `POST /api/calibration/{channel}/propose` → compare returned bboxes with manual calibration. Or use the Calibration Editor page to view/edit proposed values |
-| **AI screening** | Models > AI Screening > "Sample & Inspect" — shows model prediction vs human label per video with accuracy summary. Also available per-video at `/videos/VIDEO_ID` > Info > "Run AI Screen" |
+| **Auto-calibration** | `POST /api/calibration/{channel}/propose` → compare returned bboxes with manual calibration. Or use the Annotate > Calibrate page to view/edit proposed values |
+| **AI screening** | Evaluate > Screening > "Sample & Inspect" — shows model prediction vs human label per video with accuracy summary. Also available per-video at `/videos/VIDEO_ID` > Info > "Run AI Screen" |
 
 ---
 
 ## How to Add a New Dev Tool
 
-The dev tools follow a **router -> service -> pipeline module** pattern. Every web tool should have a CLI equivalent.
+The dev tools follow a **router -> service -> pipeline module** pattern organized by section. Every web tool should have a CLI equivalent.
 
-1. **Service** (`dev-tools/api/services/<name>_service.py`): Business logic wrapping `pipeline.*` modules
-2. **Router** (`dev-tools/api/routers/<name>.py`): FastAPI endpoints calling the service
+1. **Service** (`dev-tools/api/services/{videos,annotate,data,evaluate}/<name>_service.py`): Business logic wrapping `pipeline.*` modules
+2. **Router** (`dev-tools/api/routers/{videos,annotate,data,evaluate}/<name>.py`): FastAPI endpoints calling the service
 3. **Register** in `dev-tools/api/main.py`: `app.include_router()`
-4. **Page** (`dev-tools/app/<name>/page.tsx`): React page consuming the API
-5. **Link** from dashboard (`dev-tools/app/page.tsx`)
+4. **Page** (`dev-tools/app/{videos,annotate,data,evaluate}/<name>/page.tsx`): React page consuming the API
+5. **Navigation**: Add tab to the section layout or sidebar item in `dev-tools/components/IconSidebar.tsx`
 6. **CLI parity**: Add or verify a matching CLI command in `pipeline/cli.py`
 
-Reusable UI components live in `dev-tools/components/` — check `BboxDrawer`, `ChessBoard`, `MoveList`, and `FileUpload` before building new ones.
+Reusable UI components live in `dev-tools/components/` — check `ChessBoard`, `FileUpload`, and `video-shared` before building new ones. Section-specific components are in `dev-tools/components/{videos,annotate,data,evaluate}/`.

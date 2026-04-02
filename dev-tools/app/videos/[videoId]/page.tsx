@@ -42,11 +42,11 @@ import type {
   AutoSegmentResponse,
   AutoCalibrateResponse,
 } from "@/lib/types";
-import { BboxDrawer, type Bbox } from "@/components/BboxDrawer";
+import { BboxDrawer, type Bbox } from "@/components/videos/BboxDrawer";
 import { ChessBoard } from "@/components/ChessBoard";
 import { statusBadge, scoreColor, youtubeThumb, StatusDropdown } from "@/components/video-shared";
 import type { VideoWithReason } from "@/components/video-shared";
-import VideoCard, { type InspectResult } from "@/components/VideoCard";
+import VideoCard, { type InspectResult } from "@/components/evaluate/VideoCard";
 
 // ── Step definitions ────────────────────────────────────────
 
@@ -80,11 +80,11 @@ export default function VideoWorkbenchPage() {
         if (s.channel) params.set("channel", s.channel);
         if (s.page > 0) params.set("page", String(s.page));
         const qs = params.toString();
-        router.push(`/videos${qs ? `?${qs}` : ""}`);
+        router.push(`/videos/browse${qs ? `?${qs}` : ""}`);
         return;
       }
     } catch { /* ignore */ }
-    router.push("/videos");
+    router.push("/videos/browse");
   };
 
   const [video, setVideo] = useState<CrawlVideo | null>(null);
@@ -1425,7 +1425,7 @@ function InspectStep({ video }: { video: CrawlVideo }) {
 
   // Try to find existing clips for this video
   useEffect(() => {
-    // Check for .pt files in data/training_clips matching this video
+    // Check for .pt files in data/argus/training_clips matching this video
     // We'll use the generate endpoint's returned data if available,
     // or the user can generate first then come here
   }, [video.video_id]);

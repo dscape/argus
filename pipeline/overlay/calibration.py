@@ -14,7 +14,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = os.path.join("configs", "pipeline", "overlay_layouts.yaml")
+CONFIG_PATH = os.path.join("configs", "annotate", "overlay_layouts.yaml")
 
 # Common board themes: hex colors for light/dark squares.
 BOARD_THEMES: dict[str, dict[str, str]] = {

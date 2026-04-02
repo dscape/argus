@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
-export default function ModelsPage() {
-  redirect("/models/screening");
+export default function ModelsRedirect() {
+  redirect("/evaluate");
 }

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _VIDEO_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{8,15}$")
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-FRAME_CACHE_DIR = os.path.join(_PROJECT_ROOT, "data", "frame_cache")
+FRAME_CACHE_DIR = os.path.join(_PROJECT_ROOT, "data", "screening", "dataset", "frames")
 
 # YouTube auto-generated frame URLs (publicly accessible, no API quota).
 # hq variants serve 480x360 (vs 120x90 for plain 1/2/3.jpg).

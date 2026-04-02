@@ -1,7 +1,5 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import AiScreeningInspector from "@/components/AiScreeningInspector";
-
-export default function ScreeningPage() {
-  return <AiScreeningInspector />;
+export default function ScreeningRedirect() {
+  redirect("/evaluate/screening");
 }

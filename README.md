@@ -149,8 +149,8 @@ Generate synthetic data and train a model. No database or API keys needed.
 make up
 
 # Generate synthetic training data
-make datagen ARGS="--num-clips 100 --output-dir data/train --image-size 64"
-make datagen ARGS="--num-clips 20 --output-dir data/val --image-size 64"
+make datagen ARGS="--num-clips 100 --output-dir data/argus/train --image-size 64"
+make datagen ARGS="--num-clips 20 --output-dir data/argus/val --image-size 64"
 
 # Train Phase 1 (move detection)
 make train ARGS="data.data_dir=data training.wandb.enabled=false"
@@ -173,12 +173,12 @@ make screen            # Title filter + frame sampling for overlay/OTB detection
 
 # AI-assisted screening (optional — train once, then auto-screen)
 python -m pipeline ai-extract --device mps   # Pre-compute DINOv2 features (~4s/video)
-python -m pipeline ai-train                  # Train classifier (saves to weights/ai_screening/)
+python -m pipeline ai-train                  # Train classifier (saves to weights/screening/)
 python -m pipeline ai-eval                   # Evaluate accuracy + calibrate threshold
 python -m pipeline ai-screen --threshold 0.90  # Auto-screen new videos
 
-# Pre-trained weights are committed in weights/ai_screening/ with versioned
-# filenames (e.g. v2r1.pt). See weights/ai_screening/metadata.json for details.
+# Pre-trained weights are committed in weights/screening/ with versioned
+# filenames (e.g. v2r1.pt). See weights/screening/metadata.json for details.
 
 # Auto-calibrate new channels (instead of manual bbox drawing)
 python -m pipeline auto-calibrate --channel @NewChannel --apply
@@ -250,7 +250,7 @@ graph TD
 
 | # | Stage | Command | What it does |
 |---|-------|---------|-------------|
-| 1 | Seed | `make seed-channels` | Load YouTube channels from `configs/pipeline/channels.yaml` into PostgreSQL |
+| 1 | Seed | `make seed-channels` | Load YouTube channels from `configs/videos/channels.yaml` into PostgreSQL |
 | 2 | Crawl | `make crawl` | Fetch video metadata from ~40 YouTube channels via playlistItems API |
 | 3 | Screen | `make screen` | Title keyword filter + frame sampling to detect 2D overlay and OTB camera footage |
 | 3b | AI Screen | `python -m pipeline ai-screen` | DINOv2-based 3-way classifier (overlay / otb_only / reject). High-confidence auto-decides; low-confidence queued for manual review |
@@ -266,7 +266,7 @@ Videos are screened in up to three passes:
 2. **Dual-region detection** — frame sampling to detect both:
    - **2D overlay** — rendered board overlay (lichess, chess.com streams) via pixel regularity analysis
    - **OTB footage** — over-the-board camera footage
-3. **AI classifier** (optional) — a frozen DINOv2 encoder extracts features from 4 YouTube thumbnails (480x360 hq variants) per video, concatenated with overlay scanner and OTB detector scores, then a small MLP head classifies into overlay / otb_only / reject with a confidence score. Vertical videos are auto-rejected. High-confidence predictions are auto-decided; low-confidence videos are queued for manual review. Model weights are committed in `weights/ai_screening/` with versioned filenames (e.g. `v2r1.pt`).
+3. **AI classifier** (optional) — a frozen DINOv2 encoder extracts features from 4 YouTube thumbnails (480x360 hq variants) per video, concatenated with overlay scanner and OTB detector scores, then a small MLP head classifies into overlay / otb_only / reject with a confidence score. Vertical videos are auto-rejected. High-confidence predictions are auto-decided; low-confidence videos are queued for manual review. Model weights are committed in `weights/screening/` with versioned filenames (e.g. `v2r1.pt`).
 
 Screening results are stored on `youtube_videos` as `screening_status`, `screening_confidence`, `overlay_bbox`, `has_otb_footage`, plus AI metadata in `ai_screening_class`, `ai_screening_confidence`, and `ai_screening_auto_decided`.
 
@@ -289,7 +289,7 @@ For videos with a 2D board overlay:
 | `piece_classifier.py` | DINOv2-based per-square piece classifier (99.83% accuracy). Classifies 64 squares in a single batch. |
 | `grid_detector.py` | Detects the 8x8 board grid using Sobel edge projection with HoughLinesP fallback. Handles borders and coordinate labels. |
 | `overlay_move_detector.py` | Compares FENs across frames with a stability window. Uses python-chess to find the legal move transforming old FEN to new FEN. Detects game resets and hard cuts (>4 squares changed = board switch). Assigns per-move confidence scores. |
-| `calibration.py` | Stores per-channel layout configs: overlay crop, camera crop, reference resolution, board flip, board theme. Persisted in `configs/pipeline/overlay_layouts.yaml`. |
+| `calibration.py` | Stores per-channel layout configs: overlay crop, camera crop, reference resolution, board flip, board theme. Persisted in `configs/annotate/overlay_layouts.yaml`. |
 | `auto_calibration.py` | Auto-proposes calibration from YouTube thumbnails: detects board theme (color sampling), orientation (piece distribution), and camera region (largest non-overlay area). |
 | `overlay_clip_generator.py` | Combines camera crops with overlay-detected moves to produce `.pt` files. Includes broadcast delay compensation, per-move confidence scores. |
 | `diagnostics.py` | `test_image()`, `test_reader()`, `inspect_clip()` — inspection and debugging tools. |
@@ -322,8 +322,8 @@ Uses plain argparse (not Hydra). Entry point: `scripts/generate_data.py`.
 make blender-server
 
 # Generate data
-make datagen ARGS="--num-clips 5000 --output-dir data/train"
-make datagen ARGS="--num-clips 500 --output-dir data/val"
+make datagen ARGS="--num-clips 5000 --output-dir data/argus/train"
+make datagen ARGS="--num-clips 500 --output-dir data/argus/val"
 
 # Smaller for local development
 make datagen ARGS="--num-clips 100 --output-dir data/dev --image-size 64"
@@ -469,7 +469,7 @@ DINOv2-base (frozen) + MLP head classifying individual board squares into 13 cla
 
 ```bash
 # Train with feature caching (seconds per epoch after initial extraction)
-make train-pieces ARGS="--chess-positions-dir data/chess_positions/train --epochs 20"
+make train-pieces ARGS="--chess-positions-dir data/overlay/train --epochs 20"
 ```
 
 Feature caching pre-computes DINOv2 embeddings once, then trains only the MLP head on cached 768-D vectors.
@@ -478,10 +478,10 @@ Feature caching pre-computes DINOv2 embeddings once, then trains only the MLP he
 
 ```bash
 # Evaluate on chess-positions test set
-.venv/bin/python scripts/eval_chess_positions.py data/chess_positions/test --limit 1000
+.venv/bin/python scripts/eval_chess_positions.py data/overlay/val --limit 1000
 
 # Auto-add failing boards to test fixtures
-.venv/bin/python scripts/eval_chess_positions.py data/chess_positions/test --add-failures
+.venv/bin/python scripts/eval_chess_positions.py data/overlay/val --add-failures
 ```
 
 ### Data Setup
@@ -489,8 +489,8 @@ Feature caching pre-computes DINOv2 embeddings once, then trains only the MLP he
 The chess-positions dataset is not included in the repo. Extract from the downloaded zip:
 
 ```bash
-mkdir -p data/chess_positions
-cd data/chess_positions && unzip ~/Downloads/ChessPositions.zip "train/*" "test/*"
+mkdir -p data/overlay
+cd data/overlay && unzip ~/Downloads/ChessPositions.zip "train/*" "test/*"
 ```
 
 ---
@@ -771,7 +771,7 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 | Command | Makefile | Description | Key Options |
 |---------|----------|-------------|-------------|
 | `db-init` | `make db-up` (includes schema) | Apply database schema | |
-| `seed-channels` | `make seed-channels` | Load `configs/pipeline/channels.yaml` | |
+| `seed-channels` | `make seed-channels` | Load `configs/videos/channels.yaml` | |
 | `resolve-channels` | — | Resolve @handles to YouTube channel IDs | |
 | `crawl` | `make crawl` | Crawl YouTube channels | `--channel @Handle`, `--refresh` |
 | `screen` | `make screen` | Screen videos for overlay + OTB | `--channel @Handle`, `--limit N` |
@@ -805,7 +805,7 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 
 | Target | Domain | Description | Example |
 |--------|--------|-------------|---------|
-| `make datagen` | Data Generation | Generate synthetic training data | `ARGS="--num-clips 5000 --output-dir data/train"` |
+| `make datagen` | Data Generation | Generate synthetic training data | `ARGS="--num-clips 5000 --output-dir data/argus/train"` |
 | `make train` | Training | Train model (Hydra config) | `ARGS="training=phase1_detection data.data_dir=data"` |
 | `make eval` | Training | Evaluate model | `ARGS="--checkpoint outputs/ckpt.pt --num-clips 200"` |
 | `make infer` | Inference | Run inference on video | `ARGS="--video file.mp4 --checkpoint ckpt.pt --output-dir pgns/"` |
@@ -862,9 +862,8 @@ configs/
 Pipeline configs are plain YAML files, not Hydra:
 
 ```
-configs/pipeline/
-├── channels.yaml              # ~40 YouTube channels across 5 tiers
-└── overlay_layouts.yaml       # Per-channel overlay/camera calibrations
+configs/videos/channels.yaml           # ~40 YouTube channels across 5 tiers
+configs/annotate/overlay_layouts.yaml   # Per-channel overlay/camera calibrations
 ```
 
 ### Environment Variables
@@ -878,7 +877,7 @@ Copy `.env.example` to `.env` and fill in:
 
 ### Channel Tiers
 
-The pipeline crawls YouTube channels organized into 5 tiers in `configs/pipeline/channels.yaml`:
+The pipeline crawls YouTube channels organized into 5 tiers in `configs/videos/channels.yaml`:
 
 | Tier | Type | Examples |
 |------|------|---------|
@@ -948,7 +947,7 @@ erDiagram
 ```
 argus/
 ├── weights/                                    # Committed model weights (versioned)
-│   └── ai_screening/                           #   AI screening classifier
+│   └── screening/                              #   AI screening classifier
 │       ├── best.pt                             #     Current best checkpoint
 │       ├── v2r1.pt                             #     Versioned: code v2, training revision 1
 │       └── metadata.json                       #     Version, accuracy, training details

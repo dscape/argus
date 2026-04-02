@@ -27,7 +27,7 @@ from pipeline.overlay.piece_classifier import (
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-FEATURE_CACHE_DIR = _PROJECT_ROOT / "data" / "piece_classifier_features"
+FEATURE_CACHE_DIR = _PROJECT_ROOT / "data" / "overlay" / "dataset" / "torch"
 
 _NORM_MEAN = torch.tensor(IMAGENET_MEAN, dtype=torch.float32).view(1, 3, 1, 1)
 _NORM_STD = torch.tensor(IMAGENET_STD, dtype=torch.float32).view(1, 3, 1, 1)

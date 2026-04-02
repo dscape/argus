@@ -6,7 +6,7 @@ import yaml
 
 from pipeline.db.connection import get_conn
 
-CHANNELS_CONFIG = os.path.join("configs", "pipeline", "channels.yaml")
+CHANNELS_CONFIG = os.path.join("configs", "videos", "channels.yaml")
 
 
 def seed_channels(config_path: str = CHANNELS_CONFIG):

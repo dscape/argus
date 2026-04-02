@@ -6,10 +6,10 @@ and optionally copies failing boards into the test fixtures directory so
 they become regression tests.
 
 Usage:
-    .venv/bin/python scripts/eval_chess_positions.py data/chess_positions/test
-    .venv/bin/python scripts/eval_chess_positions.py data/chess_positions/test --add-failures
-    .venv/bin/python scripts/eval_chess_positions.py data/chess_positions/test --add-fixtures 20
-    .venv/bin/python scripts/eval_chess_positions.py data/chess_positions/test --limit 500
+    .venv/bin/python scripts/eval_chess_positions.py data/overlay/val
+    .venv/bin/python scripts/eval_chess_positions.py data/overlay/val --add-failures
+    .venv/bin/python scripts/eval_chess_positions.py data/overlay/val --add-fixtures 20
+    .venv/bin/python scripts/eval_chess_positions.py data/overlay/val --limit 500
 """
 
 from __future__ import annotations

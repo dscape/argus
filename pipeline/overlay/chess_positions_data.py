@@ -22,7 +22,7 @@ from pipeline.overlay.piece_classifier_data import CLASS_NAMES, NUM_CLASSES
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-CHESS_POSITIONS_DIR = _PROJECT_ROOT / "data" / "chess_positions"
+CHESS_POSITIONS_DIR = _PROJECT_ROOT / "data" / "overlay"
 
 BOARD_SIZE = 400
 SQ_SIZE = 50

@@ -1,7 +1,5 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import AutoCalibrationInspector from "@/components/AutoCalibrationInspector";
-
-export default function CalibrationPage() {
-  return <AutoCalibrationInspector />;
+export default function CalibrationRedirect() {
+  redirect("/annotate/calibrate");
 }

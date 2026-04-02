@@ -2,7 +2,7 @@ defaults:
   - model: argus_base
   - data: synthetic
   - training: phase1_detection
-  - eval: default
+  - evaluate: default
   - _self_
 
 seed: 42

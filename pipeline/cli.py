@@ -497,7 +497,9 @@ def cmd_ai_extract_status(args):
     cache_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "data",
-        "ai_screening_cache",
+        "screening",
+        "dataset",
+        "torch",
     )
 
     labels = {0: 0, 1: 0, 2: 0}

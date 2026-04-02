@@ -7,8 +7,8 @@ import { getVideoCounts } from "@/lib/api";
 
 const navItems = [
   {
-    href: "/synthetic",
-    label: "Synthetic",
+    href: "/videos",
+    label: "Videos",
     icon: (
       <svg
         viewBox="0 0 24 24"
@@ -19,35 +19,16 @@ const navItems = [
         strokeLinejoin="round"
         className="w-5 h-5"
       >
-        <path d="M12 3l7 4v6.5a2 2 0 01-1 1.73L12 19l-6-3.77A2 2 0 015 13.5V7l7-4z" />
-        <path d="M12 12L5 7.5" />
-        <path d="M12 12l7-4.5" />
-        <path d="M12 12v7.5" />
+        <rect x="2" y="4" width="20" height="16" rx="2" />
+        <line x1="2" y1="8" x2="22" y2="8" />
+        <line x1="8" y1="4" x2="8" y2="8" />
+        <polygon points="10,12 10,18 16,15" fill="currentColor" stroke="none" />
       </svg>
     ),
   },
   {
-    href: "/models",
-    label: "Models",
-    icon: (
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="w-5 h-5"
-      >
-        <path d="M9.5 2A2.5 2.5 0 0112 4.5V6a2 2 0 002 2h1.5A2.5 2.5 0 0118 10.5v0a2.5 2.5 0 01-2.5 2.5H14a2 2 0 00-2 2v1.5a2.5 2.5 0 01-5 0V15a2 2 0 00-2-2H3.5A2.5 2.5 0 011 10.5v0A2.5 2.5 0 013.5 8H5a2 2 0 002-2V4.5A2.5 2.5 0 019.5 2z" />
-        <circle cx="17.5" cy="17.5" r="3.5" />
-        <path d="M22 22l-1.5-1.5" />
-      </svg>
-    ),
-  },
-  {
-    href: "/screen",
-    label: "Screen",
+    href: "/annotate",
+    label: "Annotate",
     hasBadge: true,
     icon: (
       <svg
@@ -66,8 +47,8 @@ const navItems = [
     ),
   },
   {
-    href: "/crawl",
-    label: "Crawl",
+    href: "/data",
+    label: "Data",
     icon: (
       <svg
         viewBox="0 0 24 24"
@@ -78,25 +59,16 @@ const navItems = [
         strokeLinejoin="round"
         className="w-5 h-5"
       >
-        {/* Spider body */}
-        <ellipse cx="12" cy="11" rx="3" ry="3.5" />
-        <circle cx="12" cy="7" r="1.5" />
-        {/* Left legs */}
-        <path d="M9 9.5C7 8.5 5 7 4 5" />
-        <path d="M9 11C6.5 11 4 11.5 2 12.5" />
-        <path d="M9 12.5C7 13.5 5 15 4 17" />
-        <path d="M9.5 14C8 15.5 7 17.5 6.5 20" />
-        {/* Right legs */}
-        <path d="M15 9.5C17 8.5 19 7 20 5" />
-        <path d="M15 11C17.5 11 20 11.5 22 12.5" />
-        <path d="M15 12.5C17 13.5 19 15 20 17" />
-        <path d="M14.5 14C16 15.5 17 17.5 17.5 20" />
+        <path d="M12 3l7 4v6.5a2 2 0 01-1 1.73L12 19l-6-3.77A2 2 0 015 13.5V7l7-4z" />
+        <path d="M12 12L5 7.5" />
+        <path d="M12 12l7-4.5" />
+        <path d="M12 12v7.5" />
       </svg>
     ),
   },
   {
-    href: "/videos",
-    label: "Videos",
+    href: "/evaluate",
+    label: "Evaluate",
     icon: (
       <svg
         viewBox="0 0 24 24"
@@ -107,10 +79,9 @@ const navItems = [
         strokeLinejoin="round"
         className="w-5 h-5"
       >
-        <rect x="2" y="4" width="20" height="16" rx="2" />
-        <line x1="2" y1="8" x2="22" y2="8" />
-        <line x1="8" y1="4" x2="8" y2="8" />
-        <polygon points="10,12 10,18 16,15" fill="currentColor" stroke="none" />
+        <path d="M9.5 2A2.5 2.5 0 0112 4.5V6a2 2 0 002 2h1.5A2.5 2.5 0 0118 10.5v0a2.5 2.5 0 01-2.5 2.5H14a2 2 0 00-2 2v1.5a2.5 2.5 0 01-5 0V15a2 2 0 00-2-2H3.5A2.5 2.5 0 011 10.5v0A2.5 2.5 0 013.5 8H5a2 2 0 002-2V4.5A2.5 2.5 0 019.5 2z" />
+        <circle cx="17.5" cy="17.5" r="3.5" />
+        <path d="M22 22l-1.5-1.5" />
       </svg>
     ),
   },

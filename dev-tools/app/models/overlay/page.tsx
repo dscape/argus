@@ -1,7 +1,5 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import OverlayInspector from "@/components/OverlayInspector";
-
-export default function OverlayPage() {
-  return <OverlayInspector />;
+export default function OverlayRedirect() {
+  redirect("/evaluate/overlay");
 }

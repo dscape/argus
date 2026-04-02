@@ -27,8 +27,16 @@ logger = logging.getLogger(__name__)
 MAX_RENDERED_SQUARE_VARIANCE = 25.0
 
 # Minimum ratio of low-variance cells to consider a region as a rendered board.
-# 8x8 = 64 cells; we require at least ~50 to be low-variance (pieces add variance).
-MIN_LOW_VARIANCE_RATIO = 0.55
+# 8x8 = 64 cells; we require at least ~29 to be low-variance.  Piece-heavy
+# mid-game positions (e.g. chess24 overlays with detailed graphics) can push
+# per-cell variance above the threshold on ~29 occupied cells, so we need
+# headroom.  False positives are controlled by check_alternating_pattern().
+MIN_LOW_VARIANCE_RATIO = 0.45
+
+# Maximum standard deviation of mean brightness across same-color
+# checkerboard positions (among low-variance cells).  Real boards
+# typically have std < 5; bodies and clothing have std > 20.
+MAX_SAME_COLOR_STD = 15.0
 
 # Timestamps (seconds) to sample frames from each video.
 # Skip first 30s to avoid intros.
@@ -131,6 +139,66 @@ def check_alternating_pattern(region: np.ndarray) -> bool:
     return alternation_count / total_pairs > 0.35
 
 
+def check_color_consistency(region: np.ndarray) -> bool:
+    """Check that low-variance cells at same checkerboard positions share consistent colors.
+
+    On a rendered board, all empty light squares are the same color and all
+    empty dark squares are the same color.  False positives (arms, clothing,
+    UI panels) fail this because cells at matching checkerboard positions
+    span a wide range of brightnesses.
+
+    Only considers low-variance cells (likely empty squares) to avoid being
+    thrown off by pieces.
+    """
+    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY) if len(region.shape) == 3 else region
+    h, w = gray.shape
+    cell_h = h // 8
+    cell_w = w // 8
+
+    if cell_h < 4 or cell_w < 4:
+        return False
+
+    margin_y = max(1, cell_h // 6)
+    margin_x = max(1, cell_w // 6)
+    inner_h = cell_h - 2 * margin_y
+    inner_w = cell_w - 2 * margin_x
+
+    if inner_h <= 0 or inner_w <= 0:
+        return False
+
+    trimmed = gray[: cell_h * 8, : cell_w * 8]
+    grid = trimmed.reshape(8, cell_h, 8, cell_w).transpose(0, 2, 1, 3)
+    inner = grid[:, :, margin_y : cell_h - margin_y, margin_x : cell_w - margin_x]
+    flat = inner.reshape(8, 8, -1).astype(np.float64)
+    variances = flat.var(axis=2)
+    means = flat.mean(axis=2)
+
+    # Collect means from low-variance cells, grouped by checkerboard position.
+    # Exclude near-black cells (mean < 15) — these are typically background
+    # or border pixels when the scan window extends beyond the actual board.
+    light_mask = np.zeros((8, 8), dtype=bool)
+    dark_mask = np.zeros((8, 8), dtype=bool)
+    for r in range(8):
+        for c in range(8):
+            if variances[r, c] < MAX_RENDERED_SQUARE_VARIANCE and means[r, c] > 15.0:
+                if (r + c) % 2 == 0:
+                    light_mask[r, c] = True
+                else:
+                    dark_mask[r, c] = True
+
+    light_means = means[light_mask]
+    dark_means = means[dark_mask]
+
+    # Need enough cells in each group to judge consistency.
+    if len(light_means) < 4 or len(dark_means) < 4:
+        return False
+
+    light_std = float(np.std(light_means))
+    dark_std = float(np.std(dark_means))
+
+    return light_std < MAX_SAME_COLOR_STD and dark_std < MAX_SAME_COLOR_STD
+
+
 def _expand_bbox(
     frame: np.ndarray,
     seed_bbox: tuple[int, int, int, int],
@@ -220,10 +288,24 @@ def _refine_alignment(
     best_score = compute_grid_regularity(gray[y : y + h, x : x + w])
     best = bbox
 
+    # Pass 1: coarse search (4px steps)
     step = 4
     for dx in range(-max_shift, max_shift + 1, step):
         for dy in range(-max_shift, max_shift + 1, step):
             nx, ny = x + dx, y + dy
+            if nx < 0 or ny < 0 or nx + w > fw or ny + h > fh:
+                continue
+            score = compute_grid_regularity(gray[ny : ny + h, nx : nx + w])
+            if score > best_score:
+                best_score = score
+                best = (nx, ny, w, h)
+
+    # Pass 2: fine search (1px steps around coarse best)
+    bx, by = best[0], best[1]
+    fine_shift = step - 1
+    for dx in range(-fine_shift, fine_shift + 1):
+        for dy in range(-fine_shift, fine_shift + 1):
+            nx, ny = bx + dx, by + dy
             if nx < 0 or ny < 0 or nx + w > fw or ny + h > fh:
                 continue
             score = compute_grid_regularity(gray[ny : ny + h, nx : nx + w])
@@ -344,6 +426,15 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
             if best_fraction < 0.50:
                 return OverlayDetection(found=False, frame_resolution=resolution)
 
+        # Candidates without the alternating pattern already passed the
+        # small-detection filter above, but may still be false positives
+        # (arms, bodies, UI panels).  Require consistent light/dark square
+        # colors — real boards always pass, bodies never do.
+        if not best_has_pattern:
+            bx, by, bw, bh = best_bbox
+            if not check_color_consistency(gray[by : by + bh, bx : bx + bw]):
+                return OverlayDetection(found=False, frame_resolution=resolution)
+
         # Scale bbox back to original resolution if frame was downscaled
         if scale_factor < 1.0:
             inv = 1.0 / scale_factor
@@ -460,9 +551,8 @@ def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
         # at low resolution usually don't after compression.
         gray_check = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
         bx, by, bw, bh = best_expanded
-        seed_has_pattern = check_alternating_pattern(
-            gray_check[by : by + bh, bx : bx + bw]
-        )
+        expanded_region = gray_check[by : by + bh, bx : bx + bw]
+        seed_has_pattern = check_alternating_pattern(expanded_region)
         seed_area = best_seed_bbox[2] * best_seed_bbox[3]
         seed_fraction = best_seed_bbox[2] / min(h, w)
         if (
@@ -470,6 +560,11 @@ def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
             and seed_fraction < 0.50
             and best_expanded_area <= seed_area * 1.2
         ):
+            return OverlayDetection(found=False, frame_resolution=resolution)
+
+        # Expanded detections without the alternating pattern may still be
+        # false positives.  Require consistent light/dark square colors.
+        if not seed_has_pattern and not check_color_consistency(expanded_region):
             return OverlayDetection(found=False, frame_resolution=resolution)
 
         # Fine-tune alignment so the 8x8 grid lines up precisely.

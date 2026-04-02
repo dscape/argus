@@ -1,7 +1,5 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import HardCutInspector from "@/components/HardCutInspector";
-
-export default function HardCutsPage() {
-  return <HardCutInspector />;
+export default function HardcutsRedirect() {
+  redirect("/annotate/hardcuts");
 }

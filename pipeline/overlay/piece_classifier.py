@@ -53,7 +53,7 @@ CLASS_TO_PIECE: dict[int, chess.Piece | None] = {
 }
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "piece_classifier"
+WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "overlay"
 
 
 # ---------------------------------------------------------------------------

@@ -37,12 +37,12 @@ def _mock_db_conn(video_rows):
 class TestErrorContractConsistency:
     """All results must have the same set of keys regardless of outcome."""
 
-    @patch("api.services.models_service.get_conn")
-    @patch("api.services.models_service.fetch_youtube_frames")
-    @patch("api.services.models_service.score_title")
+    @patch("api.services.evaluate.models_service.get_conn")
+    @patch("api.services.evaluate.models_service.fetch_youtube_frames")
+    @patch("api.services.evaluate.models_service.score_title")
     def test_thumbnail_failure_has_all_keys(self, mock_score, mock_frames, mock_conn):
         """When thumbnails can't be fetched, result still has all fields."""
-        from api.services.models_service import ai_screen_batch
+        from api.services.evaluate.models_service import ai_screen_batch
 
         mock_score.return_value = (False, 0.3)
         mock_conn.return_value = _mock_db_conn([("vid1", "test", None, None, None)])
@@ -54,12 +54,12 @@ class TestErrorContractConsistency:
         assert results[0]["error"] is not None
         assert results[0]["predicted_class"] is None
 
-    @patch("api.services.models_service.get_conn")
-    @patch("api.services.models_service.fetch_youtube_frames")
-    @patch("api.services.models_service.score_title")
+    @patch("api.services.evaluate.models_service.get_conn")
+    @patch("api.services.evaluate.models_service.fetch_youtube_frames")
+    @patch("api.services.evaluate.models_service.score_title")
     def test_exception_has_all_keys(self, mock_score, mock_frames, mock_conn):
         """When processing raises an exception, result still has all fields."""
-        from api.services.models_service import ai_screen_batch
+        from api.services.evaluate.models_service import ai_screen_batch
 
         mock_score.return_value = (False, 0.3)
         mock_conn.return_value = _mock_db_conn([("vid1", "test", None, None, None)])

@@ -1,0 +1,13 @@
+{
+  "code_version": "v1",
+  "revision": 6,
+  "version": "v1r6",
+  "trained_at": "2026-04-02T14:26:34.657076+00:00",
+  "best_val_accuracy": 0.9982,
+  "epochs": 20,
+  "train_size": 46800,
+  "val_size": 11700,
+  "seed": 42,
+  "chess_positions": true,
+  "feature_cached": true
+}

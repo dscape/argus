@@ -1,7 +1,5 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import SegmentationEvalInspector from "@/components/SegmentationEvalInspector";
-
-export default function SegmentationPage() {
-  return <SegmentationEvalInspector />;
+export default function SegmentationRedirect() {
+  redirect("/evaluate/segmentation");
 }

@@ -4,7 +4,7 @@
 Usage:
     .venv/bin/python scripts/train_piece_classifier.py [--epochs N] [--samples N]
     .venv/bin/python scripts/train_piece_classifier.py \\
-        --chess-positions-dir data/chess_positions/train
+        --chess-positions-dir data/overlay/train
 
 Supports two training modes:
 - **Feature-cached** (default): pre-compute DINOv2 embeddings once, then train
@@ -299,7 +299,7 @@ def main() -> None:
         "--chess-positions-dir",
         type=str,
         default=None,
-        help="Path to chess-positions train/ directory (e.g. data/chess_positions/train)",
+        help="Path to chess-positions train/ directory (e.g. data/overlay/train)",
     )
     parser.add_argument(
         "--chess-positions-samples",
