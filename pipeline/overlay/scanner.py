@@ -190,7 +190,7 @@ _P1_MIN_CONTRAST = 20.0
 # ~35 with many pieces.  OTB boards on vinyl surfaces score 38-52 due to 3D
 # lighting and piece shadows.  Threshold of 35 catches most rendered boards
 # while rejecting most OTB boards.
-MAX_CHECKERBOARD_STD = 35.0
+MAX_CHECKERBOARD_STD = 30.0
 
 
 def _checkerboard_std(gray: np.ndarray) -> float:
@@ -215,83 +215,30 @@ def _checkerboard_std(gray: np.ndarray) -> float:
     return max(float(np.std(light)), float(np.std(dark)))
 
 
-def _piece_aware_checkerboard_std(gray: np.ndarray) -> float:
-    """Piece-aware checkerboard std: only considers low-variance (empty) cells.
-
-    Pieces inflate per-cell brightness, making occupied squares differ from
-    empty squares of the same color.  By filtering to low-variance cells
-    (solid fills, i.e. empty squares on a rendered board), we get a cleaner
-    signal that separates rendered overlays from OTB boards.
-
-    Returns 999.0 if not enough empty cells to judge.
-    """
-    h, w = gray.shape
-    cell_h = h // 8
-    cell_w = w // 8
-    if cell_h < 4 or cell_w < 4:
-        return 999.0
-
-    margin_y = max(1, cell_h // 6)
-    margin_x = max(1, cell_w // 6)
-
-    trimmed = gray[: cell_h * 8, : cell_w * 8]
-    grid = trimmed.reshape(8, cell_h, 8, cell_w).transpose(0, 2, 1, 3)
-    inner = grid[:, :, margin_y: cell_h - margin_y, margin_x: cell_w - margin_x]
-    flat = inner.reshape(8, 8, -1).astype(np.float64)
-    variances = flat.var(axis=2)
-    means = flat.mean(axis=2)
-
-    # Only consider low-variance cells (empty rendered squares).
-    # Exclude near-black cells (background/border).
-    light_means: list[float] = []
-    dark_means: list[float] = []
-    for r in range(8):
-        for c in range(8):
-            if variances[r, c] < MAX_RENDERED_SQUARE_VARIANCE and means[r, c] > 15.0:
-                if (r + c) % 2 == 0:
-                    light_means.append(float(means[r, c]))
-                else:
-                    dark_means.append(float(means[r, c]))
-
-    # Need at least 3 cells per group to judge consistency.
-    if len(light_means) < 3 or len(dark_means) < 3:
-        return 999.0
-
-    return max(float(np.std(light_means)), float(np.std(dark_means)))
-
-
 def check_checkerboard_consistency(
     gray: np.ndarray,
     bbox: tuple[int, int, int, int],
 ) -> bool:
     """Check checkerboard consistency trying multiple sub-cell offsets.
 
-    Uses two strategies:
-    1. Standard checkerboard std (all cells) — strict threshold.
-    2. Piece-aware checkerboard std (only empty cells) — relaxed threshold.
-
     The coarse detection window may not align precisely with the actual
     board cells.  This tries offsets of ±half-cell in each direction
-    to find the best alignment, passing if ANY offset achieves low std.
+    to find the best alignment, passing if ANY offset achieves low
+    checkerboard std.
     """
     x, y, w, h_box = bbox
     fh, fw = gray.shape[:2]
     cell = w // 16  # half-cell offset
 
     best_std = 999.0
-    best_pa_std = 999.0
     for dy in range(-cell, cell + 1, max(1, cell // 2)):
         for dx in range(-cell, cell + 1, max(1, cell // 2)):
             nx, ny = x + dx, y + dy
             if nx < 0 or ny < 0 or nx + w > fw or ny + h_box > fh:
                 continue
-            region = gray[ny: ny + h_box, nx: nx + w]
-            s = _checkerboard_std(region)
+            s = _checkerboard_std(gray[ny: ny + h_box, nx: nx + w])
             if s < best_std:
                 best_std = s
-            pa = _piece_aware_checkerboard_std(region)
-            if pa < best_pa_std:
-                best_pa_std = pa
 
     return best_std <= MAX_CHECKERBOARD_STD
 
@@ -610,7 +557,7 @@ def _refine_alternation(
 
 
 def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
-    """Fast overlay presence check — under 200ms on 1080p.
+    """Fast overlay presence check — under 100ms on 1080p.
 
     Two-phase approach:
     1. Scan at downscaled resolution (810p) for speed using alternation check

@@ -27,7 +27,7 @@ from pipeline.overlay.chess_positions_data import (
 )
 from pipeline.overlay.grid_detector import GridResult, detect_grid
 from pipeline.overlay.piece_classifier import classify_squares, read_fen_with_grid
-from pipeline.overlay.scanner import fast_overlay_check
+from pipeline.overlay.scanner import detect_overlay_fast, fast_overlay_check
 
 logger = logging.getLogger(__name__)
 
@@ -436,8 +436,8 @@ def extract_overlay_from_frames(video_id: str) -> dict:
     Tries frames (25pct, 50pct, 75pct), preferring hi-res overlay frames
     from ``OVERLAY_FRAMES_DIR`` over low-res screening frames.
 
-    Pipeline per frame (~40ms): ``fast_overlay_check`` → crop to bbox →
-    ``detect_grid`` → if grid found, ``classify_squares`` → FEN.
+    Pipeline per frame: ``detect_overlay_fast`` (seed + expansion) →
+    crop to bbox → ``detect_grid`` → ``classify_squares`` → FEN.
 
     Returns a dict with ``status`` of ``ok``, ``warning``, or ``no_overlay``.
     """
@@ -446,8 +446,6 @@ def extract_overlay_from_frames(video_id: str) -> dict:
     if not _video_has_frames(video_id):
         return {"video_id": video_id, "status": "no_overlay"}
 
-    # Phase 1: fast_overlay_check all frames (~20ms each), collect candidates.
-    candidates: list[tuple[float, str, np.ndarray, tuple[int, int, int, int]]] = []
     for frame_name in _EXTRACTION_FRAME_NAMES:
         if f"{video_id}:{frame_name}" in saved_keys:
             continue
@@ -457,19 +455,12 @@ def extract_overlay_from_frames(video_id: str) -> dict:
         frame = cv2.imread(str(frame_path))
         if frame is None:
             continue
-        fast_det = fast_overlay_check(frame)
-        if fast_det.found and fast_det.bbox is not None:
-            candidates.append((fast_det.score, frame_name, frame, fast_det.bbox))
 
-    if not candidates:
-        return {"video_id": video_id, "status": "no_overlay"}
+        det = detect_overlay_fast(frame)
+        if not det.found or det.bbox is None:
+            continue
 
-    # Sort by score descending — try best candidate first.
-    candidates.sort(key=lambda c: c[0], reverse=True)
-
-    # Phase 2: crop to fast bbox, detect grid, classify only if grid found.
-    for _, frame_name, frame, bbox in candidates:
-        bx, by, bw, bh = bbox
+        bx, by, bw, bh = det.bbox
         fh, fw = frame.shape[:2]
         crop = frame[max(0, by):min(fh, by + bh), max(0, bx):min(fw, bx + bw)]
         if crop.size == 0:
@@ -518,17 +509,17 @@ def extract_overlay_from_frames(video_id: str) -> dict:
 def detect_overlay_from_frames(video_id: str) -> dict:
     """Fast phase: detect overlay + grid, return crop image without FEN.
 
-    Runs ``fast_overlay_check`` + ``detect_grid`` only (~40ms total).
-    Returns immediately so the UI can show the overlay crop while FEN
+    Uses ``detect_overlay_fast`` which expands the initial seed bbox via
+    grid detection to find pixel-perfect board boundaries.  Returns
+    immediately so the UI can show the overlay crop while FEN
     classification happens asynchronously.
     """
     saved_keys = _get_saved_frame_keys()
 
     if not _video_has_frames(video_id):
+        logger.info("detect_overlay: %s — no frames on disk", video_id)
         return {"video_id": video_id, "status": "no_overlay"}
 
-    # Phase 1: fast_overlay_check all frames, collect candidates.
-    candidates: list[tuple[float, str, np.ndarray, tuple[int, int, int, int]]] = []
     for frame_name in _EXTRACTION_FRAME_NAMES:
         if f"{video_id}:{frame_name}" in saved_keys:
             continue
@@ -538,18 +529,12 @@ def detect_overlay_from_frames(video_id: str) -> dict:
         frame = cv2.imread(str(frame_path))
         if frame is None:
             continue
-        fast_det = fast_overlay_check(frame)
-        if fast_det.found and fast_det.bbox is not None:
-            candidates.append((fast_det.score, frame_name, frame, fast_det.bbox))
 
-    if not candidates:
-        return {"video_id": video_id, "status": "no_overlay"}
+        det = detect_overlay_fast(frame)
+        if not det.found or det.bbox is None:
+            continue
 
-    candidates.sort(key=lambda c: c[0], reverse=True)
-
-    # Phase 2: crop to fast bbox, detect grid (no classification).
-    for _, frame_name, frame, bbox in candidates:
-        bx, by, bw, bh = bbox
+        bx, by, bw, bh = det.bbox
         fh, fw = frame.shape[:2]
         crop = frame[max(0, by):min(fh, by + bh), max(0, bx):min(fw, bx + bw)]
         if crop.size == 0:
@@ -564,6 +549,7 @@ def detect_overlay_from_frames(video_id: str) -> dict:
         board_crop = crop[gy1:gy2, gx1:gx2]
 
         frame_key = f"{video_id}:{frame_name}"
+        logger.info("detect_overlay: %s — found in %s", video_id, frame_name)
         return {
             "frame_key": frame_key,
             "video_id": video_id,
@@ -572,6 +558,7 @@ def detect_overlay_from_frames(video_id: str) -> dict:
             "status": "detected",
         }
 
+    logger.info("detect_overlay: %s — no overlay in any frame", video_id)
     return {"video_id": video_id, "status": "no_overlay"}
 
 
@@ -589,11 +576,11 @@ def classify_overlay_fen(video_id: str, frame_name: str) -> dict:
     if frame is None:
         return {"status": "error", "warning": "Could not read frame"}
 
-    fast_det = fast_overlay_check(frame)
-    if not fast_det.found or fast_det.bbox is None:
+    det = detect_overlay_fast(frame)
+    if not det.found or det.bbox is None:
         return {"status": "error", "warning": "Overlay not detected"}
 
-    bx, by, bw, bh = fast_det.bbox
+    bx, by, bw, bh = det.bbox
     fh, fw = frame.shape[:2]
     crop = frame[max(0, by):min(fh, by + bh), max(0, bx):min(fw, bx + bw)]
     if crop.size == 0:
@@ -653,7 +640,7 @@ def save_confirmed_frame_extractions(confirmations: list[dict]) -> dict:
             errors.append(f"{label}: could not read frame")
             continue
 
-        det = fast_overlay_check(frame)
+        det = detect_overlay_fast(frame)
         if not det.found or det.bbox is None:
             errors.append(f"{label}: overlay not detected")
             continue
