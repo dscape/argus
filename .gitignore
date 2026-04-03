@@ -62,3 +62,4 @@ next-env.d.ts
 # Misc
 *.log
 .env
+weights/dinov2-base/
