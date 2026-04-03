@@ -3,10 +3,19 @@
   "configurations": [
     {
       "name": "dev",
-      "runtimeExecutable": "docker",
-      "runtimeArgs": ["compose", "--profile", "dev-tools", "up"],
+      "runtimeExecutable": "make",
+      "runtimeArgs": ["preview"],
       "port": 3000,
-      "autoPort": false
+      "autoPort": false,
+      "env": {
+        "PATH": "/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+      }
+    },
+    {
+      "name": "grid-viewer",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8123", "--directory", "data/overlay/dataset/frames"],
+      "port": 8123
     }
   ]
 }

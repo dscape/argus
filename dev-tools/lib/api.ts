@@ -239,6 +239,18 @@ export async function crawlChannel(
   return res.json();
 }
 
+export async function fetchFramesForChannel(
+  channelId: string,
+  hires: boolean = true
+): Promise<{ channel_id: string; videos_processed: number; frames_fetched: number }> {
+  const res = await fetch(
+    `/api/crawl/channels/${encodeURIComponent(channelId)}/fetch-frames?hires=${hires}`,
+    { method: "POST" }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function crawlAllChannels(): Promise<{
   channels_crawled: number;
   total_new_videos: number;
@@ -779,16 +791,6 @@ export async function validateOverlayDetection(
   return res.json();
 }
 
-export async function extractRealOverlaySamples(
-  limit = 200
-): Promise<{ processed: number; saved: number; skipped: number }> {
-  const res = await fetch(
-    `/api/models/overlay-test/extract-real-samples?limit=${limit}`,
-    { method: "POST" }
-  );
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
 
 // ── AI Classification ───────────────────────────────────────
 

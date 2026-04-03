@@ -11,6 +11,7 @@ import {
   toggleCrawlChannel,
   crawlChannel,
   crawlAllChannels,
+  fetchFramesForChannel,
   getQuotaStatus,
 } from "@/lib/api";
 import type { CrawlChannel, QuotaStatus } from "@/lib/types";
@@ -24,6 +25,7 @@ export default function ChannelManager() {
   const [adding, setAdding] = useState(false);
   const [crawlingId, setCrawlingId] = useState<string | null>(null);
   const [crawlingAll, setCrawlingAll] = useState(false);
+  const [fetchingFramesId, setFetchingFramesId] = useState<string | null>(null);
   const [quota, setQuota] = useState<QuotaStatus | null>(null);
   const [crawlResult, setCrawlResult] = useState<string | null>(null);
 
@@ -112,6 +114,22 @@ export default function ChannelManager() {
     }
   };
 
+  const handleFetchFrames = async (channelId: string, hires: boolean) => {
+    setFetchingFramesId(channelId);
+    setCrawlResult(null);
+    try {
+      const result = await fetchFramesForChannel(channelId, hires);
+      const label = hires ? "hi-res" : "low-res";
+      setCrawlResult(
+        `Fetched ${result.frames_fetched} ${label} frames from ${result.videos_processed} videos`
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Fetch frames failed");
+    } finally {
+      setFetchingFramesId(null);
+    }
+  };
+
   const formatDate = (d: string | null) => {
     if (!d) return "Never";
     return new Date(d).toLocaleDateString("en-US", {
@@ -185,7 +203,7 @@ export default function ChannelManager() {
         </Card>
       ) : (
         <div className="border rounded-md overflow-x-auto">
-          <table className="w-full text-sm min-w-[700px]">
+          <table className="w-full text-sm min-w-[900px]">
             <thead>
               <tr className="border-b bg-muted/50">
                 <th className="text-left px-3 py-2 font-medium">Channel</th>
@@ -193,7 +211,7 @@ export default function ChannelManager() {
                 <th className="text-right px-3 py-2 font-medium w-20">Videos</th>
                 <th className="text-left px-3 py-2 font-medium w-40">Last Crawled</th>
                 <th className="text-center px-3 py-2 font-medium w-20">Enabled</th>
-                <th className="text-right px-3 py-2 font-medium w-24">Actions</th>
+                <th className="text-right px-3 py-2 font-medium w-48">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -240,7 +258,7 @@ export default function ChannelManager() {
                       />
                     </button>
                   </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-right space-x-1">
                     <Button
                       size="sm"
                       variant="ghost"
@@ -251,6 +269,32 @@ export default function ChannelManager() {
                       className="text-xs h-7"
                     >
                       {crawlingId === ch.channel_id ? "Crawling..." : "Crawl"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleFetchFrames(ch.channel_id, true)}
+                      disabled={
+                        fetchingFramesId !== null || !ch.enabled
+                      }
+                      className="text-xs h-7"
+                    >
+                      {fetchingFramesId === ch.channel_id
+                        ? "Fetching..."
+                        : "Fetch HiRes"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleFetchFrames(ch.channel_id, false)}
+                      disabled={
+                        fetchingFramesId !== null || !ch.enabled
+                      }
+                      className="text-xs h-7"
+                    >
+                      {fetchingFramesId === ch.channel_id
+                        ? "Fetching..."
+                        : "Fetch LoRes"}
                     </Button>
                   </td>
                 </tr>

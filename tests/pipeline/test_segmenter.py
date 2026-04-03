@@ -79,14 +79,19 @@ class TestFastOverlayCheck:
 
     def test_downscaling_preserves_detection(self):
         """Overlay detection works on large frames via internal downscaling."""
-        size = 800
-        frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        # Use a board size that aligns with the scan scales after downscaling.
+        # At 1920x1080 the algorithm downscales to 810px max dim.
+        # Scale factor = 810/1920 ≈ 0.42.  min(h,w) at 810p = 455.
+        # Scale 0.90 → win=409 ≈ 970px at full res.
+        # So a 960px board fills the window well at one of the scales.
+        size = 960
+        frame = np.full((1080, 1920, 3), 128, dtype=np.uint8)
         cell = size // 8
         for r in range(8):
             for c in range(8):
                 color = 220 if (r + c) % 2 == 0 else 80
-                y0 = 140 + r * cell
-                x0 = 560 + c * cell
+                y0 = 60 + r * cell
+                x0 = 480 + c * cell
                 frame[y0 : y0 + cell, x0 : x0 + cell] = color
 
         det = fast_overlay_check(frame)

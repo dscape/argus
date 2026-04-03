@@ -106,6 +106,19 @@ async def crawl_channel(channel_id: str):
         raise HTTPException(500, str(e))
 
 
+@router.post("/channels/{channel_id}/fetch-frames")
+async def fetch_frames(channel_id: str, hires: bool = Query(True)):
+    """Fetch overlay frames for all overlay-tagged videos in a channel."""
+    try:
+        return await run_in_threadpool(
+            crawl_service.fetch_frames_for_channel, channel_id, hires
+        )
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @router.post("/crawl-all")
 async def crawl_all():
     try:

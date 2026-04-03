@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const TABS = [
   { id: "screen", label: "Screen", href: "/annotate/screen" },
   { id: "overlay", label: "Overlay", href: "/annotate/overlay" },
+  { id: "overlay-bbox", label: "Overlay BBox", href: "/annotate/overlay-bbox" },
   { id: "calibrate", label: "Calibrate", href: "/annotate/calibrate" },
   { id: "hardcuts", label: "Hardcuts", href: "/annotate/hardcuts" },
 ] as const;

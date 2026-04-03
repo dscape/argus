@@ -1,7 +1,7 @@
 .PHONY: install dev test lint typecheck format train eval datagen infer train-pieces clean \
        db-up db-down db-backup db-restore pipeline-install seed-channels crawl screen inspect download generate-clips pipeline-stats \
        dev-tools dev-tools-down blender-server blender-server-stop \
-       up down \
+       up down preview \
        docker-ai-extract docker-ai-train docker-ai-eval docker-ai-screen docker-ai-retrain \
        docker-ai-extract-status docker-smoke-test \
        backup check-backup \
@@ -154,6 +154,19 @@ down:
 	fi
 	@lsof -ti tcp:$(BLENDER_PORT) | xargs kill 2>/dev/null || true
 	@echo "All services stopped."
+
+preview: check-backup
+	@$(MAKE) down 2>/dev/null || true
+	@if command -v $(BLENDER) >/dev/null 2>&1 || [ -x "$(BLENDER)" ]; then \
+		echo "Starting Blender render server on port $(BLENDER_PORT)..."; \
+		nohup $(BLENDER) --background --python blender/render_server.py -- \
+			--port $(BLENDER_PORT) --quality training \
+			> $(BLENDER_LOG_FILE) 2>&1 & \
+		echo $$! > $(BLENDER_PID_FILE); \
+	else \
+		echo "Blender not found — skipping render server"; \
+	fi
+	docker compose --profile dev-tools up --build
 
 # ── Blender render server ───────────────────────────────────
 

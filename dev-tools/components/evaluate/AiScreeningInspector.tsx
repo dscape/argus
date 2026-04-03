@@ -46,15 +46,19 @@ interface AiScreeningInspectorProps {
   };
 }
 
-export default function AiScreeningInspector({ initialSession }: AiScreeningInspectorProps) {
+export default function AiScreeningInspector({
+  initialSession,
+}: AiScreeningInspectorProps) {
   const router = useRouter();
   const [sampleSize, setSampleSize] = useState(20);
-  const [results, setResults] = useState<InspectResult[]>(initialSession?.results ?? []);
+  const [results, setResults] = useState<InspectResult[]>(
+    initialSession?.results ?? [],
+  );
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [evalHistory, setEvalHistory] = useState<EvalPoint[]>([]);
   const [modelVersion, setModelVersion] = useState<string | null>(
-    initialSession?.model_version ?? null
+    initialSession?.model_version ?? null,
   );
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(
     new Set(
@@ -62,11 +66,13 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
         ? Object.entries(initialSession.pin_state)
             .filter(([, v]) => v)
             .map(([k]) => k)
-        : []
-    )
+        : [],
+    ),
   );
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const [sessionId, setSessionId] = useState<string | null>(initialSession?.id ?? null);
+  const [sessionId, setSessionId] = useState<string | null>(
+    initialSession?.id ?? null,
+  );
   const [recentSessions, setRecentSessions] = useState<ScreeningSession[]>([]);
   const [showSessionList, setShowSessionList] = useState(false);
   const inspectedIds = useRef<Set<string>>(new Set());
@@ -82,7 +88,10 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
   useEffect(() => {
     if (!showSessionList) return;
     const handleClick = (e: MouseEvent) => {
-      if (sessionListRef.current && !sessionListRef.current.contains(e.target as Node)) {
+      if (
+        sessionListRef.current &&
+        !sessionListRef.current.contains(e.target as Node)
+      ) {
         setShowSessionList(false);
       }
     };
@@ -92,7 +101,9 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
 
   async function fetchHistory() {
     try {
-      const res = await fetch("/api/models/evaluations?model_name=ai_screening");
+      const res = await fetch(
+        "/api/models/evaluations?model_name=ai_screening",
+      );
       if (res.ok) {
         const data = await res.json();
         setEvalHistory(data.evaluations);
@@ -121,7 +132,9 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
 
         // Persist to server if we have a session
         if (sessionId) {
-          updateSessionPins(sessionId, { [videoId]: !prev.has(videoId) }).catch(() => {});
+          updateSessionPins(sessionId, { [videoId]: !prev.has(videoId) }).catch(
+            () => {},
+          );
         }
         return next;
       });
@@ -132,7 +145,7 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
         return next;
       });
     },
-    [sessionId]
+    [sessionId],
   );
 
   const toggleExpand = useCallback((videoId: string) => {
@@ -170,7 +183,7 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
           : "";
       const sampleRes = await fetch(
         `/api/models/ai-screening/sample?limit=${sampleSize}${excludeParam}`,
-        { signal: controller.signal }
+        { signal: controller.signal },
       );
       if (!sampleRes.ok) throw new Error(await sampleRes.text());
       const { video_ids } = await sampleRes.json();
@@ -206,24 +219,31 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
       }
 
       // Step 3: auto-save evaluation results
-      const batchLabeled = collected.filter((r) => r.human_label && r.prediction);
+      const batchLabeled = collected.filter(
+        (r) => r.human_label && r.prediction,
+      );
       let evaluationId: number | null = null;
 
       if (batchLabeled.length > 0) {
         const batchAgrees = batchLabeled.filter(
-          (r) => computeAgreement(r) === true
+          (r) => computeAgreement(r) === true,
         );
-        const batchClassCounts: Record<string, { correct: number; total: number }> = {};
+        const batchClassCounts: Record<
+          string,
+          { correct: number; total: number }
+        > = {};
         for (const r of batchLabeled) {
           const cls = r.prediction!.class;
-          if (!batchClassCounts[cls]) batchClassCounts[cls] = { correct: 0, total: 0 };
+          if (!batchClassCounts[cls])
+            batchClassCounts[cls] = { correct: 0, total: 0 };
           batchClassCounts[cls].total++;
           if (computeAgreement(r) === true) batchClassCounts[cls].correct++;
         }
 
         const accuracy = batchAgrees.length / batchLabeled.length;
         const elapsedMin = (performance.now() - batchStartTime) / 60000;
-        const imagesPerMinute = elapsedMin > 0 ? Math.round(collected.length / elapsedMin) : null;
+        const imagesPerMinute =
+          elapsedMin > 0 ? Math.round(collected.length / elapsedMin) : null;
 
         const saveRes = await fetch("/api/models/ai-screening/save-eval", {
           method: "POST",
@@ -231,7 +251,10 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
           body: JSON.stringify({
             accuracy,
             sample_size: batchLabeled.length,
-            per_class: { ...batchClassCounts, images_per_minute: imagesPerMinute },
+            per_class: {
+              ...batchClassCounts,
+              images_per_minute: imagesPerMinute,
+            },
             model_version: detectedModelVersion,
           }),
         });
@@ -256,7 +279,9 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
             evaluation_id: evaluationId,
           });
           setSessionId(session_id);
-          router.replace(`/evaluate/screening/${session_id}`, { scroll: false });
+          router.replace(`/evaluate/screening/${session_id}`, {
+            scroll: false,
+          });
         } catch (e) {
           console.warn("Failed to save session:", e);
         }
@@ -294,18 +319,19 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
   }, [results, pinnedIds]);
 
   // Prepare chart data (chronological)
-  const chartData = [...evalHistory]
-    .reverse()
-    .map((ev) => ({
-      date: new Date(ev.evaluated_at).toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-      }),
-      accuracy: Math.round(ev.accuracy * 1000) / 10,
-      images_per_minute: (ev.per_class as Record<string, unknown>)?.images_per_minute as number | null ?? null,
-      notes: ev.notes,
-      sample_size: ev.sample_size,
-    }));
+  const chartData = [...evalHistory].reverse().map((ev) => ({
+    date: new Date(ev.evaluated_at).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    }),
+    accuracy: Math.round(ev.accuracy * 1000) / 10,
+    images_per_minute:
+      ((ev.per_class as Record<string, unknown>)?.images_per_minute as
+        | number
+        | null) ?? null,
+    notes: ev.notes,
+    sample_size: ev.sample_size,
+  }));
 
   const hasPerformanceData = chartData.some((d) => d.images_per_minute != null);
 
@@ -318,7 +344,9 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
     <div className="space-y-4">
       {/* Controls */}
       <div className="flex gap-2 items-center flex-wrap">
-        <span className="text-sm text-muted-foreground">Sample from labeled videos:</span>
+        <span className="text-sm text-muted-foreground">
+          Sample from labeled videos:
+        </span>
         <input
           type="number"
           value={sampleSize}
@@ -369,7 +397,9 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-mono text-muted-foreground">{s.id}</span>
+                      <span className="font-mono text-muted-foreground">
+                        {s.id}
+                      </span>
                       {s.accuracy != null && (
                         <span className="font-medium">
                           {(s.accuracy * 100).toFixed(1)}%
@@ -428,13 +458,19 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
 
       {/* Charts: accuracy + performance side-by-side */}
       {chartData.length >= 2 && (
-        <div className={`grid gap-4 ${hasPerformanceData ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}>
+        <div
+          className={`grid gap-4 ${hasPerformanceData ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}
+        >
           <div className="border rounded-lg p-3">
             <h3 className="text-sm font-medium mb-2">Accuracy over time</h3>
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
-                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                />
                 <YAxis
                   domain={[0, 100]}
                   tick={{ fontSize: 10 }}
@@ -477,11 +513,19 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
           </div>
           {hasPerformanceData && (
             <div className="border rounded-lg p-3">
-              <h3 className="text-sm font-medium mb-2">Performance over time</h3>
+              <h3 className="text-sm font-medium mb-2">
+                Performance over time
+              </h3>
               <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={chartData.filter((d) => d.images_per_minute != null)}>
+                <LineChart
+                  data={chartData.filter((d) => d.images_per_minute != null)}
+                >
                   <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
-                  <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 10 }}
+                    tickLine={false}
+                  />
                   <YAxis
                     tick={{ fontSize: 10 }}
                     tickLine={false}
@@ -515,8 +559,8 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
         <div className="border rounded-lg p-3 space-y-2 bg-muted/20">
           <div className="flex items-center gap-4">
             <span className="text-sm font-medium">
-              Accuracy: {agrees.length}/{labeled.length}{" "}
-              ({((agrees.length / labeled.length) * 100).toFixed(1)}%)
+              Accuracy: {agrees.length}/{labeled.length} (
+              {((agrees.length / labeled.length) * 100).toFixed(1)}%)
             </span>
             <div className="flex-1 h-2 bg-muted rounded overflow-hidden max-w-xs">
               <div
@@ -530,7 +574,8 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
           <div className="flex gap-3 text-xs text-muted-foreground">
             {Object.entries(classCounts).map(([cls, { correct, total }]) => (
               <span key={cls}>
-                <span className={classColor(cls)}>{cls}</span>: {correct}/{total}
+                <span className={classColor(cls)}>{cls}</span>: {correct}/
+                {total}
               </span>
             ))}
           </div>
@@ -563,7 +608,9 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
           {unpinned.length > 0 && (
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
-                {pinned.length > 0 ? `Others (${unpinned.length})` : `${results.length} results`}
+                {pinned.length > 0
+                  ? `Others (${unpinned.length})`
+                  : `${results.length} results`}
               </p>
 
               {/* Compact thumbnail grid */}
@@ -575,9 +622,17 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
                     return (
                       <button
                         key={r.video_id}
-                        onClick={() => agreement === false ? togglePin(r.video_id) : toggleExpand(r.video_id)}
+                        onClick={() =>
+                          agreement === false
+                            ? togglePin(r.video_id)
+                            : toggleExpand(r.video_id)
+                        }
                         title={`${r.title}\n${r.prediction?.class ?? "?"} ${
-                          agreement === true ? "\u2713" : agreement === false ? "\u2717" : "?"
+                          agreement === true
+                            ? "\u2713"
+                            : agreement === false
+                              ? "\u2717"
+                              : "?"
                         }`}
                         className="relative w-16 h-12 rounded border overflow-hidden group flex-shrink-0 transition-all hover:ring-2 hover:ring-foreground/30"
                       >
@@ -592,8 +647,8 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
                             agreement === true
                               ? "bg-green-500/25"
                               : agreement === false
-                              ? "bg-red-500/35"
-                              : "bg-yellow-500/20"
+                                ? "bg-red-500/35"
+                                : "bg-yellow-500/20"
                           }`}
                         />
                         <span className="absolute bottom-0 right-0 text-[9px] leading-none bg-black/60 text-white px-0.5 py-px">
@@ -616,7 +671,8 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
               </div>
 
               {/* Expanded cards from thumbnail clicks */}
-              {unpinned.filter((r) => expandedIds.has(r.video_id)).length > 0 && (
+              {unpinned.filter((r) => expandedIds.has(r.video_id)).length >
+                0 && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-2">
                   {unpinned
                     .filter((r) => expandedIds.has(r.video_id))
@@ -627,7 +683,7 @@ export default function AiScreeningInspector({ initialSession }: AiScreeningInsp
                           className="absolute top-2 right-2 z-10 w-6 h-6 flex items-center justify-center rounded bg-muted/80 text-muted-foreground hover:text-foreground text-xs"
                           title="Collapse"
                         >
-                          \u2715
+                          {"\u2715"}
                         </button>
                         <VideoCard
                           result={r}

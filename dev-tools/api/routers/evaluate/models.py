@@ -349,37 +349,66 @@ async def validate_overlay_detection(limit: int = 100):
     return result
 
 
-@router.post("/overlay-test/extract-real-samples")
-async def extract_real_overlay_samples(limit: int = 200):
-    """Extract real board crops from video_clips and save to the real test directory.
+@router.get("/overlay-test/extract-candidates")
+async def get_extraction_candidates(
+    limit: int = 200,
+    video_ids: str | None = None,
+):
+    """Return video IDs with screening frames available for overlay extraction.
 
-    This is a one-time (or periodic) operation.  Each clip's mid-point frame is
-    cropped to the overlay region, the grid is detected, pieces are classified
-    for a pseudo-label FEN, and the crop is saved to
-    ``data/overlay/val_real/``.
+    Fast operation — no image processing, just DB + disk checks.
+    """
+    vid_list = [v.strip() for v in video_ids.split(",") if v.strip()] if video_ids else None
+    candidates = await run_in_threadpool(
+        overlay_test_service.get_extraction_candidates, limit, vid_list
+    )
+    return {"video_ids": candidates}
+
+
+class ExtractOneRequest(BaseModel):
+    video_id: str
+
+
+@router.post("/overlay-test/extract-one")
+async def extract_one_overlay(body: ExtractOneRequest):
+    """Process one video's screening frames and return the best overlay extraction.
+
+    Returns a single result dict with status ok, warning, or no_overlay.
     """
     result = await run_in_threadpool(
-        overlay_test_service.extract_real_overlay_samples, limit
+        overlay_test_service.extract_overlay_from_frames, body.video_id
     )
     return result
 
 
-@router.get("/overlay-test/extract-preview")
-async def preview_overlay_extractions(
-    limit: int = 200,
-    video_ids: str | None = None,
-):
-    """Preview overlay crops from video_clips with auto-labeled FENs.
+@router.post("/overlay-test/extract-detect")
+async def detect_one_overlay(body: ExtractOneRequest):
+    """Fast phase: detect overlay + grid, return crop without FEN classification.
 
-    Returns crops as base64 images with predicted FENs for user review
-    before saving to disk.  Pass ``video_ids`` as a comma-separated list
-    to restrict extraction to specific videos (much faster).
+    Returns immediately so the UI can render the overlay crop while FEN
+    classification runs asynchronously via the extract-fen endpoint.
     """
-    vid_list = [v.strip() for v in video_ids.split(",") if v.strip()] if video_ids else None
-    results = await run_in_threadpool(
-        overlay_test_service.preview_real_overlay_extractions, limit, vid_list
+    result = await run_in_threadpool(
+        overlay_test_service.detect_overlay_from_frames, body.video_id
     )
-    return {"results": results}
+    return result
+
+
+class ClassifyFenRequest(BaseModel):
+    video_id: str
+    frame_name: str
+
+
+@router.post("/overlay-test/extract-fen")
+async def classify_overlay_fen(body: ClassifyFenRequest):
+    """Slow phase: run DINOv2 piece classification to produce FEN.
+
+    Called after extract-detect returns a result with status 'detected'.
+    """
+    result = await run_in_threadpool(
+        overlay_test_service.classify_overlay_fen, body.video_id, body.frame_name
+    )
+    return result
 
 
 class SaveExtractionsRequest(BaseModel):
@@ -388,9 +417,9 @@ class SaveExtractionsRequest(BaseModel):
 
 @router.post("/overlay-test/extract-save")
 async def save_confirmed_overlay_extractions(body: SaveExtractionsRequest):
-    """Save user-confirmed overlay extractions to test_real/ directory."""
+    """Save user-confirmed frame overlay extractions to val_real/ directory."""
     result = await run_in_threadpool(
-        overlay_test_service.save_confirmed_extractions, body.confirmations
+        overlay_test_service.save_confirmed_frame_extractions, body.confirmations
     )
     return result
 

@@ -246,6 +246,35 @@ def crawl_all_channels() -> dict:
     return {"channels_crawled": crawled, "total_new_videos": total_new}
 
 
+def fetch_frames_for_channel(channel_id: str, hires: bool = True) -> dict:
+    """Fetch overlay frames for all overlay-tagged videos in a channel."""
+    from pipeline.screen.frame_fetcher import fetch_overlay_frames
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT video_id FROM youtube_videos
+                   WHERE channel_id = %s AND layout_type = 'overlay'
+                   ORDER BY video_id""",
+                (channel_id,),
+            )
+            video_ids = [row[0] for row in cur.fetchall()]
+
+    if not video_ids:
+        return {"channel_id": channel_id, "videos_processed": 0, "frames_fetched": 0}
+
+    total_frames = 0
+    for vid in video_ids:
+        results = fetch_overlay_frames(vid, hires=hires)
+        total_frames += len(results)
+
+    return {
+        "channel_id": channel_id,
+        "videos_processed": len(video_ids),
+        "frames_fetched": total_frames,
+    }
+
+
 # ── Videos ──────────────────────────────────────────────────
 
 

@@ -626,6 +626,77 @@ def cmd_stats(args):
     print("=" * 50)
 
 
+def cmd_fetch_frames(args):
+    """Fetch overlay frames (25/50/75%) from YouTube.
+
+    Resolution modes:
+    - fullres (default): 1920x1080 via yt-dlp (required for overlay detection)
+    - hires: 1280x720 via YouTube thumbnails (fast, but too low for detection)
+    - lowres: 480x360 via YouTube thumbnails (screening only)
+    """
+    from pipeline.db.connection import get_conn
+    from pipeline.screen.frame_fetcher import (
+        fetch_overlay_frames,
+        fetch_overlay_frames_fullres,
+        get_video_duration,
+    )
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if args.channel:
+                cur.execute(
+                    """SELECT video_id, COALESCE(channel_handle, '')
+                       FROM youtube_videos
+                       WHERE layout_type = 'overlay'
+                         AND channel_handle = %s
+                       ORDER BY video_id""",
+                    (args.channel,),
+                )
+            else:
+                cur.execute(
+                    """SELECT video_id, COALESCE(channel_handle, '')
+                       FROM youtube_videos
+                       WHERE layout_type = 'overlay'
+                       ORDER BY channel_handle, video_id"""
+                )
+            videos = cur.fetchall()
+
+    if args.limit:
+        videos = videos[: args.limit]
+
+    if not videos:
+        print("No overlay videos found.")
+        return
+
+    res_label = {
+        "fullres": "1920x1080 (yt-dlp)",
+        "hires": "1280x720",
+        "lowres": "480x360",
+    }
+    print(f"Fetching {res_label[args.resolution]} frames for {len(videos)} videos\n")
+
+    total_frames = 0
+    for video_id, channel in videos:
+        if args.resolution == "fullres":
+            duration = get_video_duration(video_id)
+            if duration <= 0:
+                print(f"  {channel:30s} {video_id}  SKIPPED (no duration)")
+                continue
+            results = fetch_overlay_frames_fullres(video_id, duration)
+        else:
+            results = fetch_overlay_frames(
+                video_id, hires=(args.resolution == "hires")
+            )
+        if results:
+            res_str = ", ".join(f"{lbl} {w}x{h}" for lbl, w, h in results)
+            print(f"  {channel:30s} {video_id}  {res_str}")
+            total_frames += len(results)
+        else:
+            print(f"  {channel:30s} {video_id}  FAILED")
+
+    print(f"\nDone: {total_frames} frames from {len(videos)} videos")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="pipeline",
@@ -763,6 +834,14 @@ def main():
     # ai-extract-status
     subparsers.add_parser("ai-extract-status", help="Report AI feature extraction cache progress")
 
+    # fetch-frames
+    p = subparsers.add_parser("fetch-frames", help="Fetch overlay frames from YouTube thumbnails")
+    p.add_argument("--channel", type=str, default=None, help="Fetch for specific channel handle")
+    p.add_argument("--resolution", type=str, default="fullres",
+                   choices=["fullres", "hires", "lowres"],
+                   help="fullres=1920x1080 via yt-dlp (default), hires=1280x720, lowres=480x360")
+    p.add_argument("--limit", type=int, default=None, help="Max videos to fetch")
+
     # stats
     subparsers.add_parser("stats", help="Print pipeline statistics")
 
@@ -800,6 +879,7 @@ def main():
         "smoke-test": cmd_smoke_test,
         "inspect-calibration": cmd_inspect_calibration,
         "ai-extract-status": cmd_ai_extract_status,
+        "fetch-frames": cmd_fetch_frames,
         "stats": cmd_stats,
     }
 
