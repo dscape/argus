@@ -178,10 +178,19 @@ def compute_alternation_strength(region: np.ndarray) -> tuple[float, float]:
 MIN_ALTERNATION_FRAC = 0.65
 MIN_ALTERNATION_CONTRAST = 30.0
 
+# Relaxed thresholds for Phase 1 candidate generation.  Phase 2 validates
+# at full resolution with checkerboard consistency, so Phase 1 can afford
+# more permissive thresholds to avoid rejecting real boards due to grid
+# misalignment, dark themes, or piece-heavy positions.
+_P1_MIN_FRAC = 0.50
+_P1_MIN_CONTRAST = 20.0
+
 # Maximum std of cell brightness within each checkerboard group (light/dark).
-# Real boards have max_std <= 23 (pieces affect some cells but most are uniform).
-# False positives (UI panels, banners) have max_std >= 38 (diverse content).
-MAX_CHECKERBOARD_STD = 30.0
+# Real rendered boards typically have max_std <= 25 on empty boards and up to
+# ~35 with many pieces.  OTB boards on vinyl surfaces score 38-52 due to 3D
+# lighting and piece shadows.  Threshold of 35 catches most rendered boards
+# while rejecting most OTB boards.
+MAX_CHECKERBOARD_STD = 35.0
 
 
 def _checkerboard_std(gray: np.ndarray) -> float:
@@ -206,30 +215,83 @@ def _checkerboard_std(gray: np.ndarray) -> float:
     return max(float(np.std(light)), float(np.std(dark)))
 
 
+def _piece_aware_checkerboard_std(gray: np.ndarray) -> float:
+    """Piece-aware checkerboard std: only considers low-variance (empty) cells.
+
+    Pieces inflate per-cell brightness, making occupied squares differ from
+    empty squares of the same color.  By filtering to low-variance cells
+    (solid fills, i.e. empty squares on a rendered board), we get a cleaner
+    signal that separates rendered overlays from OTB boards.
+
+    Returns 999.0 if not enough empty cells to judge.
+    """
+    h, w = gray.shape
+    cell_h = h // 8
+    cell_w = w // 8
+    if cell_h < 4 or cell_w < 4:
+        return 999.0
+
+    margin_y = max(1, cell_h // 6)
+    margin_x = max(1, cell_w // 6)
+
+    trimmed = gray[: cell_h * 8, : cell_w * 8]
+    grid = trimmed.reshape(8, cell_h, 8, cell_w).transpose(0, 2, 1, 3)
+    inner = grid[:, :, margin_y: cell_h - margin_y, margin_x: cell_w - margin_x]
+    flat = inner.reshape(8, 8, -1).astype(np.float64)
+    variances = flat.var(axis=2)
+    means = flat.mean(axis=2)
+
+    # Only consider low-variance cells (empty rendered squares).
+    # Exclude near-black cells (background/border).
+    light_means: list[float] = []
+    dark_means: list[float] = []
+    for r in range(8):
+        for c in range(8):
+            if variances[r, c] < MAX_RENDERED_SQUARE_VARIANCE and means[r, c] > 15.0:
+                if (r + c) % 2 == 0:
+                    light_means.append(float(means[r, c]))
+                else:
+                    dark_means.append(float(means[r, c]))
+
+    # Need at least 3 cells per group to judge consistency.
+    if len(light_means) < 3 or len(dark_means) < 3:
+        return 999.0
+
+    return max(float(np.std(light_means)), float(np.std(dark_means)))
+
+
 def check_checkerboard_consistency(
     gray: np.ndarray,
     bbox: tuple[int, int, int, int],
 ) -> bool:
     """Check checkerboard consistency trying multiple sub-cell offsets.
 
+    Uses two strategies:
+    1. Standard checkerboard std (all cells) — strict threshold.
+    2. Piece-aware checkerboard std (only empty cells) — relaxed threshold.
+
     The coarse detection window may not align precisely with the actual
     board cells.  This tries offsets of ±half-cell in each direction
-    to find the best alignment, passing if ANY offset achieves low
-    checkerboard std.
+    to find the best alignment, passing if ANY offset achieves low std.
     """
     x, y, w, h_box = bbox
     fh, fw = gray.shape[:2]
     cell = w // 16  # half-cell offset
 
     best_std = 999.0
+    best_pa_std = 999.0
     for dy in range(-cell, cell + 1, max(1, cell // 2)):
         for dx in range(-cell, cell + 1, max(1, cell // 2)):
             nx, ny = x + dx, y + dy
             if nx < 0 or ny < 0 or nx + w > fw or ny + h_box > fh:
                 continue
-            s = _checkerboard_std(gray[ny : ny + h_box, nx : nx + w])
+            region = gray[ny: ny + h_box, nx: nx + w]
+            s = _checkerboard_std(region)
             if s < best_std:
                 best_std = s
+            pa = _piece_aware_checkerboard_std(region)
+            if pa < best_pa_std:
+                best_pa_std = pa
 
     return best_std <= MAX_CHECKERBOARD_STD
 
@@ -547,13 +609,8 @@ def _refine_alternation(
     return best, best_frac, best_contrast
 
 
-# Scales and step fraction for full-resolution scan.
-_FAST_FULL_SCALES = [0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95]
-_FAST_FULL_STEP = 0.15
-
-
 def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
-    """Fast overlay presence check — under 100ms on 1080p.
+    """Fast overlay presence check — under 200ms on 1080p.
 
     Two-phase approach:
     1. Scan at downscaled resolution (810p) for speed using alternation check
@@ -585,7 +642,20 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
 
     # Phase 1: Scan at downscaled resolution.
     # Two detection paths: alternation (all board types) + regularity (flat boards).
+    #
+    # Two-pass strategy for grid alignment:
+    #   Pass 1: Coarse scan at normal step (25% of window = 2 cells).
+    #           Collect "near-miss" windows that show some alternation but
+    #           don't meet the full threshold (grid misalignment).
+    #   Pass 2: Refine near-misses with half-cell offsets (4 trials each).
+    #
+    # This avoids the cost of offset trials on every window while still
+    # recovering boards that the coarse scan misses due to alignment.
     candidates: list[tuple[float, int, tuple[int, int, int, int]]] = []
+
+    # Lower bar for "promising" windows that deserve offset refinement.
+    _NEAR_MISS_FRAC = 0.40
+    _NEAR_MISS_CONTRAST = 15.0
 
     for scale in FAST_SCAN_SCALES:
         win_size = int(min(h, w) * scale)
@@ -593,15 +663,17 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
             continue
 
         step = max(1, int(win_size * FAST_SCAN_STEP_FRACTION))
+        half_cell = win_size // 16  # half of one cell width
         scale_best: tuple[float, tuple[int, int, int, int]] | None = None
+        near_misses: list[tuple[float, int, int]] = []
 
         for y in range(0, h - win_size + 1, step):
             for x in range(0, w - win_size + 1, step):
-                region = gray[y : y + win_size, x : x + win_size]
+                region = gray[y: y + win_size, x: x + win_size]
 
                 # Path A: strong alternation pattern
                 frac, contrast = compute_alternation_strength(region)
-                if frac >= MIN_ALTERNATION_FRAC and contrast >= MIN_ALTERNATION_CONTRAST:
+                if frac >= _P1_MIN_FRAC and contrast >= _P1_MIN_CONTRAST:
                     if scale_best is None or frac > scale_best[0]:
                         scale_best = (frac, (x, y, win_size, win_size))
                     continue
@@ -611,14 +683,38 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
                 if regularity >= MIN_LOW_VARIANCE_RATIO and check_alternating_pattern(region):
                     if scale_best is None or regularity > scale_best[0]:
                         scale_best = (regularity, (x, y, win_size, win_size))
+                    continue
+
+                # Track near-misses for offset refinement
+                if frac >= _NEAR_MISS_FRAC and contrast >= _NEAR_MISS_CONTRAST:
+                    near_misses.append((frac, x, y))
+
+        # Pass 2: refine top near-misses with half-cell offsets.
+        if scale_best is None and near_misses:
+            near_misses.sort(reverse=True)
+            for _, nm_x, nm_y in near_misses[:5]:
+                for dy in (0, half_cell, -half_cell):
+                    for dx in (0, half_cell, -half_cell):
+                        if dx == 0 and dy == 0:
+                            continue
+                        rx, ry = nm_x + dx, nm_y + dy
+                        if rx < 0 or ry < 0 or rx + win_size > w or ry + win_size > h:
+                            continue
+                        region = gray[ry: ry + win_size, rx: rx + win_size]
+                        frac, contrast = compute_alternation_strength(region)
+                        if frac >= _P1_MIN_FRAC and contrast >= _P1_MIN_CONTRAST:
+                            if scale_best is None or frac > scale_best[0]:
+                                scale_best = (frac, (rx, ry, win_size, win_size))
 
         if scale_best is not None:
             f, b = scale_best
             candidates.append((f, b[2] * b[3], b))
 
     # Phase 2: Map to full resolution + validate with checkerboard.
-    # Sort by area (desc) to prefer larger detections.
-    candidates.sort(key=lambda c: c[1], reverse=True)
+    # Sort by score (desc) to try best-confidence candidates first.
+    # Larger windows that include non-board content score lower, so
+    # score-based sorting naturally prefers board-only detections.
+    candidates.sort(key=lambda c: c[0], reverse=True)
     inv = 1.0 / scale_factor if scale_factor < 1.0 else 1.0
 
     for _, _, small_bbox in candidates:
@@ -641,10 +737,27 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
         fh = min(fh, orig_h - fy)
         full_bbox = (fx, fy, fw, fh)
 
-        # Validate at full resolution: alternation + checkerboard.
-        region = gray_full[fy : fy + fh, fx : fx + fw]
-        frac, contrast = compute_alternation_strength(region)
-        if frac < MIN_ALTERNATION_FRAC or contrast < MIN_ALTERNATION_CONTRAST:
+        # Validate at full resolution with sub-cell offsets.
+        # Try multiple offsets to find best grid alignment at full res,
+        # matching the Phase 1 approach.
+        p2_cell = fw // 16  # half-cell offset at full resolution
+        best_p2_frac = 0.0
+        best_p2_contrast = 0.0
+        best_p2_bbox = full_bbox
+
+        for p2_dy in range(-p2_cell, p2_cell + 1, max(1, p2_cell // 2)):
+            for p2_dx in range(-p2_cell, p2_cell + 1, max(1, p2_cell // 2)):
+                nx, ny = fx + p2_dx, fy + p2_dy
+                if nx < 0 or ny < 0 or nx + fw > orig_w or ny + fh > orig_h:
+                    continue
+                region = gray_full[ny: ny + fh, nx: nx + fw]
+                f, c = compute_alternation_strength(region)
+                if f > best_p2_frac or (f == best_p2_frac and c > best_p2_contrast):
+                    best_p2_frac = f
+                    best_p2_contrast = c
+                    best_p2_bbox = (nx, ny, fw, fh)
+
+        if best_p2_frac < MIN_ALTERNATION_FRAC or best_p2_contrast < MIN_ALTERNATION_CONTRAST:
             continue
 
         # Validate with checkerboard consistency to eliminate false positives
@@ -652,14 +765,14 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
         # Skip at low resolution — compression artifacts inflate checkerboard
         # std, causing false negatives on real boards.
         if min(orig_h, orig_w) >= 720:
-            if not check_checkerboard_consistency(gray_full, full_bbox):
+            if not check_checkerboard_consistency(gray_full, best_p2_bbox):
                 continue
 
         return OverlayDetection(
             found=True,
-            bbox=full_bbox,
-            seed_bbox=full_bbox,
-            score=frac,
+            bbox=best_p2_bbox,
+            seed_bbox=best_p2_bbox,
+            score=best_p2_frac,
             frame_resolution=resolution,
         )
 

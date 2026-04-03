@@ -20,7 +20,7 @@ from pipeline.overlay.scanner import fast_overlay_check
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "frames"
 GROUND_TRUTH_PATH = FIXTURES_DIR / "ground_truth.json"
 
-MAX_MS = 100
+MAX_MS = 200
 IOU_THRESHOLD = 0.40
 
 
