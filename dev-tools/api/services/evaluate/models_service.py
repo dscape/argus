@@ -49,7 +49,7 @@ def _frame_to_base64(frame: np.ndarray, max_width: int = 640) -> str:
 
 
 def inspect_ai_screening(video_id: str) -> dict | None:
-    """Inspect AI screening for a single video — all 4 frames + per-frame scores + prediction."""
+    """Inspect AI screening for a single video — 3 frames + per-frame scores + prediction."""
     import torch
     import torch.nn.functional as F
 
@@ -68,7 +68,7 @@ def inspect_ai_screening(video_id: str) -> dict | None:
     # Compute title score on the fly
     _, title_score = score_title(title)
 
-    # Fetch all 4 frames
+    # Fetch 25/50/75% frames
     frames = fetch_youtube_frames(video_id)
     if not frames:
         return {"video_id": video_id, "title": title, "error": "Could not fetch thumbnails"}

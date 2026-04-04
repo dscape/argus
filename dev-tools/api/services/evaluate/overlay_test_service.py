@@ -7,7 +7,6 @@ sample → inspect → save session.
 """
 
 import base64
-import glob as glob_mod
 import json
 import logging
 import os
@@ -28,6 +27,7 @@ from pipeline.overlay.chess_positions_data import (
 from pipeline.overlay.grid_detector import GridResult, detect_grid
 from pipeline.overlay.piece_classifier import classify_squares, read_fen_with_grid
 from pipeline.overlay.scanner import detect_overlay_fast, fast_overlay_check
+from pipeline.paths import find_frame
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +40,6 @@ REAL_OVERLAY_TEST_DIR = _PROJECT_ROOT / "data" / "overlay" / "val_real"
 # endpoint rejects for security).
 _REAL_PREFIX = "real__"
 
-# Screening frames cached on disk (4 frames per video at 480×360)
-SCREENING_FRAMES_DIR = _PROJECT_ROOT / "data" / "screening" / "dataset" / "frames"
-# Hi-res overlay frames (1920×1080 via yt-dlp, or 1280×720 from thumbnails)
-OVERLAY_FRAMES_DIR = _PROJECT_ROOT / "data" / "overlay" / "dataset" / "frames"
 _KNOWN_FRAME_NAMES = ("thumb_hires", "thumb_sd", "thumb", "25pct", "50pct", "75pct")
 # For overlay extraction, only use auto-generated gameplay frames (25/50/75% of video).
 # Custom thumbnails (thumb_hires, thumb_sd, thumb) are often promotional/title images
@@ -59,14 +55,14 @@ _GRID = GridResult(
 
 
 def _resolve_frame_path(video_id: str, frame_name: str) -> Path | None:
-    """Return hi-res overlay frame path, or None.
+    """Return overlay frame path, preferring fullres then hires.
 
-    Only uses ``OVERLAY_FRAMES_DIR`` (1920x1080 via yt-dlp).  Screening
-    frames (480x360) are too low-res for reliable overlay detection.
+    Screening frames (480x360) are too low-res for reliable overlay detection.
     """
-    hires = OVERLAY_FRAMES_DIR / video_id / f"{frame_name}.jpg"
-    if hires.exists():
-        return hires
+    for tier in ("fullres", "hires"):
+        path = find_frame(video_id, tier, frame_name)  # type: ignore[arg-type]
+        if path is not None:
+            return path
     return None
 
 
@@ -288,18 +284,10 @@ def inspect_board(filename: str) -> dict:
 
 def _get_video_path(video_id: str) -> str | None:
     """Find the local path for a downloaded video, or None."""
-    base_dirs = [
-        "data/videos",
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "data", "videos"),
-    ]
-    for base in base_dirs:
-        base = os.path.normpath(base)
-        for ext in ("mp4", "mkv", "webm"):
-            pattern = os.path.join(base, "*", f"{video_id}.{ext}")
-            matches = glob_mod.glob(pattern)
-            if matches:
-                return matches[0]
-    return None
+    from pipeline.paths import find_video_file
+
+    path = find_video_file(video_id)
+    return str(path) if path is not None else None
 
 
 
@@ -434,7 +422,7 @@ def extract_overlay_from_frames(video_id: str) -> dict:
     """Process one video's cached screening frames and return the best overlay.
 
     Tries frames (25pct, 50pct, 75pct), preferring hi-res overlay frames
-    from ``OVERLAY_FRAMES_DIR`` over low-res screening frames.
+    from fullres/hires tiers over low-res screening frames.
 
     Pipeline per frame: ``detect_overlay_fast`` (seed + expansion) →
     crop to bbox → ``detect_grid`` → ``classify_squares`` → FEN.

@@ -6,24 +6,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
-import numpy as np
-
 from pipeline.overlay.scanner import (
     _refine_alignment,
     check_alternating_pattern,
     compute_grid_regularity,
 )
+from pipeline.paths import GROUND_TRUTH_PATH, VIDEOS_DIR
+from pipeline.paths import frame_path as _frame_path
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
-FRAMES_DIR = PROJECT_ROOT / "data" / "overlay" / "dataset" / "frames"
-GROUND_TRUTH_PATH = FRAMES_DIR / "ground_truth.json"
+# Legacy path used as fallback during migration
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+_LEGACY_FRAMES_DIR = _PROJECT_ROOT / "data" / "overlay" / "dataset" / "frames"
+_LEGACY_GT_PATH = _LEGACY_FRAMES_DIR / "ground_truth.json"
 
 
 def _load_ground_truth() -> dict:
     if GROUND_TRUTH_PATH.exists():
         return json.loads(GROUND_TRUTH_PATH.read_text())
+    # Fall back to legacy location
+    if _LEGACY_GT_PATH.exists():
+        return json.loads(_LEGACY_GT_PATH.read_text())
     return {}
 
 
@@ -35,41 +39,74 @@ def _save_ground_truth(data: dict) -> None:
 
 
 def list_frames() -> list[dict]:
-    """List all downloaded frames with annotation status."""
+    """List all hires frames with annotation status."""
     gt = _load_ground_truth()
     frames = []
-    if not FRAMES_DIR.exists():
-        return frames
-    for video_dir in sorted(FRAMES_DIR.iterdir()):
-        if not video_dir.is_dir():
-            continue
-        video_id = video_dir.name
-        for img_path in sorted(video_dir.glob("*.jpg")):
-            label = img_path.stem
-            key = f"{video_id}/{label}"
-            annotation = gt.get(key)
-            img = cv2.imread(str(img_path))
-            h, w = img.shape[:2] if img is not None else (0, 0)
-            frames.append(
-                {
-                    "key": key,
-                    "video_id": video_id,
-                    "label": label,
-                    "frame_width": w,
-                    "frame_height": h,
-                    "annotated": annotation is not None,
-                    "has_overlay": annotation.get("has_overlay") if annotation else None,
-                    "bbox": annotation.get("bbox") if annotation else None,
-                }
-            )
+
+    # Scan new layout: data/videos/*/hires/*.jpg
+    if VIDEOS_DIR.exists():
+        for video_dir in sorted(VIDEOS_DIR.iterdir()):
+            hires_dir = video_dir / "hires"
+            if not hires_dir.is_dir():
+                continue
+            video_id = video_dir.name
+            for img_path in sorted(hires_dir.glob("*.jpg")):
+                label = img_path.stem
+                key = f"{video_id}/{label}"
+                annotation = gt.get(key)
+                img = cv2.imread(str(img_path))
+                h, w = img.shape[:2] if img is not None else (0, 0)
+                frames.append(
+                    {
+                        "key": key,
+                        "video_id": video_id,
+                        "label": label,
+                        "frame_width": w,
+                        "frame_height": h,
+                        "annotated": annotation is not None,
+                        "has_overlay": annotation.get("has_overlay") if annotation else None,
+                        "bbox": annotation.get("bbox") if annotation else None,
+                    }
+                )
+
+    # Fall back to legacy dir if no new-layout frames found
+    if not frames and _LEGACY_FRAMES_DIR.exists():
+        for video_dir in sorted(_LEGACY_FRAMES_DIR.iterdir()):
+            if not video_dir.is_dir():
+                continue
+            video_id = video_dir.name
+            for img_path in sorted(video_dir.glob("*.jpg")):
+                label = img_path.stem
+                key = f"{video_id}/{label}"
+                annotation = gt.get(key)
+                img = cv2.imread(str(img_path))
+                h, w = img.shape[:2] if img is not None else (0, 0)
+                frames.append(
+                    {
+                        "key": key,
+                        "video_id": video_id,
+                        "label": label,
+                        "frame_width": w,
+                        "frame_height": h,
+                        "annotated": annotation is not None,
+                        "has_overlay": annotation.get("has_overlay") if annotation else None,
+                        "bbox": annotation.get("bbox") if annotation else None,
+                    }
+                )
+
     return frames
 
 
 def get_frame_path(video_id: str, label: str) -> Path | None:
-    """Resolve and validate a frame file path."""
-    path = FRAMES_DIR / video_id / f"{label}.jpg"
+    """Resolve and validate a frame file path (hires preferred)."""
+    # New layout
+    path = _frame_path(video_id, "hires", label)
     if path.exists():
         return path
+    # Legacy
+    legacy = _LEGACY_FRAMES_DIR / video_id / f"{label}.jpg"
+    if legacy.exists():
+        return legacy
     return None
 
 

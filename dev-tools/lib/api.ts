@@ -511,6 +511,34 @@ export async function downloadVideo(
   return res.json();
 }
 
+// ── Asset status ─────────────────────────────────────────
+
+export interface AssetStatus {
+  video: boolean;
+  lores: string[];
+  hires: string[];
+  fullres: string[];
+}
+
+export async function getAssetStatus(videoId: string): Promise<AssetStatus> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/assets`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function fetchAssets(
+  videoId: string
+): Promise<{ video_id: string; lores_fetched: number; hires_fetched: number }> {
+  const res = await fetch(
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/fetch-assets`,
+    { method: "POST" }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ── Clip generation ─────────────────────────────────────────
 
 export async function generateClips(

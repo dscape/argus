@@ -85,6 +85,13 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
     let totalProcessed = 0;
     let totalErrors = 0;
 
+    const classifyResult = (r: any): "approved" | "rejected" | "deferred" | "error" => {
+      if (r.error) return "error";
+      if (r.vertical || (r.auto_decided && r.predicted_class === "reject")) return "rejected";
+      if (r.auto_decided && r.predicted_class !== "reject") return "approved";
+      return "deferred";
+    };
+
     const applyResults = (results: any[]) => {
       const resultMap = new Map(results.map((r: any) => [r.video_id, r]));
 
@@ -94,14 +101,13 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
           if (!r) return v;
 
           const updated = { ...v, ai_result: r };
+          const cls = classifyResult(r);
 
-          if (r.error) {
-            totalDeferred++;
+          if (cls === "error") {
             return { ...updated, inspect_reason: `AI error: ${r.error}` };
           }
 
-          if (r.vertical || (r.auto_decided && r.predicted_class === "reject")) {
-            totalRejected++;
+          if (cls === "rejected") {
             return {
               ...updated,
               screening_status: "rejected",
@@ -109,8 +115,7 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
             };
           }
 
-          if (r.auto_decided && r.predicted_class !== "reject") {
-            totalApproved++;
+          if (cls === "approved") {
             return {
               ...updated,
               screening_status: "approved",
@@ -119,7 +124,6 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
             };
           }
 
-          totalDeferred++;
           return {
             ...updated,
             inspect_reason: `AI ${r.predicted_class} ${Math.round((r.confidence ?? 0) * 100)}% — review`,
@@ -133,6 +137,13 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
       try {
         const { results } = await aiScreenBatch(chunk, 0.90);
         applyResults(results);
+        // Count outside setVideos to avoid React double-invocation
+        for (const r of results) {
+          const cls = classifyResult(r);
+          if (cls === "approved") totalApproved++;
+          else if (cls === "rejected") totalRejected++;
+          else totalDeferred++;
+        }
         totalProcessed += results.length;
       } catch (e) {
         totalErrors += chunk.length;
@@ -147,8 +158,8 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
 
     if (totalProcessed > 0) {
       addToast({
-        message: `AI screened ${totalProcessed}: ${totalApproved} approved, ${totalRejected} rejected, ${totalDeferred} for review${totalErrors > 0 ? `, ${totalErrors} errors` : ""}`,
-        type: "success",
+        message: `AI screened ${totalProcessed}: ${totalApproved} approved, ${totalRejected} rejected, ${totalDeferred} for review${totalErrors > 0 ? ` (${totalErrors} errors)` : ""}`,
+        type: totalErrors > 0 ? "warning" : "success",
       });
     }
   }, [videos, loadCounts, addToast]);
@@ -445,12 +456,25 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
           </span>
 
           {correctionStats && correctionStats.corrections > 0 && (
-            <span
-              className="text-xs text-amber-500 px-2 tabular-nums"
-              title={`${correctionStats.total_human} human, ${correctionStats.total_ai} AI, ${correctionStats.corrections} corrections of AI decisions`}
-            >
-              {correctionStats.corrections} correction{correctionStats.corrections !== 1 ? "s" : ""}
-            </span>
+            <div className="relative group">
+              <span className="text-xs text-amber-500 px-2 tabular-nums cursor-default">
+                {correctionStats.corrections} correction{correctionStats.corrections !== 1 ? "s" : ""}
+              </span>
+              <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 z-[60] hidden group-hover:block rounded-lg border bg-background shadow-lg p-2 min-w-[140px] text-[11px] space-y-0.5">
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">human</span>
+                  <span>{correctionStats.total_human.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">AI</span>
+                  <span>{correctionStats.total_ai.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between gap-4 border-t pt-0.5 mt-0.5">
+                  <span className="text-muted-foreground">overrides</span>
+                  <span className="text-amber-500 font-medium">{correctionStats.corrections}</span>
+                </div>
+              </div>
+            </div>
           )}
 
           <div className="flex-1" />
@@ -510,6 +534,7 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
         <div className="flex-1 grid grid-cols-2 xl:grid-cols-3 gap-2 auto-rows-min content-start overflow-hidden">
           {sortedVideos.map((v, idx) => {
             const isUnscreened = v.screening_status === null;
+            const isDeferred = isUnscreened && v.ai_result != null;
             const tint = cardTintClass(v.screening_status, v.layout_type ?? null, true);
             const shortcutKey = idx < 9 ? idx + 1 : null;
 
@@ -518,7 +543,7 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
                 key={v.video_id}
                 className={`border rounded-lg bg-card transition-all duration-300 ${tint} ${
                   selected.has(v.video_id) ? "ring-2 ring-primary" : ""
-                }`}
+                } ${isDeferred ? "border-amber-400/40 bg-amber-50/30 dark:bg-amber-950/10" : ""}`}
               >
                 {/* Header: checkbox + title + score + status */}
                 <div className="px-2 py-1 flex items-center gap-1.5 min-w-0">
@@ -537,6 +562,11 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
                     className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${scoreColor(v.title_score)}`}
                   />
                   {v.ai_result && <AiInfoIcon result={v.ai_result} />}
+                  {v.inspect_reason && isUnscreened && (
+                    <span className="text-[10px] text-amber-600 dark:text-amber-400 flex-shrink-0 truncate max-w-[120px]">
+                      {v.inspect_reason}
+                    </span>
+                  )}
                   <a
                     href={`https://www.youtube.com/watch?v=${v.video_id}`}
                     target="_blank"
@@ -550,13 +580,13 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
                   )}
                 </div>
 
-                {/* 2x2 thumbnail grid */}
-                <div className="grid grid-cols-2 gap-px bg-muted">
-                  {[0, 1, 2, 3].map((i) => (
+                {/* 25/50/75% thumbnail grid */}
+                <div className="grid grid-cols-3 gap-px bg-muted">
+                  {[1, 2, 3].map((i) => (
                     <img
                       key={i}
                       src={youtubeThumb(v.video_id, i)}
-                      alt={`Frame ${i}`}
+                      alt={`${["", "25%", "50%", "75%"][i]}`}
                       className="w-full aspect-video object-cover bg-background"
                       loading="lazy"
                     />

@@ -1,8 +1,8 @@
 """DINOv2-based screening classifier for automating video review.
 
-Encodes 4 YouTube thumbnails per video through a frozen DINOv2 encoder,
-concatenates the pooled embeddings with per-frame overlay/OTB scanner
-scores, and classifies into overlay / otb_only / reject.
+Encodes 3 YouTube frames (25/50/75%) per video through a frozen DINOv2
+encoder, concatenates the pooled embeddings with per-frame overlay/OTB
+scanner scores, and classifies into overlay / otb_only / reject.
 """
 
 import logging
@@ -21,12 +21,13 @@ logger = logging.getLogger(__name__)
 # Bump this when model architecture or feature extraction changes. Format: v{N}
 # v1: initial model with 120x90 frames (broken — frames 2-4 too small for scanner)
 # v2: fixed to use 480x360 hq frames, added vertical video filtering
-MODEL_CODE_VERSION = "v2"
+# v3: dropped thumb, use 3 frames (25/50/75pct only)
+MODEL_CODE_VERSION = "v3"
 
 # Class labels for the 3-way screening decision.
 CLASS_NAMES = ["overlay", "otb_only", "reject"]
 NUM_CLASSES = len(CLASS_NAMES)
-NUM_FRAMES = 4
+NUM_FRAMES = 3
 EMBED_DIM = 768
 
 # DINOv2 ImageNet normalization.
@@ -38,7 +39,7 @@ INPUT_SIZE = 224
 class ScreeningClassifier(nn.Module):
     """Small MLP head on top of pre-extracted DINOv2 features.
 
-    Input:  4 * 768 DINOv2 pooled embeddings + 4 overlay scores + 4 OTB scores = 3080
+    Input:  3 * 768 DINOv2 pooled embeddings + 3 overlay scores + 3 OTB scores = 2310
     Output: 3-class logits (overlay, otb_only, reject)
     """
 

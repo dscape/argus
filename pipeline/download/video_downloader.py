@@ -7,21 +7,18 @@ import time
 import yt_dlp
 
 from pipeline.db.connection import get_conn
+from pipeline.paths import find_video_file, video_file
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OUTPUT_DIR = os.path.join("data", "videos")
-
 
 def download_approved_videos(
-    output_dir: str = DEFAULT_OUTPUT_DIR,
     limit: int | None = None,
     delay: float = 2.0,
 ):
     """Download videos that passed screening (overlay + OTB approved).
 
     Args:
-        output_dir: Base directory for downloaded videos.
         limit: Maximum number of videos to download.
         delay: Seconds to wait between downloads.
     """
@@ -49,10 +46,9 @@ def download_approved_videos(
     # Filter out already downloaded
     to_download = []
     for video_id, channel_handle, title in videos:
-        channel_dir = (channel_handle or "unknown").lstrip("@")
-        filepath = os.path.join(output_dir, channel_dir, f"{video_id}.mp4")
-        if not os.path.exists(filepath):
-            to_download.append((video_id, channel_dir, title, filepath))
+        if find_video_file(video_id) is None:
+            filepath = str(video_file(video_id))
+            to_download.append((video_id, title, filepath))
 
     if not to_download:
         print(f"All {len(videos)} approved videos already downloaded.")
@@ -66,7 +62,7 @@ def download_approved_videos(
     downloaded = 0
     failed = 0
 
-    for video_id, channel_dir, title, filepath in to_download:
+    for video_id, title, filepath in to_download:
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
         url = f"https://www.youtube.com/watch?v={video_id}"
@@ -99,7 +95,6 @@ def download_approved_videos(
 
 
 def download_diverse_overlay_videos(
-    output_dir: str = DEFAULT_OUTPUT_DIR,
     per_channel: int = 3,
     delay: float = 5.0,
 ):
@@ -111,7 +106,6 @@ def download_diverse_overlay_videos(
     throttling.
 
     Args:
-        output_dir: Base directory for downloaded videos.
         per_channel: Max videos to download per channel.
         delay: Base seconds between downloads (increases on failure).
     """
@@ -145,10 +139,9 @@ def download_diverse_overlay_videos(
     # Filter out already downloaded
     to_download = []
     for video_id, channel_handle, title in videos:
-        channel_dir = (channel_handle or "unknown").lstrip("@")
-        filepath = os.path.join(output_dir, channel_dir, f"{video_id}.mp4")
-        if not os.path.exists(filepath):
-            to_download.append((video_id, channel_dir, title, filepath))
+        if find_video_file(video_id) is None:
+            filepath = str(video_file(video_id))
+            to_download.append((video_id, channel_handle, title, filepath))
 
     channels = {v[1] for v in to_download}
     already = len(videos) - len(to_download)
@@ -165,10 +158,11 @@ def download_diverse_overlay_videos(
     failed = 0
     consecutive_fails = 0
 
-    for video_id, channel_dir, title, filepath in to_download:
+    for video_id, channel_handle, title, filepath in to_download:
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         url = f"https://www.youtube.com/watch?v={video_id}"
-        print(f"\n  [{downloaded + failed + 1}/{len(to_download)}] [{channel_dir}] {title[:50]}...")
+        ch_dir = (channel_handle or "unknown").lstrip("@")
+        print(f"\n  [{downloaded + failed + 1}/{len(to_download)}] [{ch_dir}] {title[:50]}...")
 
         ydl_opts = {
             # Prefer single-stream mp4 to avoid needing ffmpeg for merging.
@@ -196,7 +190,8 @@ def download_diverse_overlay_videos(
             # Exponential backoff on consecutive failures
             if consecutive_fails >= 3:
                 backoff = min(60, delay * (2 ** (consecutive_fails - 2)))
-                print(f"    Backing off {backoff:.0f}s after {consecutive_fails} consecutive failures...")
+                print(f"    Backing off {backoff:.0f}s "
+                      f"after {consecutive_fails} fails...")
                 time.sleep(backoff)
                 continue
 
@@ -209,12 +204,7 @@ def download_diverse_overlay_videos(
     )
 
 
-def get_video_path(
-    video_id: str,
-    channel_handle: str | None = None,
-    output_dir: str = DEFAULT_OUTPUT_DIR,
-) -> str | None:
+def get_video_path(video_id: str) -> str | None:
     """Get the local file path for a downloaded video, or None if not downloaded."""
-    channel_dir = (channel_handle or "unknown").lstrip("@")
-    filepath = os.path.join(output_dir, channel_dir, f"{video_id}.mp4")
-    return filepath if os.path.exists(filepath) else None
+    path = find_video_file(video_id)
+    return str(path) if path is not None else None

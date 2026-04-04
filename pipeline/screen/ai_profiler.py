@@ -14,6 +14,7 @@ import torch
 import torch.nn.functional as F
 
 from pipeline.overlay.scanner import detect_overlay_in_frame
+from pipeline.paths import find_frame
 from pipeline.screen.ai_classifier import (
     CLASS_NAMES,
     EMBED_DIM,
@@ -23,7 +24,7 @@ from pipeline.screen.ai_classifier import (
 )
 from pipeline.screen.ai_train import CACHE_DIR, CHECKPOINT_DIR
 from pipeline.screen.dual_region_detector import detect_otb_region
-from pipeline.screen.frame_fetcher import FRAME_CACHE_DIR, fetch_youtube_frames
+from pipeline.screen.frame_fetcher import fetch_youtube_frames
 
 
 @dataclass
@@ -114,9 +115,7 @@ def profile_video(
         # Uncached path: full feature extraction with per-phase timing
 
         # Phase 3: Fetch frames
-        frames_from_cache = os.path.isdir(
-            os.path.join(FRAME_CACHE_DIR, video_id)
-        )
+        frames_from_cache = find_frame(video_id, "lores", "25pct") is not None
         frame_source = "disk" if frames_from_cache else "network"
         with timer.phase(f"frame_fetch ({frame_source})"):
             frames = fetch_youtube_frames(video_id)

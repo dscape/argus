@@ -7,17 +7,14 @@ Follows the session CRUD pattern from overlay_test_service.py.
 """
 
 import base64
-import glob
 import json
 import logging
-import os
 import time
 import uuid
 
 import chess
 import cv2
 import numpy as np
-
 from pipeline.db.connection import get_conn
 from pipeline.overlay.auto_calibration import (
     compute_camera_bbox,
@@ -36,18 +33,10 @@ logger = logging.getLogger(__name__)
 
 def _get_video_path(video_id: str) -> str | None:
     """Find the local path for a downloaded video, or None."""
-    base_dirs = [
-        "data/videos",
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "data", "videos"),
-    ]
-    for base in base_dirs:
-        base = os.path.normpath(base)
-        for ext in ("mp4", "mkv", "webm"):
-            pattern = os.path.join(base, "*", f"{video_id}.{ext}")
-            matches = glob.glob(pattern)
-            if matches:
-                return matches[0]
-    return None
+    from pipeline.paths import find_video_file
+
+    path = find_video_file(video_id)
+    return str(path) if path is not None else None
 
 
 def _bbox_iou(a, b) -> float:

@@ -87,8 +87,8 @@ def get_channel_detail(channel_id: str) -> dict | None:
 
 def add_channel(handle: str) -> dict:
     """Resolve a YouTube handle and insert into crawl_channels."""
-    from pipeline.crawl.youtube_client import YouTubeClient
     from pipeline.crawl.quota_tracker import QuotaTracker
+    from pipeline.crawl.youtube_client import YouTubeClient
 
     client = YouTubeClient(quota_tracker=QuotaTracker())
     info = client.get_channel_by_handle(handle)
@@ -148,9 +148,9 @@ def toggle_channel(channel_id: str, enabled: bool) -> dict | None:
 
 def crawl_single_channel(channel_id: str) -> dict:
     """Trigger a crawl for one channel. Returns new video count."""
-    from pipeline.crawl.youtube_client import YouTubeClient
-    from pipeline.crawl.quota_tracker import QuotaTracker
     from pipeline.crawl.crawl_videos import crawl_channel
+    from pipeline.crawl.quota_tracker import QuotaTracker
+    from pipeline.crawl.youtube_client import YouTubeClient
 
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -192,9 +192,9 @@ def crawl_single_channel(channel_id: str) -> dict:
 
 def crawl_all_channels() -> dict:
     """Crawl all enabled channels. Returns summary."""
-    from pipeline.crawl.youtube_client import YouTubeClient
-    from pipeline.crawl.quota_tracker import QuotaTracker
     from pipeline.crawl.crawl_videos import crawl_channel
+    from pipeline.crawl.quota_tracker import QuotaTracker
+    from pipeline.crawl.youtube_client import YouTubeClient
 
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -672,6 +672,7 @@ def auto_classify_titles(
     a structured classification. Updates screening_status in the database.
     """
     import json as _json
+
     import anthropic
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -864,33 +865,19 @@ def _project_root() -> str:
     return os.getcwd()
 
 
-def _video_path(video_id: str, channel_handle: str | None) -> str:
-    """Canonical local path for a downloaded video."""
-    channel_dir = (channel_handle or "unknown").lstrip("@")
-    return os.path.join(_project_root(), "data", "videos", channel_dir, f"{video_id}.mp4")
-
-
 def get_download_status(video_id: str) -> dict:
     """Check if a video file is downloaded and return its status."""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT channel_handle FROM youtube_videos WHERE video_id = %s",
-                (video_id,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return {"downloaded": False, "path": None, "file_size_mb": None, "duration_seconds": None}
+    from pipeline.paths import find_video_file
 
-    path = _video_path(video_id, row[0])
+    path = find_video_file(video_id)
 
-    if os.path.exists(path):
+    if path is not None:
         import cv2
 
         size_mb = round(os.path.getsize(path) / (1024 * 1024), 1)
         duration_seconds = None
         try:
-            cap = cv2.VideoCapture(path)
+            cap = cv2.VideoCapture(str(path))
             fps = cap.get(cv2.CAP_PROP_FPS)
             frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
             if fps > 0 and frame_count > 0:
@@ -898,27 +885,54 @@ def get_download_status(video_id: str) -> dict:
             cap.release()
         except Exception:
             pass
-        return {"downloaded": True, "path": path, "file_size_mb": size_mb, "duration_seconds": duration_seconds}
+        return {
+            "downloaded": True, "path": str(path),
+            "file_size_mb": size_mb,
+            "duration_seconds": duration_seconds,
+        }
 
-    return {"downloaded": False, "path": None, "file_size_mb": None, "duration_seconds": None}
+    return {
+        "downloaded": False, "path": None,
+        "file_size_mb": None, "duration_seconds": None,
+    }
+
+
+def get_asset_status(video_id: str) -> dict:
+    """Report which assets exist for a video."""
+    from pipeline.paths import asset_status
+    return asset_status(video_id)
+
+
+def fetch_video_assets(video_id: str) -> dict:
+    """Fetch lores + hires frames for a video. Returns counts."""
+    from pipeline.screen.frame_fetcher import fetch_overlay_frames
+
+    lores = fetch_overlay_frames(video_id, hires=False)
+    hires = fetch_overlay_frames(video_id, hires=True)
+    return {
+        "video_id": video_id,
+        "lores_fetched": len(lores),
+        "hires_fetched": len(hires),
+    }
 
 
 def download_single_video(video_id: str) -> dict:
     """Download a single video. Returns download status."""
     import yt_dlp
+    from pipeline.paths import video_file
 
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT video_id, channel_handle, title FROM youtube_videos WHERE video_id = %s",
+                "SELECT video_id, title FROM youtube_videos WHERE video_id = %s",
                 (video_id,),
             )
             row = cur.fetchone()
             if not row:
                 raise ValueError(f"Video {video_id} not found")
 
-    vid, channel_handle, title = row
-    filepath = _video_path(vid, channel_handle)
+    vid, title = row
+    filepath = str(video_file(vid))
     output_dir = os.path.dirname(filepath)
 
     if os.path.exists(filepath):
@@ -930,7 +944,10 @@ def download_single_video(video_id: str) -> dict:
     url = f"https://www.youtube.com/watch?v={vid}"
     ydl_opts = {
         # Prefer H.264 (avc1) so OpenCV can decode without extra codecs
-        "format": "bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[vcodec^=avc1]+bestaudio/best[ext=mp4]/best",
+        "format": (
+            "bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]"
+            "/bestvideo[vcodec^=avc1]+bestaudio/best[ext=mp4]/best"
+        ),
         "outtmpl": filepath.replace(".mp4", ".%(ext)s"),
         "merge_output_format": "mp4",
         "quiet": True,

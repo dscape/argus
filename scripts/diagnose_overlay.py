@@ -33,8 +33,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES_DIR = PROJECT_ROOT / "tests" / "fixtures" / "frames"
 FIXTURES_GT = FIXTURES_DIR / "ground_truth.json"
 
-# Real frames
-REAL_FRAMES_DIR = PROJECT_ROOT / "data" / "overlay" / "dataset" / "frames"
+# Real frames - prefer hires from new layout, fall back to legacy overlay dir
+REAL_FRAMES_DIR = PROJECT_ROOT / "data" / "videos"
+_LEGACY_OVERLAY_DIR = PROJECT_ROOT / "data" / "overlay" / "dataset" / "frames"
 
 
 def scan_with_logging(frame: np.ndarray) -> dict:
@@ -179,23 +180,29 @@ def main():
             if path.exists():
                 fixtures.append((f"FIXTURE:{key}", str(path)))
 
-    # Load real frames (sample 15 videos, 1 frame each)
+    # Load real frames (sample 20 videos, 1 frame each)
+    # Check hires tier in new layout, fall back to legacy overlay dir
     real_frames = []
+    search_dirs = []
     if REAL_FRAMES_DIR.exists():
-        dirs = sorted(REAL_FRAMES_DIR.iterdir())
-        count = 0
-        for video_dir in dirs:
-            if not video_dir.is_dir():
-                continue
-            # Pick 50pct frame
-            frame_path = video_dir / "50pct.jpg"
-            if not frame_path.exists():
-                frame_path = video_dir / "25pct.jpg"
-            if frame_path.exists():
-                real_frames.append((f"REAL:{video_dir.name}/50pct", str(frame_path)))
-                count += 1
-                if count >= 20:
-                    break
+        for vd in sorted(REAL_FRAMES_DIR.iterdir()):
+            hires = vd / "hires"
+            if hires.is_dir():
+                search_dirs.append((vd.name, hires))
+    if not search_dirs and _LEGACY_OVERLAY_DIR.exists():
+        for vd in sorted(_LEGACY_OVERLAY_DIR.iterdir()):
+            if vd.is_dir():
+                search_dirs.append((vd.name, vd))
+    count = 0
+    for vid_name, fdir in search_dirs:
+        fp = fdir / "50pct.jpg"
+        if not fp.exists():
+            fp = fdir / "25pct.jpg"
+        if fp.exists():
+            real_frames.append((f"REAL:{vid_name}/50pct", str(fp)))
+            count += 1
+            if count >= 20:
+                break
 
     all_frames = fixtures + real_frames
 

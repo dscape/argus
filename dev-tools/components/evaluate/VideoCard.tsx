@@ -66,7 +66,6 @@ export function ProbBar({ label, value }: { label: string; value: number }) {
 }
 
 const FRAME_LABEL_TO_INDEX: Record<string, number> = {
-  "0": 0,
   "hq1": 1,
   "hq2": 2,
   "hq3": 3,
@@ -74,7 +73,7 @@ const FRAME_LABEL_TO_INDEX: Record<string, number> = {
 
 function frameSrc(videoId: string, frame: FrameResult): string {
   if (frame.image_base64) return `data:image/jpeg;base64,${frame.image_base64}`;
-  const idx = FRAME_LABEL_TO_INDEX[frame.label] ?? 0;
+  const idx = FRAME_LABEL_TO_INDEX[frame.label] ?? 1;
   return youtubeThumb(videoId, idx);
 }
 

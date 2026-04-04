@@ -14,7 +14,7 @@
     {
       "name": "grid-viewer",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8123", "--directory", "data/overlay/dataset/frames"],
+      "runtimeArgs": ["-m", "http.server", "8123", "--directory", "data/videos"],
       "port": 8123
     }
   ]

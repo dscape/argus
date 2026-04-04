@@ -285,19 +285,10 @@ def _scale_bbox(
 
 def _get_video_path(video_id: str) -> str | None:
     """Find the local path for a downloaded video, or None."""
-    import glob
-    import os
+    from pipeline.paths import find_video_file
 
-    # Try both relative and absolute paths (Docker CWD may differ from project root)
-    base_dirs = ["data/videos", os.path.join(os.path.dirname(__file__), "..", "..", "data", "videos")]
-    for base in base_dirs:
-        base = os.path.normpath(base)
-        for ext in ("mp4", "mkv", "webm"):
-            pattern = os.path.join(base, "*", f"{video_id}.{ext}")
-            matches = glob.glob(pattern)
-            if matches:
-                return matches[0]
-    return None
+    path = find_video_file(video_id)
+    return str(path) if path is not None else None
 
 
 def _extract_frames_from_video(

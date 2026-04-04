@@ -4,8 +4,8 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from api.services.videos import crawl_service, inspect_service, segment_service
 from api.services.evaluate import models_service
+from api.services.videos import crawl_service, inspect_service, segment_service
 
 router = APIRouter()
 
@@ -308,6 +308,16 @@ async def download_video(video_id: str):
         return await run_in_threadpool(crawl_service.download_single_video, video_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.get("/videos/{video_id}/assets")
+async def get_asset_status(video_id: str):
+    return await run_in_threadpool(crawl_service.get_asset_status, video_id)
+
+
+@router.post("/videos/{video_id}/fetch-assets")
+async def fetch_video_assets(video_id: str):
+    return await run_in_threadpool(crawl_service.fetch_video_assets, video_id)
 
 
 # ── Annotations ──────────────────────────────────────────

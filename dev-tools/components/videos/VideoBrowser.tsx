@@ -420,13 +420,13 @@ export default function VideoBrowser({
                 </div>
               </div>
 
-              {/* 2x2 thumbnail grid */}
-              <div className="grid grid-cols-2 gap-px bg-muted">
-                {[0, 1, 2, 3].map((i) => (
+              {/* 25/50/75% thumbnail grid */}
+              <div className="grid grid-cols-3 gap-px bg-muted">
+                {[1, 2, 3].map((i) => (
                   <img
                     key={i}
                     src={youtubeThumb(v.video_id, i)}
-                    alt={`Frame ${i}`}
+                    alt={`${["", "25%", "50%", "75%"][i]}`}
                     className="w-full aspect-video object-cover bg-background"
                     loading="lazy"
                   />

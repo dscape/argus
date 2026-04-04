@@ -6,10 +6,8 @@ Follows the same session CRUD pattern as overlay_test_service.
 """
 
 import base64
-import glob
 import json
 import logging
-import os
 import random
 import time
 import uuid
@@ -17,13 +15,10 @@ import uuid
 import chess
 import cv2
 import numpy as np
-
 from pipeline.db.connection import get_conn
 from pipeline.overlay.grid_detector import detect_grid
 from pipeline.overlay.piece_classifier import CLASS_TO_PIECE, classify_squares
 from pipeline.overlay.scanner import (
-    MIN_LOW_VARIANCE_RATIO,
-    compute_grid_regularity,
     detect_overlay_in_frame,
     fast_overlay_check,
 )
@@ -36,18 +31,10 @@ logger = logging.getLogger(__name__)
 
 
 def _get_video_path(video_id: str) -> str | None:
-    base_dirs = [
-        "data/videos",
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "data", "videos"),
-    ]
-    for base in base_dirs:
-        base = os.path.normpath(base)
-        for ext in ("mp4", "mkv", "webm"):
-            pattern = os.path.join(base, "*", f"{video_id}.{ext}")
-            matches = glob.glob(pattern)
-            if matches:
-                return matches[0]
-    return None
+    from pipeline.paths import find_video_file
+
+    path = find_video_file(video_id)
+    return str(path) if path is not None else None
 
 
 def _frame_to_base64(frame: np.ndarray, max_width: int = 200) -> str:

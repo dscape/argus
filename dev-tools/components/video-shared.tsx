@@ -115,13 +115,19 @@ export function AiInfoIcon({ result }: { result: AiScreenResult }) {
       ? "text-amber-600"
       : "text-muted-foreground";
 
+  const iconColor = result.error
+    ? "bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-800/60"
+    : recommendation === "defer"
+    ? "bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-800/60"
+    : "bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-800/60";
+
   return (
     <div className="relative inline-flex" ref={ref}>
       <button
         onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
-        className="w-3.5 h-3.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 text-[9px] font-bold flex items-center justify-center hover:bg-blue-200 dark:hover:bg-blue-800/60 transition-colors flex-shrink-0"
+        className={`w-3.5 h-3.5 rounded-full ${iconColor} text-[9px] font-bold flex items-center justify-center transition-colors flex-shrink-0`}
       >
-        i
+        {result.error ? "!" : "i"}
       </button>
       {open && (
         <div

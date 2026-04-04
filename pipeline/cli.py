@@ -461,9 +461,9 @@ def cmd_smoke_test(args):
     from pipeline.screen.ai_classifier import ScreeningClassifier
 
     model = ScreeningClassifier()
-    emb = torch.randn(1, 4, 768)
-    scan = torch.randn(1, 4)
-    otb = torch.randn(1, 4)
+    emb = torch.randn(1, 3, 768)
+    scan = torch.randn(1, 3)
+    otb = torch.randn(1, 3)
     logits = model(emb, scan, otb)
     assert logits.shape == (1, 3), f"FAIL: expected (1, 3), got {logits.shape}"
     print(f"  Logits shape: {logits.shape} (overlay, otb_only, reject)")

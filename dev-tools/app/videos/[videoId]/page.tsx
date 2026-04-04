@@ -27,7 +27,10 @@ import {
   updateVideoStatus,
   autoSegmentVideo,
   autoCalibrateClip,
+  getAssetStatus,
+  fetchAssets,
 } from "@/lib/api";
+import type { AssetStatus } from "@/lib/api";
 import type {
   CrawlVideo,
   DownloadStatus,
@@ -46,7 +49,7 @@ import { BboxDrawer, type Bbox } from "@/components/videos/BboxDrawer";
 import { ChessBoard } from "@/components/ChessBoard";
 import { statusBadge, scoreColor, youtubeThumb, StatusDropdown } from "@/components/video-shared";
 import type { VideoWithReason } from "@/components/video-shared";
-import VideoCard, { type InspectResult } from "@/components/evaluate/VideoCard";
+import VideoCard, { computeAgreement, type InspectResult } from "@/components/evaluate/VideoCard";
 
 // ── Step definitions ────────────────────────────────────────
 
@@ -90,12 +93,50 @@ export default function VideoWorkbenchPage() {
   const [video, setVideo] = useState<CrawlVideo | null>(null);
   const [step, setStep] = useState<StepId>("info");
   const [error, setError] = useState<string | null>(null);
+  const [assets, setAssets] = useState<AssetStatus | null>(null);
+  const [assetsLoading, setAssetsLoading] = useState(false);
 
   useEffect(() => {
     getVideo(videoId)
       .then(setVideo)
       .catch((e) => setError(e.message));
   }, [videoId]);
+
+  // Auto-download assets on visit: lores → hires → video
+  useEffect(() => {
+    if (!video) return;
+    let cancelled = false;
+    (async () => {
+      setAssetsLoading(true);
+      try {
+        let status = await getAssetStatus(videoId);
+        if (cancelled) return;
+        setAssets(status);
+        // Fetch missing frames
+        if (status.lores.length < 3 || status.hires.length < 3) {
+          await fetchAssets(videoId);
+          if (cancelled) return;
+          status = await getAssetStatus(videoId);
+          if (cancelled) return;
+          setAssets(status);
+        }
+        // Download video if missing
+        if (!status.video) {
+          try {
+            await downloadVideo(videoId);
+            if (cancelled) return;
+            status = await getAssetStatus(videoId);
+            if (cancelled) return;
+            setAssets(status);
+          } catch { /* video download may fail, that's ok */ }
+        }
+      } catch { /* ignore asset fetch errors */ }
+      if (!cancelled) setAssetsLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [video, videoId]);
+
+  const downloadReady = assets != null && assets.video && assets.lores.length >= 3 && assets.hires.length >= 3;
 
   const handleStatusChange = async (vid: string, status: string | null, layoutType?: string) => {
     await updateVideoStatus(vid, status, layoutType);
@@ -134,29 +175,40 @@ export default function VideoWorkbenchPage() {
 
         {/* Step indicator */}
         <div className="flex items-center gap-1 rounded-2xl border bg-muted/30 p-1">
-          {STEPS.map((s, i) => (
-            <button
-              key={s.id}
-              onClick={() => setStep(s.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all duration-150 ${
-                step === s.id
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground hover:bg-background/60"
-              }`}
-            >
-              <span className="w-4 h-4 rounded-full border text-[10px] flex items-center justify-center font-bold tabular-nums">
-                {i + 1}
-              </span>
-              {s.label}
-            </button>
-          ))}
+          {STEPS.map((s, i) => {
+            const isDownloadReady = s.id === "download" && downloadReady;
+            return (
+              <button
+                key={s.id}
+                onClick={() => setStep(s.id)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all duration-150 ${
+                  step === s.id
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground hover:bg-background/60"
+                }`}
+              >
+                {isDownloadReady ? (
+                  <span className="w-4 h-4 rounded-full bg-green-500 text-white text-[10px] flex items-center justify-center font-bold">
+                    &#10003;
+                  </span>
+                ) : (
+                  <span className={`w-4 h-4 rounded-full border text-[10px] flex items-center justify-center font-bold tabular-nums ${
+                    s.id === "download" && assetsLoading ? "animate-pulse" : ""
+                  }`}>
+                    {i + 1}
+                  </span>
+                )}
+                {s.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {/* Step content */}
       <div className="flex-1 overflow-auto px-4 pb-4">
         {step === "info" && <InfoStep video={video} />}
-        {step === "download" && <DownloadStep video={video} onDownloaded={() => setStep("segment")} />}
+        {step === "download" && <DownloadStep video={video} assets={assets} assetsLoading={assetsLoading} onDownloaded={() => setStep("segment")} />}
         {step === "segment" && <SegmentStep video={video} />}
         {step === "calibrate" && <CalibrateStep video={video} />}
         {step === "extract" && <ExtractStep video={video} />}
@@ -184,22 +236,28 @@ function InfoStep({ video }: { video: CrawlVideo }) {
     return `${m}:${s.toString().padStart(2, "0")}`;
   };
 
-  async function inspectAi() {
-    setAiLoading(true);
-    try {
-      const res = await fetch("/api/models/ai-screening/inspect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ video_id: video.video_id }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      setAiResult(await res.json());
-    } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : "AI inspection failed");
-    } finally {
-      setAiLoading(false);
-    }
-  }
+  // Auto-run AI screening on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setAiLoading(true);
+      try {
+        const res = await fetch("/api/models/ai-screening/inspect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ video_id: video.video_id }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        if (!cancelled) setAiResult(await res.json());
+      } catch { /* silently fail */ }
+      if (!cancelled) setAiLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [video.video_id]);
+
+  // Only show AI result when there's disagreement or no human label
+  const agreement = aiResult ? computeAgreement(aiResult) : null;
+  const showAiResult = aiResult && (agreement === false || agreement === null);
 
   return (
     <div className="space-y-4 pt-2 max-w-4xl">
@@ -224,31 +282,28 @@ function InfoStep({ video }: { video: CrawlVideo }) {
             </a>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-1">
-          {[0, 1, 2, 3].map((i) => (
+        <div className="grid grid-cols-3 gap-1">
+          {[1, 2, 3].map((i) => (
             <img
               key={i}
               src={youtubeThumb(video.video_id, i)}
-              alt={`Thumbnail ${i}`}
+              alt={`${["", "25%", "50%", "75%"][i]}`}
               className="w-full aspect-video object-cover rounded border"
             />
           ))}
         </div>
       </div>
 
-      {/* AI Screening */}
+      {/* AI Screening — only shown on disagreement or missing human label */}
       <div className="border-t pt-4">
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2 mb-2">
           <h3 className="text-sm font-medium">Screening</h3>
-          <button
-            onClick={inspectAi}
-            disabled={aiLoading}
-            className="px-3 py-1 bg-foreground text-background rounded text-xs disabled:opacity-50"
-          >
-            {aiLoading ? "Running..." : aiResult ? "Re-run" : "Run AI Screen"}
-          </button>
+          {aiLoading && <span className="text-xs text-muted-foreground">Running AI...</span>}
+          {agreement === true && (
+            <span className="text-xs text-green-600 font-medium">AI agrees</span>
+          )}
         </div>
-        {aiResult && <VideoCard result={aiResult} />}
+        {showAiResult && <VideoCard result={aiResult} />}
       </div>
     </div>
   );
@@ -265,7 +320,22 @@ function Field({ label, value }: { label: string; value: string }) {
 
 // ── Step 2: Download ────────────────────────────────────────
 
-function DownloadStep({ video, onDownloaded }: { video: CrawlVideo; onDownloaded: () => void }) {
+function AssetRow({ label, ready, loading }: { label: string; ready: boolean; loading: boolean }) {
+  return (
+    <div className="flex items-center gap-2">
+      {ready ? (
+        <span className="w-4 h-4 rounded-full bg-green-500 text-white text-[10px] flex items-center justify-center">&#10003;</span>
+      ) : loading ? (
+        <span className="w-4 h-4 rounded-full border border-muted-foreground animate-spin text-[10px] flex items-center justify-center">&#8987;</span>
+      ) : (
+        <span className="w-4 h-4 rounded-full border border-muted-foreground text-[10px] flex items-center justify-center">&mdash;</span>
+      )}
+      <span className="text-sm">{label}</span>
+    </div>
+  );
+}
+
+function DownloadStep({ video, assets, assetsLoading, onDownloaded }: { video: CrawlVideo; assets: AssetStatus | null; assetsLoading: boolean; onDownloaded: () => void }) {
   const [status, setStatus] = useState<DownloadStatus | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -308,8 +378,20 @@ function DownloadStep({ video, onDownloaded }: { video: CrawlVideo; onDownloaded
     return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
   };
 
+  const loresReady = assets != null && assets.lores.length >= 3;
+  const hiresReady = assets != null && assets.hires.length >= 3;
+  const videoReady = assets?.video ?? status?.downloaded ?? false;
+
   return (
     <div className="space-y-4 pt-2 max-w-xl">
+      {/* Asset status */}
+      <div className="space-y-1.5 p-3 rounded-lg border bg-muted/20">
+        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Assets</h4>
+        <AssetRow label="Low-res frames (480p)" ready={loresReady} loading={assetsLoading && !loresReady} />
+        <AssetRow label="Hi-res frames (720p)" ready={hiresReady} loading={assetsLoading && !hiresReady} />
+        <AssetRow label="Video file" ready={videoReady} loading={assetsLoading && !videoReady} />
+      </div>
+
       {status === null ? (
         <p className="text-sm text-muted-foreground">Checking download status...</p>
       ) : status.downloaded ? (

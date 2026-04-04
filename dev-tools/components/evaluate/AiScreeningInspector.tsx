@@ -637,7 +637,7 @@ export default function AiScreeningInspector({
                         className="relative w-16 h-12 rounded border overflow-hidden group flex-shrink-0 transition-all hover:ring-2 hover:ring-foreground/30"
                       >
                         <img
-                          src={youtubeThumb(r.video_id, 0)}
+                          src={youtubeThumb(r.video_id, 1)}
                           alt={r.title}
                           className="w-full h-full object-cover"
                           loading="lazy"
