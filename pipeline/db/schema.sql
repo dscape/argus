@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS video_clips (
     ref_resolution      JSONB NOT NULL,
     board_flipped       BOOLEAN NOT NULL DEFAULT false,
     board_theme         VARCHAR(30) NOT NULL DEFAULT 'lichess_default',
+    is_gap              BOOLEAN NOT NULL DEFAULT false,
     created_at          TIMESTAMPTZ DEFAULT now(),
     updated_at          TIMESTAMPTZ DEFAULT now(),
     UNIQUE (video_id, clip_index)

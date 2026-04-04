@@ -162,6 +162,7 @@ export interface VideoClip {
   ref_resolution: [number, number];
   board_flipped: boolean;
   board_theme: string;
+  is_gap: boolean;
 }
 
 export interface VideoAnnotations {

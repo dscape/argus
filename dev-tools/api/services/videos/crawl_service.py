@@ -1015,7 +1015,7 @@ def list_video_clips(video_id: str) -> list[dict]:
                 """
                 SELECT id, video_id, clip_index, label, start_time, end_time,
                        overlay_bbox, camera_bbox, ref_resolution,
-                       board_flipped, board_theme
+                       board_flipped, board_theme, is_gap
                 FROM video_clips
                 WHERE video_id = %s
                 ORDER BY clip_index
@@ -1049,11 +1049,11 @@ def create_video_clip(video_id: str, data: dict) -> dict:
                 INSERT INTO video_clips
                     (video_id, clip_index, label, start_time, end_time,
                      overlay_bbox, camera_bbox, ref_resolution,
-                     board_flipped, board_theme)
-                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s)
+                     board_flipped, board_theme, is_gap)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s)
                 RETURNING id, video_id, clip_index, label, start_time, end_time,
                           overlay_bbox, camera_bbox, ref_resolution,
-                          board_flipped, board_theme
+                          board_flipped, board_theme, is_gap
                 """,
                 (
                     video_id,
@@ -1066,6 +1066,7 @@ def create_video_clip(video_id: str, data: dict) -> dict:
                     _json.dumps(data.get("ref_resolution", [1920, 1080])),
                     data.get("board_flipped", False),
                     data.get("board_theme", "lichess_default"),
+                    data.get("is_gap", False),
                 ),
             )
             cols = [d[0] for d in cur.description]
@@ -1098,7 +1099,11 @@ def update_video_clip(clip_id: int, data: dict) -> dict:
 
             sets = []
             params = []
-            for field in ["label", "start_time", "end_time", "board_flipped", "board_theme"]:
+            scalar_fields = [
+                "label", "start_time", "end_time",
+                "board_flipped", "board_theme", "is_gap",
+            ]
+            for field in scalar_fields:
                 if field in data:
                     sets.append(f"{field} = %s")
                     params.append(data[field])
@@ -1119,7 +1124,7 @@ def update_video_clip(clip_id: int, data: dict) -> dict:
                 WHERE id = %s
                 RETURNING id, video_id, clip_index, label, start_time, end_time,
                           overlay_bbox, camera_bbox, ref_resolution,
-                          board_flipped, board_theme
+                          board_flipped, board_theme, is_gap
                 """,
                 params,
             )
@@ -1165,7 +1170,7 @@ def get_video_clip(clip_id: int) -> dict | None:
                 """
                 SELECT id, video_id, clip_index, label, start_time, end_time,
                        overlay_bbox, camera_bbox, ref_resolution,
-                       board_flipped, board_theme
+                       board_flipped, board_theme, is_gap
                 FROM video_clips
                 WHERE id = %s
                 """,

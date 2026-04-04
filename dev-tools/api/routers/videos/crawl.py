@@ -361,6 +361,7 @@ class CreateClipRequest(BaseModel):
     ref_resolution: list[int] = [1920, 1080]
     board_flipped: bool = False
     board_theme: str = "lichess_default"
+    is_gap: bool = False
 
 
 class UpdateClipRequest(BaseModel):
@@ -372,6 +373,7 @@ class UpdateClipRequest(BaseModel):
     ref_resolution: list[int] | None = None
     board_flipped: bool | None = None
     board_theme: str | None = None
+    is_gap: bool | None = None
 
 
 @router.get("/videos/{video_id}/clips")
