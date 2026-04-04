@@ -19,6 +19,9 @@ from pipeline.overlay.scanner import fast_overlay_check
 
 logger = logging.getLogger(__name__)
 
+# Bbox shift above this threshold triggers a new segment (layout change).
+LAYOUT_SHIFT_THRESHOLD = 0.20
+
 
 @dataclass
 class LayoutSegment:
@@ -92,6 +95,39 @@ def _refine_boundary(
             t_not = mid
     # Return the midpoint between the last known overlay and non-overlay
     return (t_has + t_not) / 2.0
+
+
+def _refine_layout_boundary(
+    cap: cv2.VideoCapture,
+    fps: float,
+    t_a: float,
+    t_b: float,
+    ref_bbox_a: tuple[int, int, int, int],
+    ref_bbox_b: tuple[int, int, int, int],
+    iterations: int = 5,
+) -> float:
+    """Binary search for a layout-change boundary between two times.
+
+    Both *t_a* and *t_b* have overlays, but at different positions.
+    At each midpoint, detect the overlay and assign it to whichever
+    reference layout is geometrically closer.
+    """
+    for _ in range(iterations):
+        mid = (t_a + t_b) / 2.0
+        frame = _read_frame_at(cap, mid, fps)
+        if frame is None:
+            break
+        det = fast_overlay_check(frame)
+        if not det.found or det.bbox is None:
+            # No overlay at midpoint — split here
+            break
+        shift_a = _bbox_relative_shift(det.bbox, ref_bbox_a)
+        shift_b = _bbox_relative_shift(det.bbox, ref_bbox_b)
+        if shift_a <= shift_b:
+            t_a = mid
+        else:
+            t_b = mid
+    return (t_a + t_b) / 2.0
 
 
 def segment_video_layouts(
@@ -190,7 +226,14 @@ def segment_video_layouts(
             continue
 
         prev = raw_segments[-1]
-        if prev["has_overlay"] == has_overlay:
+        # Split on overlay state change OR significant bbox shift
+        layout_changed = False
+        if has_overlay and prev["has_overlay"] and sample["bbox"] and prev["bboxes"]:
+            shift = _bbox_relative_shift(prev["bboxes"][-1], sample["bbox"])
+            if shift > LAYOUT_SHIFT_THRESHOLD:
+                layout_changed = True
+
+        if prev["has_overlay"] == has_overlay and not layout_changed:
             # Extend current segment
             prev["end"] = sample["time"] + sample_interval_sec
             if has_overlay and sample["bbox"]:
@@ -211,30 +254,43 @@ def segment_video_layouts(
         raw_segments[-1]["end"] = min(raw_segments[-1]["end"], duration)
 
     # ── Phase 3: Binary-search boundary refinement ────────────
-    # Refine the transition points between overlay and gap segments
-    # for ~1-second precision.
+    # Refine the transition points between segments for ~1-second
+    # precision.  Handles both overlay/gap transitions and layout
+    # changes (different overlay positions).
     for i in range(len(raw_segments) - 1):
         curr = raw_segments[i]
         nxt = raw_segments[i + 1]
 
         if curr["has_overlay"] != nxt["has_overlay"]:
-            # There's a transition between curr.end and nxt.start
-            # (which may overlap by sample_interval_sec)
+            # overlay ↔ gap transition
             if curr["has_overlay"]:
-                # overlay → gap: find where overlay ends
                 t_has = curr["end"] - sample_interval_sec
                 t_not = nxt["start"] + sample_interval_sec
             else:
-                # gap → overlay: find where overlay starts
                 t_not = curr["end"] - sample_interval_sec
                 t_has = nxt["start"] + sample_interval_sec
 
-            # Ensure t_has and t_not are in valid range
             t_has = max(0, min(t_has, duration))
             t_not = max(0, min(t_not, duration))
 
-            if abs(t_has - t_not) > 1.0:  # Only refine if gap > 1s
+            if abs(t_has - t_not) > 1.0:
                 boundary = _refine_boundary(cap, fps, t_has, t_not)
+                curr["end"] = boundary
+                nxt["start"] = boundary
+
+        elif curr["has_overlay"] and nxt["has_overlay"] and curr["bboxes"] and nxt["bboxes"]:
+            # Layout change: both have overlay but bbox shifted
+            t_a = curr["end"] - sample_interval_sec
+            t_b = nxt["start"] + sample_interval_sec
+            t_a = max(0, min(t_a, duration))
+            t_b = max(0, min(t_b, duration))
+
+            if abs(t_a - t_b) > 1.0:
+                ref_a = _median_bbox(curr["bboxes"])
+                ref_b = _median_bbox(nxt["bboxes"])
+                boundary = _refine_layout_boundary(
+                    cap, fps, t_a, t_b, ref_a, ref_b,
+                )
                 curr["end"] = boundary
                 nxt["start"] = boundary
 

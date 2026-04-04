@@ -216,16 +216,15 @@ class TestSegmentVideoLayouts:
 
     @patch("pipeline.overlay.segmenter.fast_overlay_check")
     @patch("cv2.VideoCapture")
-    def test_merges_overlay_regardless_of_bbox_position(self, mock_cap_cls, mock_fast_check):
-        """Consecutive overlay samples merge even with different bboxes."""
+    def test_merges_overlay_with_small_bbox_jitter(self, mock_cap_cls, mock_fast_check):
+        """Consecutive overlay samples merge when bbox jitter is small."""
         mock_cap_cls.return_value = self._mock_cap()
 
-        bbox_left = (100, 200, 600, 600)
-        bbox_right = (800, 200, 600, 600)
-
-        def alternating_bbox(frame):
+        def jittery_bbox(frame):
             n = mock_fast_check.call_count
-            bbox = bbox_left if n % 2 == 1 else bbox_right
+            # Small jitter: +-20px on a 600px box = ~3% shift, well below 20%
+            jitter = 20 if n % 2 == 0 else -20
+            bbox = (500 + jitter, 200 + jitter, 600, 600)
             return OverlayDetection(
                 found=True,
                 bbox=bbox,
@@ -234,10 +233,39 @@ class TestSegmentVideoLayouts:
                 frame_resolution=(1920, 1080),
             )
 
-        mock_fast_check.side_effect = alternating_bbox
+        mock_fast_check.side_effect = jittery_bbox
 
         segments, gaps = segment_video_layouts("/fake/video.mp4")
 
-        # All overlay -> single segment despite bbox variation
         assert len(segments) == 1
+        assert len(gaps) == 0
+
+    @patch("pipeline.overlay.segmenter.fast_overlay_check")
+    @patch("cv2.VideoCapture")
+    def test_splits_overlay_on_large_bbox_shift(self, mock_cap_cls, mock_fast_check):
+        """Overlay segments split when bbox shifts significantly (layout change)."""
+        # 60-second video sampled every 5 seconds = 12 samples
+        mock_cap_cls.return_value = self._mock_cap(total_frames=1800)  # 60s
+
+        bbox_left = (100, 200, 600, 600)
+        bbox_right = (900, 200, 600, 600)
+
+        def layout_change(frame):
+            n = mock_fast_check.call_count
+            t = (n - 1) * 5.0
+            bbox = bbox_left if t < 30.0 else bbox_right
+            return OverlayDetection(
+                found=True,
+                bbox=bbox,
+                seed_bbox=bbox,
+                score=0.8,
+                frame_resolution=(1920, 1080),
+            )
+
+        mock_fast_check.side_effect = layout_change
+
+        segments, gaps = segment_video_layouts("/fake/video.mp4")
+
+        # Two distinct layouts -> two segments
+        assert len(segments) == 2
         assert len(gaps) == 0

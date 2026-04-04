@@ -264,9 +264,10 @@ def compute_camera_bbox(
         bottom_margin = int(frame_h * 0.10)
         board_bottom = frame_h - bottom_margin
 
-        # Centre the bbox horizontally on the overlay
-        board_w = ow
-        board_x = ox
+        # Centre the bbox horizontally on the overlay, with 5% padding
+        pad_x = int(ow * 0.05)
+        board_x = max(0, ox - pad_x)
+        board_w = min(frame_w - board_x, ow + 2 * pad_x)
 
         board_h = board_bottom - board_top
         if board_h < 50:
@@ -329,6 +330,11 @@ def compute_camera_bbox(
                     motion_blocks += 1
 
         if motion_blocks > 0 and motion_blocks / max(rows * cols, 1) > 0.15:
+            # Add 5% horizontal padding for board edges with little motion
+            cam_w = cam_max_x - cam_min_x
+            pad_x = int(cam_w * 0.05)
+            cam_min_x = max(rx, cam_min_x - pad_x)
+            cam_max_x = min(rx + rw, cam_max_x + pad_x)
             return (
                 cam_min_x, cam_min_y,
                 cam_max_x - cam_min_x, cam_max_y - cam_min_y,

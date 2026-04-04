@@ -47,7 +47,7 @@ import type {
 } from "@/lib/types";
 import { BboxDrawer, type Bbox } from "@/components/videos/BboxDrawer";
 import { ChessBoard } from "@/components/ChessBoard";
-import { statusBadge, scoreColor, youtubeThumb, StatusDropdown } from "@/components/video-shared";
+import { statusBadge, scoreColor, youtubeThumb, StatusDropdown, SpinnerIcon } from "@/components/video-shared";
 import type { VideoWithReason } from "@/components/video-shared";
 import VideoCard, { computeAgreement, type InspectResult } from "@/components/evaluate/VideoCard";
 
@@ -326,7 +326,7 @@ function AssetRow({ label, ready, loading }: { label: string; ready: boolean; lo
       {ready ? (
         <span className="w-4 h-4 rounded-full bg-green-500 text-white text-[10px] flex items-center justify-center">&#10003;</span>
       ) : loading ? (
-        <span className="w-4 h-4 rounded-full border border-muted-foreground animate-spin text-[10px] flex items-center justify-center">&#8987;</span>
+        <SpinnerIcon className="w-4 h-4 animate-spin text-muted-foreground" />
       ) : (
         <span className="w-4 h-4 rounded-full border border-muted-foreground text-[10px] flex items-center justify-center">&mdash;</span>
       )}
