@@ -10,11 +10,9 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { updateVideoStatus } from "@/lib/api";
 import {
   Check,
   X,
-  Ban,
   Clipboard,
   ClipboardCheck,
   Pencil,
@@ -35,8 +33,8 @@ function resultKey(r: ExtractionResult): string {
   return r.frame_key ?? r.video_id;
 }
 
-function youtubeUrl(videoId: string): string {
-  return `https://www.youtube.com/watch?v=${videoId}`;
+function videoPageUrl(videoId: string): string {
+  return `/videos/${videoId}`;
 }
 
 export default function ExtractOverlaysPage() {
@@ -54,7 +52,6 @@ export default function ExtractOverlaysPage() {
   const [editedFens, setEditedFens] = useState<Record<string, string>>({});
   const [rejected, setRejected] = useState<Set<string>>(new Set());
   const [saved, setSaved] = useState<Set<string>>(new Set());
-  const [rejectedVideos, setRejectedVideos] = useState<Set<string>>(new Set());
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   async function runExtraction() {
@@ -67,7 +64,6 @@ export default function ExtractOverlaysPage() {
     setEditedFens({});
     setRejected(new Set());
     setSaved(new Set());
-    setRejectedVideos(new Set());
     setProgress(null);
 
     try {
@@ -222,15 +218,6 @@ export default function ExtractOverlaysPage() {
     }
   }
 
-  async function rejectVideo(videoId: string) {
-    try {
-      await updateVideoStatus(videoId, "rejected");
-      setRejectedVideos((prev) => new Set(prev).add(videoId));
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to reject video");
-    }
-  }
-
   function copyFen(key: string, fen: string) {
     navigator.clipboard.writeText(fen).then(() => {
       setCopiedKey(key);
@@ -338,31 +325,19 @@ export default function ExtractOverlaysPage() {
           <div className="mt-2 space-y-2">
             {noOverlayResults.map((r) => {
               const key = resultKey(r);
-              const isVideoRejected = rejectedVideos.has(r.video_id);
               return (
                 <div
                   key={key}
-                  className={`flex items-center gap-3 text-xs ${isVideoRejected ? "opacity-40" : ""}`}
+                  className="flex items-center gap-3 text-xs"
                 >
                   <a
-                    href={youtubeUrl(r.video_id)}
+                    href={videoPageUrl(r.video_id)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-blue-600 hover:underline font-mono"
                   >
                     {r.video_id}
                   </a>
-                  <button
-                    onClick={() => rejectVideo(r.video_id)}
-                    disabled={isVideoRejected}
-                    className={`px-2 py-0.5 rounded border text-xs ${
-                      isVideoRejected
-                        ? "bg-red-100 text-red-700 border-red-300"
-                        : "text-red-600 border-red-300 hover:bg-red-50"
-                    } disabled:opacity-40`}
-                  >
-                    {isVideoRejected ? "Video Rejected" : "Reject Video"}
-                  </button>
                 </div>
               );
             })}
@@ -375,19 +350,18 @@ export default function ExtractOverlaysPage() {
         {reviewableResults.map((r) => {
           const key = resultKey(r);
           const isRejected = rejected.has(key);
-          const isVideoRejected = rejectedVideos.has(r.video_id);
           const isSaved = saved.has(key);
           const isSaving = savingId === key;
           const currentFen = editedFens[key] ?? r.predicted_fen ?? "";
           const isWarning = r.status === "warning";
-          const locked = isRejected || isSaved || isVideoRejected;
+          const locked = isRejected || isSaved;
           const fenLoading = r.fen_loading ?? false;
           const isCopied = copiedKey === key;
 
           return (
             <div
               key={key}
-              className={`border rounded-lg p-3 space-y-2 ${isRejected || isVideoRejected ? "opacity-40" : ""} ${isSaved ? "border-green-400" : ""} ${isWarning && !isSaved ? "border-yellow-400" : ""}`}
+              className={`border rounded-lg p-3 space-y-2 ${isRejected ? "opacity-40" : ""} ${isSaved ? "border-green-400" : ""} ${isWarning && !isSaved ? "border-yellow-400" : ""}`}
             >
               {/* Header */}
               <div className="flex items-center justify-between gap-1">
@@ -396,7 +370,7 @@ export default function ExtractOverlaysPage() {
                     {r.frame_name ?? "frame"}
                   </span>
                   <a
-                    href={youtubeUrl(r.video_id)}
+                    href={videoPageUrl(r.video_id)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-[10px] text-blue-600 hover:underline font-mono truncate"
@@ -411,11 +385,6 @@ export default function ExtractOverlaysPage() {
                   {isSaved && (
                     <span className="text-[10px] px-1 py-0.5 rounded bg-green-100 text-green-700 font-medium">
                       Saved
-                    </span>
-                  )}
-                  {isVideoRejected && (
-                    <span className="text-[10px] px-1 py-0.5 rounded bg-red-100 text-red-700 font-medium">
-                      Rejected
                     </span>
                   )}
                 </div>
@@ -528,7 +497,7 @@ export default function ExtractOverlaysPage() {
                       return next;
                     })
                   }
-                  disabled={isSaved || isVideoRejected}
+                  disabled={isSaved}
                   className={`p-1 rounded border ${
                     isRejected
                       ? "bg-red-100 text-red-700 border-red-300"
@@ -539,19 +508,6 @@ export default function ExtractOverlaysPage() {
                   <X className="h-3.5 w-3.5" />
                 </button>
 
-                {/* Reject Video */}
-                <button
-                  onClick={() => rejectVideo(r.video_id)}
-                  disabled={isVideoRejected || isSaved}
-                  className={`p-1 rounded border ${
-                    isVideoRejected
-                      ? "bg-red-100 text-red-700 border-red-300"
-                      : "text-red-600 border-red-300 hover:bg-red-50"
-                  } disabled:opacity-40`}
-                  title={isVideoRejected ? "Video rejected" : "Reject video"}
-                >
-                  <Ban className="h-3.5 w-3.5" />
-                </button>
               </div>
             </div>
           );
