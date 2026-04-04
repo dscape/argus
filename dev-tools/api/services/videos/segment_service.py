@@ -14,7 +14,6 @@ from pipeline.overlay.auto_calibration import (
     compute_camera_bbox,
     detect_board_orientation,
     detect_board_theme,
-    detect_overlay_in_frame,
     propose_calibration_for_clip,
 )
 from pipeline.overlay.segmenter import segment_video_layouts

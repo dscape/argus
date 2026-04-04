@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from pipeline.overlay.calibration import BOARD_THEMES, hex_to_bgr
-from pipeline.overlay.scanner import detect_overlay_in_frame
+from pipeline.overlay.scanner import OverlayDetection, detect_overlay_fast
 from pipeline.screen.frame_fetcher import fetch_youtube_frames
 
 logger = logging.getLogger(__name__)
@@ -180,95 +180,161 @@ def detect_board_orientation(
     return is_flipped, confidence
 
 
+def _grid_scan_frames(
+    frames: list[tuple[np.ndarray, str]],
+) -> tuple[OverlayDetection | None, np.ndarray | None]:
+    """Find overlay by sliding detect_grid across each frame.
+
+    Handles overlays where per-cell variance is too high for
+    ``fast_overlay_check`` (textured themes, piece-heavy positions).
+    The grid detector uses Sobel edge projection which works regardless
+    of cell fill variance.
+
+    Tries window sizes from large to small, with coarse spatial steps.
+    Returns as soon as a 9x9 grid is found.
+    """
+    from pipeline.overlay.grid_detector import detect_grid
+
+    for frame, label in frames:
+        h, w = frame.shape[:2]
+        dim = min(h, w)
+        resolution = (w, h)
+
+        # Window sizes: ~55% down to ~30% of frame dim
+        for win_frac in (0.55, 0.45, 0.35):
+            win = int(dim * win_frac)
+            if win < 200:
+                continue
+            step = win // 3
+            for y in range(0, h - win + 1, step):
+                for x in range(0, w - win + 1, step):
+                    crop = frame[y : y + win, x : x + win]
+                    blurred = cv2.GaussianBlur(crop, (3, 3), 0)
+                    grid = detect_grid(blurred, allow_uniform=False)
+                    if (
+                        grid is not None
+                        and len(grid.v_lines) == 9
+                        and len(grid.h_lines) == 9
+                    ):
+                        gx = x + grid.v_lines[0]
+                        gy = y + grid.h_lines[0]
+                        gw = grid.v_lines[-1] - grid.v_lines[0]
+                        gh = grid.h_lines[-1] - grid.h_lines[0]
+                        board_size = max(gw, gh)
+                        gx = max(0, min(gx, w - board_size))
+                        gy = max(0, min(gy, h - board_size))
+                        board_size = min(board_size, w - gx, h - gy)
+                        det = OverlayDetection(
+                            found=True,
+                            bbox=(gx, gy, board_size, board_size),
+                            frame_resolution=resolution,
+                        )
+                        return det, frame
+
+    return None, None
+
+
 def compute_camera_bbox(
     frames: list[np.ndarray],
     overlay_bbox: tuple[int, int, int, int],
 ) -> tuple[int, int, int, int]:
-    """Find the camera footage region using frame differencing.
+    """Find the OTB board region, handling two layout types.
 
-    Static graphics (banners, logos, clocks) don't change between frames.
-    Camera footage shows people who move. By comparing two frames taken at
-    different timestamps we find which blocks outside the overlay actually
-    change — those are the camera region.
+    **Discrete layout** (overlay >30% of frame area): overlay and camera
+    are in separate screen regions (e.g. side-by-side).  Uses frame
+    differencing to find the camera region.
 
-    Args:
-        frames: Two or more video frames at different timestamps.
-        overlay_bbox: Detected overlay bounding box.
+    **Overlaid layout** (overlay ≤30%): a small digital overlay sits on
+    top of the full-frame camera view.  The physical OTB board is
+    typically below the overlay.  Returns the region below the overlay
+    spanning its width, trimming the bottom 10 % for tickers/graphics.
+
+    The returned bbox never overlaps the overlay.
     """
+    frame_h, frame_w = frames[0].shape[:2]
+    ox, oy, ow, oh = overlay_bbox
+    frame_area = frame_h * frame_w
+    overlay_area = ow * oh
+
+    # ── Overlaid layout ──────────────────────────────────────────
+    if overlay_area <= 0.30 * frame_area:
+        # OTB board is below the overlay.  Span the overlay width,
+        # start just below the overlay, stop above bottom graphics.
+        board_top = oy + oh
+        bottom_margin = int(frame_h * 0.10)
+        board_bottom = frame_h - bottom_margin
+
+        # Centre the bbox horizontally on the overlay
+        board_w = ow
+        board_x = ox
+
+        board_h = board_bottom - board_top
+        if board_h < 50:
+            board_h = frame_h - board_top
+        return (board_x, board_top, board_w, board_h)
+
+    # ── Discrete layout ──────────────────────────────────────────
     if len(frames) < 2:
-        # Fallback if only one frame: use the largest non-overlay rectangle
-        frame_h, frame_w = frames[0].shape[:2]
-        ox, oy, ow, oh = overlay_bbox
         sides = [
             (0, 0, ox, frame_h),
             (ox + ow, 0, frame_w - ox - ow, frame_h),
             (0, 0, frame_w, oy),
             (0, oy + oh, frame_w, frame_h - oy - oh),
         ]
-        best = max(sides, key=lambda s: s[2] * s[3] if s[2] > 0 and s[3] > 0 else 0)
-        return best
+        return max(
+            sides, key=lambda s: s[2] * s[3] if s[2] > 0 and s[3] > 0 else 0,
+        )
 
-    frame_a = frames[0]
-    frame_b = frames[1]
-    frame_h, frame_w = frame_a.shape[:2]
-    ox, oy, ow, oh = overlay_bbox
-
-    # Compute absolute difference between the two frames.
-    # Resize frame_b to match frame_a if resolutions differ.
-    gray_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2GRAY).astype(np.float32)
-    gray_b = cv2.cvtColor(frame_b, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    gray_a = cv2.cvtColor(frames[0], cv2.COLOR_BGR2GRAY).astype(np.float32)
+    gray_b = cv2.cvtColor(frames[1], cv2.COLOR_BGR2GRAY).astype(np.float32)
     if gray_b.shape != gray_a.shape:
         gray_b = cv2.resize(gray_b, (frame_w, frame_h)).astype(np.float32)
     diff = np.abs(gray_a - gray_b)
+    diff[oy: oy + oh, ox: ox + ow] = 0
 
-    # Zero out the overlay region (the board changes too, we only want camera)
-    diff[oy : oy + oh, ox : ox + ow] = 0
-
-    # Determine which side of the overlay has the most space
     sides = [
-        ("left", 0, 0, ox, frame_h),
-        ("right", ox + ow, 0, frame_w - ox - ow, frame_h),
-        ("top", 0, 0, frame_w, oy),
-        ("bottom", 0, oy + oh, frame_w, frame_h - oy - oh),
+        (0, 0, ox, frame_h),
+        (ox + ow, 0, frame_w - ox - ow, frame_h),
+        (0, 0, frame_w, oy),
+        (0, oy + oh, frame_w, frame_h - oy - oh),
     ]
-    sides.sort(key=lambda s: s[3] * s[4] if s[3] > 0 and s[4] > 0 else 0, reverse=True)
-    _, rx, ry, rw, rh = sides[0]
+    sides.sort(
+        key=lambda s: s[2] * s[3] if s[2] > 0 and s[3] > 0 else 0,
+        reverse=True,
+    )
 
-    if rw <= 0 or rh <= 0:
-        return (0, 0, frame_w, frame_h)
+    for rx, ry, rw, rh in sides:
+        if rw <= 0 or rh <= 0:
+            continue
+        block_size = max(60, min(rw, rh) // 8)
+        cols = max(1, rw // block_size)
+        rows = max(1, rh // block_size)
+        bw = rw // cols
+        bh = rh // rows
 
-    # Divide the candidate region into blocks and check which have motion
-    block_size = max(60, min(rw, rh) // 8)
-    cols = max(1, rw // block_size)
-    rows = max(1, rh // block_size)
-    bw = rw // cols
-    bh = rh // rows
+        cam_min_x, cam_min_y = frame_w, frame_h
+        cam_max_x, cam_max_y = 0, 0
+        motion_blocks = 0
 
-    cam_min_x, cam_min_y = frame_w, frame_h
-    cam_max_x, cam_max_y = 0, 0
-    found_camera = False
+        for row in range(rows):
+            for col in range(cols):
+                bx = rx + col * bw
+                by = ry + row * bh
+                block_diff = diff[by: by + bh, bx: bx + bw]
+                if float(np.mean(block_diff)) > 3.0:
+                    cam_min_x = min(cam_min_x, bx)
+                    cam_min_y = min(cam_min_y, by)
+                    cam_max_x = max(cam_max_x, bx + bw)
+                    cam_max_y = max(cam_max_y, by + bh)
+                    motion_blocks += 1
 
-    # Threshold: blocks with significant pixel change are camera footage
-    for row in range(rows):
-        for col in range(cols):
-            bx = rx + col * bw
-            by = ry + row * bh
-            block_diff = diff[by : by + bh, bx : bx + bw]
-            mean_diff = float(np.mean(block_diff))
+        if motion_blocks > 0 and motion_blocks / max(rows * cols, 1) > 0.15:
+            return (
+                cam_min_x, cam_min_y,
+                cam_max_x - cam_min_x, cam_max_y - cam_min_y,
+            )
 
-            # Camera footage: people move, so diff > ~5 between frames
-            # Static banners/logos: diff ~ 0
-            if mean_diff > 3.0:
-                cam_min_x = min(cam_min_x, bx)
-                cam_min_y = min(cam_min_y, by)
-                cam_max_x = max(cam_max_x, bx + bw)
-                cam_max_y = max(cam_max_y, by + bh)
-                found_camera = True
-
-    if not found_camera:
-        return (rx, ry, rw, rh)
-
-    return (cam_min_x, cam_min_y, cam_max_x - cam_min_x, cam_max_y - cam_min_y)
+    return sides[0]
 
 
 def _scale_bbox(
@@ -346,13 +412,17 @@ def propose_calibration(
     best_frame = None
 
     for frame, label in frames:
-        detection = detect_overlay_in_frame(frame)
+        detection = detect_overlay_fast(frame)
         if detection.found:
             bbox_area = detection.bbox[2] * detection.bbox[3] if detection.bbox else 0
             best_area = best_detection.bbox[2] * best_detection.bbox[3] if best_detection and best_detection.bbox else 0
             if bbox_area > best_area:
                 best_detection = detection
                 best_frame = frame
+
+    # Fallback: grid-scanning
+    if best_detection is None:
+        best_detection, best_frame = _grid_scan_frames(frames)
 
     if best_detection is None or best_frame is None:
         logger.info(f"No overlay detected for {video_id}")
@@ -546,12 +616,15 @@ def propose_calibration_for_clip(
         logger.warning(f"No frames extracted from {video_path} [{start_time}-{clip_end}]")
         return None
 
-    # Find the best overlay detection across sampled frames
+    # Find the best overlay detection across sampled frames.
+    # Try detect_overlay_fast first (grid-line based, more precise).
+    # Fall back to detect_overlay_in_frame (multi-scale scan) if the
+    # fast method finds nothing on any frame.
     best_detection = None
     best_frame = None
 
     for frame, label in frames:
-        detection = detect_overlay_in_frame(frame)
+        detection = detect_overlay_fast(frame)
         if detection.found:
             bbox_area = detection.bbox[2] * detection.bbox[3] if detection.bbox else 0
             best_area = (
@@ -562,6 +635,12 @@ def propose_calibration_for_clip(
             if bbox_area > best_area:
                 best_detection = detection
                 best_frame = frame
+
+    # Fallback: scan each frame with detect_grid directly.
+    # This handles overlays where cell variance is too high for
+    # fast_overlay_check (e.g. textured themes or piece-heavy positions).
+    if best_detection is None:
+        best_detection, best_frame = _grid_scan_frames(frames)
 
     if best_detection is None or best_frame is None:
         logger.info(f"No overlay detected in clip [{start_time:.0f}-{clip_end:.0f}]")

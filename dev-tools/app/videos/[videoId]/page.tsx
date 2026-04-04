@@ -793,7 +793,6 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
   const [overlayBbox, setOverlayBbox] = useState<Bbox | null>(null);
   const [cameraBbox, setCameraBbox] = useState<Bbox | null>(null);
   const [drawingMode, setDrawingMode] = useState<"overlay" | "camera">("overlay");
-  const [boardFlipped, setBoardFlipped] = useState(false);
   const [boardTheme, setBoardTheme] = useState("lichess_default");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -823,7 +822,6 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
     setSelectedIdx(idx);
     setOverlayBbox({ x: clip.overlay_bbox[0], y: clip.overlay_bbox[1], w: clip.overlay_bbox[2], h: clip.overlay_bbox[3] });
     setCameraBbox({ x: clip.camera_bbox[0], y: clip.camera_bbox[1], w: clip.camera_bbox[2], h: clip.camera_bbox[3] });
-    setBoardFlipped(clip.board_flipped);
     setBoardTheme(clip.board_theme);
     setAutoCalPreview(null);
     if (session && session.fps > 0) {
@@ -845,7 +843,6 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
         overlay_bbox: [overlayBbox.x, overlayBbox.y, overlayBbox.w, overlayBbox.h],
         camera_bbox: [cameraBbox.x, cameraBbox.y, cameraBbox.w, cameraBbox.h],
         ref_resolution: [session?.width || 1920, session?.height || 1080],
-        board_flipped: boardFlipped,
         board_theme: boardTheme,
       } as any);
       const newClips = [...clips];
@@ -977,8 +974,6 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
               <span className="text-muted-foreground">
                 {fmtTime(selected.start_time)} &mdash; {selected.end_time != null ? fmtTime(selected.end_time) : "end"}
               </span>
-              <span className="text-muted-foreground">{selected.board_theme}</span>
-              {selected.board_flipped && <span className="text-muted-foreground">(flipped)</span>}
             </div>
 
             {/* Frame scrubber */}
@@ -1057,21 +1052,6 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
               secondBboxColor={drawingMode === "overlay" ? "#3b82f6" : "#22c55e"}
             />
 
-            {/* Options */}
-            <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={boardFlipped} onChange={(e) => setBoardFlipped(e.target.checked)} className="rounded" />
-                Board flipped
-              </label>
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-muted-foreground">Theme:</label>
-                <select value={boardTheme} onChange={(e) => setBoardTheme(e.target.value)} className="h-8 rounded-md border bg-background px-2 text-sm">
-                  <option value="lichess_default">Lichess Default</option>
-                  <option value="chess_com">Chess.com</option>
-                </select>
-              </div>
-            </div>
-
             {/* Auto-calibration preview */}
             {autoCalPreview?.preview_frame_b64 && (
               <div className="space-y-3 border rounded-lg p-3">
@@ -1092,12 +1072,6 @@ function CalibrateStep({ video }: { video: CrawlVideo }) {
                       alt="Heatmap"
                       className="w-full max-w-lg rounded border"
                     />
-                  </div>
-                )}
-                {autoCalPreview.proposal && (
-                  <div className="text-xs text-muted-foreground space-y-0.5">
-                    <div>Theme: {autoCalPreview.proposal.board_theme} ({(autoCalPreview.proposal.theme_confidence * 100).toFixed(0)}%)</div>
-                    <div>Flipped: {autoCalPreview.proposal.board_flipped ? "Yes" : "No"} ({(autoCalPreview.proposal.orientation_confidence * 100).toFixed(0)}%)</div>
                   </div>
                 )}
               </div>
