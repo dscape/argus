@@ -192,6 +192,13 @@ _P1_MIN_CONTRAST = 20.0
 # while rejecting most OTB boards.
 MAX_CHECKERBOARD_STD = 30.0
 
+# Geometry fallback thresholds. These are intentionally stricter than the
+# fast scan thresholds because this path can fire without a texture-based seed.
+_GEOM_MIN_REGULARITY = 0.35
+_GEOM_MIN_ALTERNATION_FRAC = 0.80
+_GEOM_MIN_ALTERNATION_CONTRAST = 35.0
+_GEOM_MIN_PERIODICITY = 1.20
+
 
 def _checkerboard_std(gray: np.ndarray) -> float:
     """Compute max(light_std, dark_std) for the 8x8 grid of a region."""
@@ -241,6 +248,145 @@ def check_checkerboard_consistency(
                 best_std = s
 
     return best_std <= MAX_CHECKERBOARD_STD
+
+
+def _projection_comb_score(projection: np.ndarray, spacing: float) -> float:
+    """Score how well a 1D projection matches a 9-line chessboard comb.
+
+    Unlike FFT-based periodicity, this keeps phase information and directly
+    rewards the expected internal board boundaries while penalizing energy in
+    the middle of squares. Tight board crops often lose the outer edges, so we
+    focus on the 7 interior lines rather than requiring all 9 boundaries.
+    """
+    axis_len = len(projection)
+    if axis_len == 0 or spacing < 4:
+        return 0.0
+
+    sigma = max(spacing * 0.08, 0.8)
+    smoothed = cv2.GaussianBlur(
+        projection.reshape(1, -1).astype(np.float32),
+        (0, 0),
+        sigmaX=sigma,
+    ).ravel()
+
+    band_radius = max(1, int(round(spacing * 0.12)))
+    phase_limit = max(1, int(round(spacing)))
+    phase_step = max(1, phase_limit // 8)
+    best_score = 0.0
+
+    for phase in range(0, phase_limit, phase_step):
+        line_vals: list[float] = []
+        gap_vals: list[float] = []
+
+        for i in range(1, 8):
+            center = int(round(phase + i * spacing))
+            if center < 0 or center >= axis_len:
+                line_vals = []
+                break
+            lo = max(0, center - band_radius)
+            hi = min(axis_len, center + band_radius + 1)
+            line_vals.append(float(np.mean(smoothed[lo:hi])))
+
+        if len(line_vals) != 7:
+            continue
+
+        for i in range(8):
+            center = int(round(phase + (i + 0.5) * spacing))
+            if center < 0 or center >= axis_len:
+                gap_vals = []
+                break
+            lo = max(0, center - band_radius)
+            hi = min(axis_len, center + band_radius + 1)
+            gap_vals.append(float(np.mean(smoothed[lo:hi])))
+
+        if len(gap_vals) != 8:
+            continue
+
+        line_mean = float(np.mean(line_vals))
+        gap_mean = float(np.mean(gap_vals))
+        if line_mean <= 0:
+            continue
+
+        uniformity = 1.0 - min(1.0, float(np.std(line_vals)) / max(line_mean, 1e-6))
+        score = ((line_mean + 1.0) / (gap_mean + 1.0)) * (0.6 + 0.4 * uniformity)
+        if score > best_score:
+            best_score = score
+
+    return best_score
+
+
+def compute_axis_aligned_periodicity(region: np.ndarray) -> float:
+    """Measure phase-aware x/y grid periodicity for an 8x8 board crop."""
+    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY) if len(region.shape) == 3 else region
+    h, w = gray.shape[:2]
+    if h < 32 or w < 32:
+        return 0.0
+
+    gray_f = gray.astype(np.float32)
+    sobel_x = np.abs(cv2.Sobel(gray_f, cv2.CV_32F, 1, 0, ksize=3))
+    sobel_y = np.abs(cv2.Sobel(gray_f, cv2.CV_32F, 0, 1, ksize=3))
+
+    v_proj = np.mean(sobel_x, axis=0)
+    h_proj = np.mean(sobel_y, axis=1)
+
+    v_score = _projection_comb_score(v_proj, w / 8.0)
+    h_score = _projection_comb_score(h_proj, h / 8.0)
+
+    return min(v_score, h_score)
+
+
+def _grid_result_to_bbox(
+    grid,
+    frame_shape: tuple[int, ...],
+) -> tuple[int, int, int, int]:
+    """Convert grid lines into a clamped square bounding box."""
+    h, w = frame_shape[:2]
+    gx1, gx2 = grid.v_lines[0], grid.v_lines[-1]
+    gy1, gy2 = grid.h_lines[0], grid.h_lines[-1]
+
+    board_w = max(1, gx2 - gx1)
+    board_h = max(1, gy2 - gy1)
+    board_size = max(board_w, board_h)
+    gx = max(0, min(gx1, w - board_size))
+    gy = max(0, min(gy1, h - board_size))
+    board_size = min(board_size, w - gx, h - gy)
+
+    return gx, gy, board_size, board_size
+
+
+def _bbox_looks_like_overlay(
+    frame: np.ndarray,
+    gray_full: np.ndarray,
+    bbox: tuple[int, int, int, int],
+) -> bool:
+    """Validate a geometry-only bbox using appearance and comb periodicity."""
+    x, y, w, h = bbox
+    if w < 64 or h < 64:
+        return False
+
+    region_gray = gray_full[y : y + h, x : x + w]
+    if region_gray.size == 0:
+        return False
+
+    regularity = compute_grid_regularity(region_gray)
+    frac, contrast = compute_alternation_strength(region_gray)
+    periodicity = compute_axis_aligned_periodicity(region_gray)
+
+    if (
+        regularity < _GEOM_MIN_REGULARITY
+        or frac < _GEOM_MIN_ALTERNATION_FRAC
+        or contrast < _GEOM_MIN_ALTERNATION_CONTRAST
+        or periodicity < _GEOM_MIN_PERIODICITY
+    ):
+        return False
+
+    # Checkerboard/color consistency are useful extra evidence when the crop
+    # includes the full widget, but some valid board-tight crops with pieces
+    # do not pass them. Treat them as support, not as hard gates.
+    if min(gray_full.shape[:2]) >= 720 and check_checkerboard_consistency(gray_full, bbox):
+        return True
+
+    return True
 
 
 def check_color_consistency(region: np.ndarray) -> bool:
@@ -742,14 +888,37 @@ def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
     Returns ``OverlayDetection`` with precise bbox when found, or
     ``found=False`` when no overlay is present.
     """
-    from pipeline.overlay.grid_detector import detect_grid
+    from pipeline.overlay.grid_detector import (
+        detect_grid,
+        find_board_in_frame,
+        grid_spacing_is_consistent,
+    )
 
     h, w = frame.shape[:2]
     resolution = (w, h)
+    gray_full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+    gray_full = cv2.GaussianBlur(gray_full, (3, 3), 0)
 
     # Phase 1: fast_overlay_check for seed detection.
     seed = fast_overlay_check(frame)
     if not seed.found or seed.bbox is None:
+        grid_fallback = find_board_in_frame(frame)
+        if (
+            grid_fallback is not None
+            and len(grid_fallback.v_lines) == 9
+            and len(grid_fallback.h_lines) == 9
+        ):
+            fallback_bbox = _grid_result_to_bbox(grid_fallback, frame.shape)
+            if _bbox_looks_like_overlay(frame, gray_full, fallback_bbox):
+                return OverlayDetection(
+                    found=True,
+                    bbox=fallback_bbox,
+                    score=compute_axis_aligned_periodicity(gray_full[
+                        fallback_bbox[1] : fallback_bbox[1] + fallback_bbox[3],
+                        fallback_bbox[0] : fallback_bbox[0] + fallback_bbox[2],
+                    ]),
+                    frame_resolution=resolution,
+                )
         return OverlayDetection(found=False, frame_resolution=resolution)
 
     sx, sy, sw, sh = seed.bbox
@@ -792,6 +961,7 @@ def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
                     best = (ex, ey, size, size)
 
     # Extract precise grid-line bbox from the best expansion.
+    expansion_bbox: tuple[int, int, int, int] | None = None
     if best is not None:
         ex, ey, size, _ = best
         exp_crop = frame[ey : ey + size, ex : ex + size]
@@ -810,12 +980,50 @@ def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
             gx = max(0, min(gx, w - board_size))
             gy = max(0, min(gy, h - board_size))
             board_size = min(board_size, w - gx, h - gy)
-            return OverlayDetection(
-                found=True,
-                bbox=(gx, gy, board_size, board_size),
-                seed_bbox=seed.bbox,
-                score=seed.score,
-                frame_resolution=resolution,
+            expansion_bbox = (gx, gy, board_size, board_size)
+
+    # Phase 2b: full-frame grid detection.
+    # Large overlays (>40 % of frame) may have subtle internal grid lines
+    # that Sobel misses on cropped regions but detects on the full frame
+    # thanks to the strong board-to-background boundary edge.
+    grid_full = find_board_in_frame(frame)
+    if (
+        grid_full is not None
+        and len(grid_full.v_lines) == 9
+        and len(grid_full.h_lines) == 9
+        and grid_spacing_is_consistent(grid_full)
+    ):
+        grid_bbox = _grid_result_to_bbox(grid_full, frame.shape)
+        gx1, gy1, _, _ = grid_bbox
+        gx2, gy2 = grid_full.v_lines[-1], grid_full.h_lines[-1]
+        seed_cx = sx + sw // 2
+        seed_cy = sy + sh // 2
+        if gx1 <= seed_cx <= gx2 and gy1 <= seed_cy <= gy2:
+            full_board_size = grid_bbox[2]
+            expansion_size = expansion_bbox[2] if expansion_bbox else 0
+            if (
+                full_board_size >= expansion_size
+                and _bbox_looks_like_overlay(frame, gray_full, grid_bbox)
+            ):
+                gx, gy = grid_bbox[0], grid_bbox[1]
+                return OverlayDetection(
+                    found=True,
+                    bbox=(gx, gy, full_board_size, full_board_size),
+                    seed_bbox=seed.bbox,
+                    score=max(seed.score, compute_axis_aligned_periodicity(
+                        gray_full[gy : gy + full_board_size, gx : gx + full_board_size]
+                    )),
+                    frame_resolution=resolution,
+                )
+
+    # Return Phase 2 expansion result if it succeeded.
+    if expansion_bbox is not None:
+        return OverlayDetection(
+            found=True,
+            bbox=expansion_bbox,
+            seed_bbox=seed.bbox,
+            score=seed.score,
+            frame_resolution=resolution,
             )
 
     # Phase 3: expansion didn't improve — use grid on the seed crop.

@@ -7,7 +7,7 @@ import { fmtTime } from "@/lib/format";
 import { useVideoWorkbench } from "../_context";
 
 export default function GeneratePage() {
-  const { session, clips, downloadStatus } = useVideoWorkbench();
+  const { session, activeClips: clips, downloadStatus } = useVideoWorkbench();
   const [generatingId, setGeneratingId] = useState<number | null>(null);
   const [generated, setGenerated] = useState<Map<number, GeneratedClip[]>>(new Map());
   const [error, setError] = useState<string | null>(null);

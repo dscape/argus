@@ -15,7 +15,8 @@ from pathlib import Path
 
 import cv2
 import pytest
-from pipeline.overlay.scanner import fast_overlay_check
+import pipeline.overlay.scanner as scanner
+from pipeline.overlay.scanner import OverlayDetection, detect_overlay_fast, fast_overlay_check
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "frames"
 GROUND_TRUTH_PATH = FIXTURES_DIR / "ground_truth.json"
@@ -137,3 +138,40 @@ class TestFastOverlayCheck:
             assert y >= 0, f"y={y} < 0"
             assert x + w <= fw, f"x+w={x + w} > {fw}"
             assert y + h <= fh, f"y+h={y + h} > {fh}"
+
+
+class TestDetectOverlayFastGeometryFallback:
+    """detect_overlay_fast should recover precise coords without a seed."""
+
+    @pytest.mark.parametrize("key", _positive_ids(), ids=_positive_ids())
+    def test_recovers_overlay_when_fast_seed_misses(self, key: str, monkeypatch):
+        gt = _load_ground_truth()
+        gt_bbox = gt[key]["bbox"]
+        frame = _load_frame(key)
+
+        monkeypatch.setattr(
+            scanner,
+            "fast_overlay_check",
+            lambda f: OverlayDetection(found=False, frame_resolution=(f.shape[1], f.shape[0])),
+        )
+
+        det = detect_overlay_fast(frame)
+        assert det.found and det.bbox is not None
+        iou = _compute_iou(list(det.bbox), gt_bbox)
+        assert iou >= 0.75, (
+            f"Seedless geometry fallback IoU {iou:.3f} < 0.75 for {key}: "
+            f"detected={list(det.bbox)}, expected={gt_bbox}"
+        )
+
+    @pytest.mark.parametrize("key", _negative_ids(), ids=_negative_ids())
+    def test_geometry_fallback_rejects_negative_frames(self, key: str, monkeypatch):
+        frame = _load_frame(key)
+
+        monkeypatch.setattr(
+            scanner,
+            "fast_overlay_check",
+            lambda f: OverlayDetection(found=False, frame_resolution=(f.shape[1], f.shape[0])),
+        )
+
+        det = detect_overlay_fast(frame)
+        assert not det.found, f"Seedless geometry fallback false positive on {key}"

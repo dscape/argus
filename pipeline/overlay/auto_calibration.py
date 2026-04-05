@@ -193,7 +193,37 @@ def _grid_scan_frames(
     Tries window sizes from large to small, with coarse spatial steps.
     Returns as soon as a 9x9 grid is found.
     """
-    from pipeline.overlay.grid_detector import detect_grid
+    from pipeline.overlay.grid_detector import (
+        detect_grid,
+        find_board_in_frame,
+        grid_spacing_is_consistent,
+    )
+
+    # Fast path: try full-frame grid detection first.
+    # Works when the board-to-background boundary provides strong Sobel peaks.
+    for frame, label in frames:
+        h, w = frame.shape[:2]
+        resolution = (w, h)
+        grid = find_board_in_frame(frame)
+        if (
+            grid is not None
+            and len(grid.v_lines) == 9
+            and len(grid.h_lines) == 9
+            and grid_spacing_is_consistent(grid)
+        ):
+            gx, gy = grid.v_lines[0], grid.h_lines[0]
+            gw = grid.v_lines[-1] - grid.v_lines[0]
+            gh = grid.h_lines[-1] - grid.h_lines[0]
+            board_size = max(gw, gh)
+            gx = max(0, min(gx, w - board_size))
+            gy = max(0, min(gy, h - board_size))
+            board_size = min(board_size, w - gx, h - gy)
+            det = OverlayDetection(
+                found=True,
+                bbox=(gx, gy, board_size, board_size),
+                frame_resolution=resolution,
+            )
+            return det, frame
 
     for frame, label in frames:
         h, w = frame.shape[:2]

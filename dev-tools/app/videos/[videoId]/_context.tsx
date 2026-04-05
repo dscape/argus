@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
 import {
   getVideo,
   getDownloadStatus,
@@ -19,6 +19,7 @@ interface VideoWorkbenchContextValue {
   video: CrawlVideo | null;
   session: VideoSession | null;
   clips: VideoClip[];
+  activeClips: VideoClip[];
   assets: AssetStatus | null;
   assetsLoading: boolean;
   downloadReady: boolean;
@@ -115,6 +116,7 @@ export function VideoWorkbenchProvider({ videoId, children }: { videoId: string;
   }, []);
 
   const downloadReady = assets != null && assets.video && assets.lores.length >= 3 && assets.hires.length >= 3;
+  const activeClips = useMemo(() => clips.filter((c) => !c.is_gap), [clips]);
 
   return (
     <VideoWorkbenchContext.Provider value={{
@@ -122,6 +124,7 @@ export function VideoWorkbenchProvider({ videoId, children }: { videoId: string;
       video,
       session,
       clips,
+      activeClips,
       assets,
       assetsLoading,
       downloadReady,

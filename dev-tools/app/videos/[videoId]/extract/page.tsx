@@ -204,7 +204,7 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
 }
 
 export default function ExtractPage() {
-  const { session, clips, downloadStatus } = useVideoWorkbench();
+  const { session, activeClips: clips, downloadStatus } = useVideoWorkbench();
 
   if (!downloadStatus?.downloaded) {
     return <p className="text-sm text-muted-foreground pt-2">Video must be downloaded first.</p>;

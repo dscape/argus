@@ -145,10 +145,12 @@ export default function SegmentPage() {
       const keeper = selected[0];
       const lastEnd = selected[selected.length - 1].end_time;
 
-      await updateVideoClip(video.video_id, keeper.id, { end_time: lastEnd } as Partial<VideoClip>);
-      for (let i = 1; i < selected.length; i++) {
-        await deleteVideoClip(video.video_id, selected[i].id);
+      // Delete others in reverse index order to avoid unique constraint violations during reindex
+      const toDelete = selected.slice(1).sort((a, b) => b.clip_index - a.clip_index);
+      for (const clip of toDelete) {
+        await deleteVideoClip(video.video_id, clip.id);
       }
+      await updateVideoClip(video.video_id, keeper.id, { end_time: lastEnd } as Partial<VideoClip>);
       await refreshClips();
       setSelectedClipIds(new Set());
       toast.success(`Merged ${selected.length} segments`);
@@ -176,9 +178,9 @@ export default function SegmentPage() {
 
   // ── Timeline event handlers ───────────────────────────────
 
-  const handleSelectClip = useCallback((clipId: number, multi: boolean) => {
+  const handleSelectClip = useCallback((clipId: number) => {
     setSelectedClipIds((prev) => {
-      const next = new Set(multi ? prev : []);
+      const next = new Set(prev);
       if (next.has(clipId)) {
         next.delete(clipId);
       } else {
@@ -321,6 +323,13 @@ export default function SegmentPage() {
         </div>
       )}
 
+      {/* Help text */}
+      {clips.length > 0 && (
+        <p className="text-[11px] text-muted-foreground">
+          Click timeline to preview frame. Drag segment edges to resize. Use the legend below to select segments for merge, split, or delete.
+        </p>
+      )}
+
       {/* Timeline */}
       {clips.length > 0 && (
         <SegmentTimeline
@@ -341,12 +350,12 @@ export default function SegmentPage() {
 
       {/* Frame info + preview */}
       {clips.length > 0 && (
-        <div className="space-y-2">
+        <div className="space-y-1">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span>Frame {frameIdx} / {totalFrames}</span>
             <span>({timestamp}s)</span>
           </div>
-          <img src={frameSrc} alt={`Frame ${frameIdx}`} className="w-full rounded border" />
+          <img src={frameSrc} alt={`Frame ${frameIdx}`} className="w-full max-h-[40vh] object-contain rounded border" />
         </div>
       )}
 

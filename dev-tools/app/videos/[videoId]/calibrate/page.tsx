@@ -14,7 +14,7 @@ import { fmtTime } from "@/lib/format";
 import { useVideoWorkbench } from "../_context";
 
 export default function CalibratePage() {
-  const { video, session, clips, setClips, refreshClips, downloadStatus } = useVideoWorkbench();
+  const { video, session, activeClips: clips, setClips, refreshClips, downloadStatus } = useVideoWorkbench();
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [frameIdx, setFrameIdx] = useState(0);
   const debouncedFrameIdx = useDebouncedValue(frameIdx, 150);

@@ -1149,14 +1149,23 @@ def delete_video_clip(clip_id: int) -> bool:
             video_id, deleted_index = row
             cur.execute("DELETE FROM video_clips WHERE id = %s", (clip_id,))
 
-            # Reindex remaining clips
+            # Reindex remaining clips — use negative offset first
+            # to avoid unique constraint violations during update
             cur.execute(
                 """
                 UPDATE video_clips
-                SET clip_index = clip_index - 1, updated_at = now()
+                SET clip_index = -clip_index - 1000, updated_at = now()
                 WHERE video_id = %s AND clip_index > %s
                 """,
                 (video_id, deleted_index),
+            )
+            cur.execute(
+                """
+                UPDATE video_clips
+                SET clip_index = -clip_index - 1001
+                WHERE video_id = %s AND clip_index < 0
+                """,
+                (video_id,),
             )
             conn.commit()
             return True

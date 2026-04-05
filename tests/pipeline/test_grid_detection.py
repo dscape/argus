@@ -229,6 +229,20 @@ class TestUniformGridFallback:
         assert result.v_lines[-1] == 400
 
 
+@_skip_no_fixtures
+class TestFindBoardInFrameNegatives:
+    """find_board_in_frame must not accept whole-frame uniform grids."""
+
+    @pytest.mark.parametrize("name", ["Shmgiz3AT-k/50pct", "YA3011exFNo/75pct"])
+    def test_negative_fixture_returns_none(self, name: str) -> None:
+        info = GROUND_TRUTH[name]
+        frame = _load_frame(info)
+
+        result = find_board_in_frame(frame)
+
+        assert result is None, f"{name}: expected no grid, got {result}"
+
+
 class TestCropSquaresAfterClamping:
     """Regression: crop_squares must never index outside image bounds.
 

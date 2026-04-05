@@ -275,6 +275,27 @@ def detect_grid(
     return None
 
 
+def grid_spacing_is_consistent(result: GridResult, max_rel_std: float = 0.02) -> bool:
+    """Check whether a grid has very consistent spacing.
+
+    Rendered overlays produce near-perfect spacing (std ≈ 0).  Returns True
+    when the relative standard deviation of both vertical and horizontal
+    spacings is below *max_rel_std* (default 2%).
+    """
+    v_diffs = np.diff(result.v_lines).astype(float)
+    h_diffs = np.diff(result.h_lines).astype(float)
+    if len(v_diffs) == 0 or len(h_diffs) == 0:
+        return False
+    v_median = float(np.median(v_diffs))
+    h_median = float(np.median(h_diffs))
+    if v_median < 1 or h_median < 1:
+        return False
+    return (
+        float(np.std(v_diffs)) / v_median <= max_rel_std
+        and float(np.std(h_diffs)) / h_median <= max_rel_std
+    )
+
+
 def find_board_in_frame(frame: np.ndarray) -> GridResult | None:
     """Find the chess board grid in a full video frame.
 
@@ -283,8 +304,9 @@ def find_board_in_frame(frame: np.ndarray) -> GridResult | None:
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
-    # 1) Full frame
-    result = detect_grid(frame)
+    # Full-frame search must never fall back to a uniform grid: that would
+    # accept any square-ish region, including entire negative frames.
+    result = detect_grid(gray, allow_uniform=False)
     if result is not None:
         return result
 
@@ -306,7 +328,7 @@ def find_board_in_frame(frame: np.ndarray) -> GridResult | None:
         region = gray[ry:ry2, rx:rx2]
         if region.size == 0:
             continue
-        result = detect_grid(cv2.cvtColor(region, cv2.COLOR_GRAY2BGR) if len(region.shape) == 2 else region)
+        result = detect_grid(region, allow_uniform=False)
         if result is None:
             # Try Hough directly on gray region
             result_h = _hough_detect(region)
