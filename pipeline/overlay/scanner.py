@@ -380,12 +380,6 @@ def _bbox_looks_like_overlay(
     ):
         return False
 
-    # Checkerboard/color consistency are useful extra evidence when the crop
-    # includes the full widget, but some valid board-tight crops with pieces
-    # do not pass them. Treat them as support, not as hard gates.
-    if min(gray_full.shape[:2]) >= 720 and check_checkerboard_consistency(gray_full, bbox):
-        return True
-
     return True
 
 

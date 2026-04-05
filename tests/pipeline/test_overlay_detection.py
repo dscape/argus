@@ -14,8 +14,8 @@ import time
 from pathlib import Path
 
 import cv2
-import pytest
 import pipeline.overlay.scanner as scanner
+import pytest
 from pipeline.overlay.scanner import OverlayDetection, detect_overlay_fast, fast_overlay_check
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "frames"

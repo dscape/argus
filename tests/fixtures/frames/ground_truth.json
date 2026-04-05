@@ -1,4 +1,25 @@
 {
+  "0jOWFBcmC_4/50pct": {
+    "image": "0jOWFBcmC_4/50pct.jpg",
+    "has_overlay": true,
+    "bbox": [
+      485,
+      36,
+      311,
+      311
+    ],
+    "frame_width": 1280,
+    "frame_height": 720,
+    "annotated_at": "2026-04-05T21:33:20.555939+00:00"
+  },
+  "1kqEzg2YAJE/25pct": {
+    "image": "1kqEzg2YAJE/25pct.jpg",
+    "has_overlay": false,
+    "bbox": null,
+    "frame_width": 1280,
+    "frame_height": 720,
+    "annotated_at": "2026-04-05T21:34:12.341052+00:00"
+  },
   "15LH0zLL0IY/25pct": {
     "image": "15LH0zLL0IY/25pct.jpg",
     "has_overlay": true,
@@ -11,6 +32,32 @@
     "frame_width": 1920,
     "frame_height": 1080,
     "annotated_at": "2026-04-02T22:13:48.005222+00:00"
+  },
+  "3a3wnItK5mk/25pct": {
+    "image": "3a3wnItK5mk/25pct.jpg",
+    "has_overlay": true,
+    "bbox": [
+      718,
+      26,
+      486,
+      486
+    ],
+    "frame_width": 1920,
+    "frame_height": 1080,
+    "annotated_at": "2026-04-03T20:45:36.971455+00:00"
+  },
+  "8GrcSZ6MlgI/75pct": {
+    "image": "8GrcSZ6MlgI/75pct.jpg",
+    "has_overlay": true,
+    "bbox": [
+      441,
+      0,
+      370,
+      370
+    ],
+    "frame_width": 1280,
+    "frame_height": 720,
+    "annotated_at": "2026-04-05T21:37:03.418984+00:00"
   },
   "D6yhg6S6EkQ/50pct": {
     "image": "D6yhg6S6EkQ/50pct.jpg",

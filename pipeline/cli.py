@@ -2,7 +2,6 @@
 
 import argparse
 import logging
-import sys
 
 from dotenv import load_dotenv
 
@@ -84,9 +83,9 @@ def cmd_calibrate(args):
 
 def cmd_generate_clips(args):
     """Generate training clips from approved overlay videos."""
+    from pipeline.db.connection import get_conn
     from pipeline.download.video_downloader import get_video_path
     from pipeline.overlay.overlay_clip_generator import generate_from_video
-    from pipeline.db.connection import get_conn
 
     if args.video_id:
         # Single video mode — look up channel handle from DB
@@ -162,8 +161,8 @@ def cmd_inspect(args):
     """Inspect videos by extracting frames and detecting overlay + OTB."""
     from pipeline.db.connection import get_conn
     from pipeline.screen.dual_region_detector import (
-        screen_video,
         overlay_bbox_to_json,
+        screen_video,
     )
 
     # Build query for target videos
@@ -172,7 +171,8 @@ def cmd_inspect(args):
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT video_id, channel_handle, title FROM youtube_videos WHERE video_id = %s",
+                    "SELECT video_id, channel_handle, title"
+                    " FROM youtube_videos WHERE video_id = %s",
                     (args.video_id,),
                 )
                 videos = cur.fetchall()
@@ -254,7 +254,10 @@ def cmd_inspect(args):
                     )
                     conn.commit()
 
-            overlay_str = f"overlay={result.overlay_score:.2f}" if result.has_overlay else "no overlay"
+            overlay_str = (
+                f"overlay={result.overlay_score:.2f}"
+                if result.has_overlay else "no overlay"
+            )
             otb_str = f"otb={result.otb_confidence:.2f}" if result.has_otb else "no otb"
             print(f"    -> {status.upper()} ({overlay_str}, {otb_str})")
 
@@ -333,7 +336,7 @@ def cmd_ai_train(args):
 
 def cmd_ai_eval(args):
     """Evaluate the AI screening classifier."""
-    from pipeline.screen.ai_eval import evaluate, calibrate_threshold
+    from pipeline.screen.ai_eval import calibrate_threshold, evaluate
     evaluate(checkpoint_path=args.checkpoint)
     print()
     calibrate_threshold(
@@ -422,7 +425,8 @@ def cmd_auto_calibrate(args):
     print(f"  Camera:       {proposal.camera}")
     print(f"  Resolution:   {proposal.ref_resolution}")
     print(f"  Theme:        {proposal.board_theme} (confidence={proposal.theme_confidence:.2f})")
-    print(f"  Flipped:      {proposal.board_flipped} (confidence={proposal.orientation_confidence:.2f})")
+    flip_conf = proposal.orientation_confidence
+    print(f"  Flipped:      {proposal.board_flipped} (confidence={flip_conf:.2f})")
 
     if args.apply:
         cal = LayoutCalibration(
@@ -458,6 +462,7 @@ def cmd_smoke_test(args):
 
     print("\n=== Smoke Test: AI Classifier ===")
     import torch
+
     from pipeline.screen.ai_classifier import ScreeningClassifier
 
     model = ScreeningClassifier()
@@ -547,7 +552,7 @@ def cmd_ai_extract_status(args):
     pct = round(100 * cached / total, 1) if total > 0 else 0
     remaining = max(0, total - cached)
 
-    print(f"\nAI feature extraction progress:")
+    print("\nAI feature extraction progress:")
     print(f"  {cached}/{total} ({pct}%) — overlay={labels[0]}, otb={labels[1]}, "
           f"reject={labels[2]}, vertical={vertical}")
     if errors:
@@ -557,7 +562,7 @@ def cmd_ai_extract_status(args):
     if remaining > 0:
         print(f"\n  ~{remaining} videos remaining (~{remaining * 4}s at ~4s/video)")
     else:
-        print(f"\n  All videos cached.")
+        print("\n  All videos cached.")
 
 
 def cmd_stats(args):
@@ -641,28 +646,39 @@ def cmd_fetch_frames(args):
         get_video_duration,
     )
 
+    layout = getattr(args, "layout", "overlay")
+    randomize = getattr(args, "random", False)
+
     with get_conn() as conn:
         with conn.cursor() as cur:
-            if args.channel:
-                cur.execute(
-                    """SELECT video_id, COALESCE(channel_handle, '')
-                       FROM youtube_videos
-                       WHERE layout_type = 'overlay'
-                         AND channel_handle = %s
-                       ORDER BY video_id""",
-                    (args.channel,),
-                )
-            else:
-                cur.execute(
-                    """SELECT video_id, COALESCE(channel_handle, '')
-                       FROM youtube_videos
-                       WHERE layout_type = 'overlay'
-                       ORDER BY channel_handle, video_id"""
-                )
-            videos = cur.fetchall()
+            conditions = ["screening_status = 'approved'"]
+            params: list = []
 
-    if args.limit:
-        videos = videos[: args.limit]
+            if layout == "overlay":
+                # Include overlay + unclassified (NULL) videos
+                conditions.append("(layout_type = 'overlay' OR layout_type IS NULL)")
+            elif layout != "all":
+                conditions.append("layout_type = %s")
+                params.append(layout)
+
+            if args.channel:
+                conditions.append("channel_handle = %s")
+                params.append(args.channel)
+
+            where = " AND ".join(conditions)
+            order = "RANDOM()" if randomize else "channel_handle, video_id"
+            limit_clause = ""
+            if args.limit:
+                limit_clause = " LIMIT %s"
+                params.append(args.limit)
+
+            cur.execute(
+                f"SELECT video_id, COALESCE(channel_handle, '')"  # noqa: S608
+                f" FROM youtube_videos WHERE {where}"
+                f" ORDER BY {order}{limit_clause}",
+                params,
+            )
+            videos = cur.fetchall()
 
     if not videos:
         print("No overlay videos found.")
@@ -729,7 +745,9 @@ def main():
     p.add_argument("--limit", type=int, default=None, help="Max videos to screen")
 
     # inspect
-    p = subparsers.add_parser("inspect", help="Inspect videos for overlay + OTB via frame extraction")
+    p = subparsers.add_parser(
+        "inspect", help="Inspect videos for overlay + OTB via frame extraction",
+    )
     p.add_argument("--video-id", type=str, default=None, help="Inspect a single video by ID")
     p.add_argument("--channel", type=str, default=None, help="Filter by channel handle")
     p.add_argument("--status", type=str, default=None, help="Filter by status (default: approved)")
@@ -744,10 +762,22 @@ def main():
     p.add_argument("--channel", type=str, required=True, help="Channel handle (e.g. @STLChessClub)")
     p.add_argument("--overlay", type=str, required=True, help="Overlay bbox: x,y,w,h")
     p.add_argument("--camera", type=str, required=True, help="Camera bbox: x,y,w,h")
-    p.add_argument("--resolution", type=str, default=None, help="Reference resolution: WxH (default: 1920x1080)")
-    p.add_argument("--flipped", action="store_true", help="Board is flipped (Black at bottom)")
-    p.add_argument("--theme", type=str, default=None, help="Board theme (lichess_default, chess_com_green)")
-    p.add_argument("--delay", type=float, default=None, help="Move delay in seconds (default: 2.0)")
+    p.add_argument(
+        "--resolution", type=str, default=None,
+        help="Reference resolution: WxH (default: 1920x1080)",
+    )
+    p.add_argument(
+        "--flipped", action="store_true",
+        help="Board is flipped (Black at bottom)",
+    )
+    p.add_argument(
+        "--theme", type=str, default=None,
+        help="Board theme (lichess_default, chess_com_green)",
+    )
+    p.add_argument(
+        "--delay", type=float, default=None,
+        help="Move delay in seconds (default: 2.0)",
+    )
 
     # generate-clips
     p = subparsers.add_parser("generate-clips", help="Generate training clips from approved videos")
@@ -758,13 +788,28 @@ def main():
     # overlay-test
     p = subparsers.add_parser("overlay-test", help="Test overlay pipeline on a screenshot")
     p.add_argument("--image", type=str, required=True, help="Path to screenshot image")
-    p.add_argument("--overlay", type=str, default=None, help="Manual overlay bbox: x,y,w,h (skip auto-detect)")
-    p.add_argument("--flipped", action="store_true", help="Board is flipped (Black at bottom)")
-    p.add_argument("--theme", type=str, default=None, help="Board theme (lichess_default, chess_com_green)")
-    p.add_argument("--output", type=str, default=None, help="Output path for annotated image")
+    p.add_argument(
+        "--overlay", type=str, default=None,
+        help="Manual overlay bbox: x,y,w,h (skip auto-detect)",
+    )
+    p.add_argument(
+        "--flipped", action="store_true",
+        help="Board is flipped (Black at bottom)",
+    )
+    p.add_argument(
+        "--theme", type=str, default=None,
+        help="Board theme (lichess_default, chess_com_green)",
+    )
+    p.add_argument(
+        "--output", type=str, default=None,
+        help="Output path for annotated image",
+    )
 
     # overlay-test-reader
-    p = subparsers.add_parser("overlay-test-reader", help="Test overlay reader on a specific region")
+    p = subparsers.add_parser(
+        "overlay-test-reader",
+        help="Test overlay reader on a specific region",
+    )
     p.add_argument("--image", type=str, required=True, help="Path to screenshot image")
     p.add_argument("--overlay", type=str, required=True, help="Overlay bbox: x,y,w,h")
     p.add_argument("--flipped", action="store_true", help="Board is flipped (Black at bottom)")
@@ -788,16 +833,28 @@ def main():
     p.add_argument("--device", type=str, default="cpu", help="Torch device")
 
     # ai-eval
-    p = subparsers.add_parser("ai-eval", help="Evaluate AI screening classifier and calibrate threshold")
-    p.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint (default: best.pt)")
-    p.add_argument("--target-precision", type=float, default=0.95, help="Target precision for threshold")
+    p = subparsers.add_parser(
+        "ai-eval",
+        help="Evaluate AI screening classifier and calibrate threshold",
+    )
+    p.add_argument(
+        "--checkpoint", type=str, default=None,
+        help="Path to checkpoint (default: best.pt)",
+    )
+    p.add_argument(
+        "--target-precision", type=float, default=0.95,
+        help="Target precision for threshold",
+    )
 
     # ai-screen
     p = subparsers.add_parser("ai-screen", help="Run AI screening on unscreened videos")
     p.add_argument("--channel", type=str, default=None, help="Screen specific channel")
     p.add_argument("--limit", type=int, default=None, help="Max videos to screen")
     p.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint")
-    p.add_argument("--threshold", type=float, default=0.85, help="Confidence threshold for auto-deciding")
+    p.add_argument(
+        "--threshold", type=float, default=0.85,
+        help="Confidence threshold for auto-deciding",
+    )
     p.add_argument("--device", type=str, default="cpu", help="Torch device")
 
     # ai-retrain
@@ -806,23 +863,53 @@ def main():
     p.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     p.add_argument("--batch-size", type=int, default=32, help="Batch size")
     p.add_argument("--device", type=str, default="cpu", help="Torch device")
-    p.add_argument("--target-precision", type=float, default=0.95, help="Target precision for threshold calibration")
-    p.add_argument("--screen", action="store_true", help="Also run ai-screen with new weights after training")
-    p.add_argument("--threshold", type=float, default=0.85, help="Confidence threshold (used with --screen)")
-    p.add_argument("--screen-limit", type=int, default=None, help="Max videos to screen (used with --screen)")
+    p.add_argument(
+        "--target-precision", type=float, default=0.95,
+        help="Target precision for threshold calibration",
+    )
+    p.add_argument(
+        "--screen", action="store_true",
+        help="Also run ai-screen with new weights after training",
+    )
+    p.add_argument(
+        "--threshold", type=float, default=0.85,
+        help="Confidence threshold (used with --screen)",
+    )
+    p.add_argument(
+        "--screen-limit", type=int, default=None,
+        help="Max videos to screen (used with --screen)",
+    )
 
     # ai-profile
-    p = subparsers.add_parser("ai-profile", help="Profile AI screening pipeline for a single video")
-    p.add_argument("--video-id", type=str, required=True, help="YouTube video ID to profile")
-    p.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint (default: best.pt)")
+    p = subparsers.add_parser(
+        "ai-profile",
+        help="Profile AI screening pipeline for a single video",
+    )
+    p.add_argument(
+        "--video-id", type=str, required=True,
+        help="YouTube video ID to profile",
+    )
+    p.add_argument(
+        "--checkpoint", type=str, default=None,
+        help="Path to checkpoint (default: best.pt)",
+    )
     p.add_argument("--device", type=str, default="cpu", help="Torch device")
-    p.add_argument("--force-uncached", action="store_true", help="Skip feature cache to force full pipeline")
+    p.add_argument(
+        "--force-uncached", action="store_true",
+        help="Skip feature cache to force full pipeline",
+    )
 
     # auto-calibrate
     p = subparsers.add_parser("auto-calibrate", help="Auto-propose calibration for a channel")
     p.add_argument("--channel", type=str, required=True, help="Channel handle (e.g. @STLChessClub)")
-    p.add_argument("--video-id", type=str, default=None, help="Use a specific video instead of multi-video consensus")
-    p.add_argument("--apply", action="store_true", help="Save the proposed calibration (otherwise just print)")
+    p.add_argument(
+        "--video-id", type=str, default=None,
+        help="Use a specific video instead of multi-video consensus",
+    )
+    p.add_argument(
+        "--apply", action="store_true",
+        help="Save the proposed calibration (otherwise just print)",
+    )
 
     # smoke-test
     subparsers.add_parser("smoke-test", help="Run quick smoke tests (no DB required)")
@@ -841,6 +928,11 @@ def main():
                    choices=["fullres", "hires", "lowres"],
                    help="fullres=1920x1080 via yt-dlp (default), hires=1280x720, lowres=480x360")
     p.add_argument("--limit", type=int, default=None, help="Max videos to fetch")
+    p.add_argument("--layout", type=str, default="overlay",
+                   choices=["overlay", "otb_only", "all"],
+                   help="Layout type filter (default: overlay)")
+    p.add_argument("--random", action="store_true",
+                   help="Randomize video selection (avoids sampling bias)")
 
     # stats
     subparsers.add_parser("stats", help="Print pipeline statistics")

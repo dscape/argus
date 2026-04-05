@@ -2,6 +2,9 @@
 
 import json
 import logging
+import os
+import random
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,6 +18,12 @@ from pipeline.paths import GROUND_TRUTH_PATH, VIDEOS_DIR
 from pipeline.paths import frame_path as _frame_path
 
 logger = logging.getLogger(__name__)
+
+# Cache discovered frame paths to avoid rescanning 73K+ directories.
+# Invalidated when ground truth changes or after TTL expires.
+_frame_cache: list[tuple[str, str]] | None = None  # [(video_id, label), ...]
+_frame_cache_time: float = 0
+_CACHE_TTL = 300  # 5 minutes
 
 # Legacy path used as fallback during migration
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
@@ -38,63 +47,97 @@ def _save_ground_truth(data: dict) -> None:
     tmp.replace(GROUND_TRUTH_PATH)
 
 
-def list_frames() -> list[dict]:
-    """List all hires frames with annotation status."""
-    gt = _load_ground_truth()
-    frames = []
+def _discover_frame_paths() -> list[tuple[str, str]]:
+    """Scan filesystem for hires frames. Result is cached in-memory."""
+    global _frame_cache, _frame_cache_time  # noqa: PLW0603
+    now = time.monotonic()
+    if _frame_cache is not None and (now - _frame_cache_time) < _CACHE_TTL:
+        return _frame_cache
 
-    # Scan new layout: data/videos/*/hires/*.jpg
+    found: list[tuple[str, str]] = []
+
     if VIDEOS_DIR.exists():
-        for video_dir in sorted(VIDEOS_DIR.iterdir()):
-            hires_dir = video_dir / "hires"
-            if not hires_dir.is_dir():
-                continue
-            video_id = video_dir.name
-            for img_path in sorted(hires_dir.glob("*.jpg")):
-                label = img_path.stem
-                key = f"{video_id}/{label}"
-                annotation = gt.get(key)
-                img = cv2.imread(str(img_path))
-                h, w = img.shape[:2] if img is not None else (0, 0)
-                frames.append(
-                    {
-                        "key": key,
-                        "video_id": video_id,
-                        "label": label,
-                        "frame_width": w,
-                        "frame_height": h,
-                        "annotated": annotation is not None,
-                        "has_overlay": annotation.get("has_overlay") if annotation else None,
-                        "bbox": annotation.get("bbox") if annotation else None,
-                    }
-                )
+        base = str(VIDEOS_DIR)
+        try:
+            for entry in os.scandir(base):
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                hires = os.path.join(entry.path, "hires")
+                if not os.path.isdir(hires):
+                    continue
+                vid = entry.name
+                try:
+                    for img in os.scandir(hires):
+                        if img.name.endswith(".jpg"):
+                            found.append((vid, img.name[:-4]))
+                except OSError:
+                    continue
+        except OSError:
+            pass
 
-    # Fall back to legacy dir if no new-layout frames found
-    if not frames and _LEGACY_FRAMES_DIR.exists():
-        for video_dir in sorted(_LEGACY_FRAMES_DIR.iterdir()):
+    # Fall back to legacy dir
+    if not found and _LEGACY_FRAMES_DIR.exists():
+        for video_dir in _LEGACY_FRAMES_DIR.iterdir():
             if not video_dir.is_dir():
                 continue
-            video_id = video_dir.name
-            for img_path in sorted(video_dir.glob("*.jpg")):
-                label = img_path.stem
-                key = f"{video_id}/{label}"
-                annotation = gt.get(key)
-                img = cv2.imread(str(img_path))
-                h, w = img.shape[:2] if img is not None else (0, 0)
-                frames.append(
-                    {
-                        "key": key,
-                        "video_id": video_id,
-                        "label": label,
-                        "frame_width": w,
-                        "frame_height": h,
-                        "annotated": annotation is not None,
-                        "has_overlay": annotation.get("has_overlay") if annotation else None,
-                        "bbox": annotation.get("bbox") if annotation else None,
-                    }
-                )
+            vid = video_dir.name
+            for img_path in video_dir.glob("*.jpg"):
+                found.append((vid, img_path.stem))
 
-    return frames
+    _frame_cache = found
+    _frame_cache_time = now
+    return found
+
+
+def _invalidate_frame_cache() -> None:
+    global _frame_cache  # noqa: PLW0603
+    _frame_cache = None
+
+
+def list_frames() -> list[dict]:
+    """List all hires frames with annotation status.
+
+    Returns unannotated frames in random order (to avoid sampling bias),
+    followed by annotated frames sorted by annotation time.
+    """
+    gt = _load_ground_truth()
+    paths = _discover_frame_paths()
+
+    frames = []
+    for video_id, label in paths:
+        key = f"{video_id}/{label}"
+        annotation = gt.get(key)
+        frames.append(
+            {
+                "key": key,
+                "video_id": video_id,
+                "label": label,
+                "annotated": annotation is not None,
+                "has_overlay": (
+                    annotation.get("has_overlay")
+                    if annotation else None
+                ),
+                "bbox": (
+                    annotation.get("bbox")
+                    if annotation else None
+                ),
+            }
+        )
+
+    # Split into annotated vs unannotated
+    annotated = [f for f in frames if f["annotated"]]
+    unannotated = [f for f in frames if not f["annotated"]]
+
+    # Randomize unannotated to avoid sampling bias
+    random.shuffle(unannotated)
+
+    # Annotated at end, sorted by annotation time (most recent first)
+    annotated.sort(
+        key=lambda f: gt.get(f["key"], {}).get("annotated_at", ""),
+        reverse=True,
+    )
+
+    return unannotated + annotated
 
 
 def get_frame_path(video_id: str, label: str) -> Path | None:
