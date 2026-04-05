@@ -23,6 +23,7 @@ GROUND_TRUTH_PATH = FIXTURES_DIR / "ground_truth.json"
 
 MAX_MS = 200
 IOU_THRESHOLD = 0.40
+PRECISE_UNDERCOVERAGE_TOLERANCE_PX = 8
 
 
 def _load_ground_truth() -> dict:
@@ -42,6 +43,22 @@ def _compute_iou(a: list[int], b: list[int]) -> float:
     inter = max(0, x2 - x1) * max(0, y2 - y1)
     union = aw * ah + bw * bh - inter
     return inter / union if union > 0 else 0.0
+
+
+def _bbox_undercoverage(a: list[int] | tuple[int, int, int, int], b: list[int] | tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """Pixels of GT crop lost on each side: (left, top, right, bottom)."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    a_right = ax + aw
+    a_bottom = ay + ah
+    b_right = bx + bw
+    b_bottom = by + bh
+    return (
+        max(0, ax - bx),
+        max(0, ay - by),
+        max(0, b_right - a_right),
+        max(0, b_bottom - a_bottom),
+    )
 
 
 def _positive_entries() -> list[tuple[str, dict]]:
@@ -175,3 +192,23 @@ class TestDetectOverlayFastGeometryFallback:
 
         det = detect_overlay_fast(frame)
         assert not det.found, f"Seedless geometry fallback false positive on {key}"
+
+
+class TestDetectOverlayFastPrecision:
+    """Precise coords must not clip annotated overlay edges."""
+
+    @pytest.mark.parametrize("key", _positive_ids(), ids=_positive_ids())
+    def test_precise_bbox_does_not_clip_overlay(self, key: str):
+        gt = _load_ground_truth()
+        gt_bbox = gt[key]["bbox"]
+        frame = _load_frame(key)
+
+        det = detect_overlay_fast(frame)
+        assert det.found and det.bbox is not None, f"detect_overlay_fast missed overlay in {key}"
+
+        under = _bbox_undercoverage(list(det.bbox), gt_bbox)
+        assert max(under) <= PRECISE_UNDERCOVERAGE_TOLERANCE_PX, (
+            f"detect_overlay_fast clips overlay in {key}: "
+            f"undercoverage(left,top,right,bottom)={under}, "
+            f"detected={list(det.bbox)}, expected={gt_bbox}"
+        )
