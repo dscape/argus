@@ -145,6 +145,24 @@ class TestFastOverlayCheck:
             assert y + h <= fh, f"y+h={y + h} > {fh}"
 
 
+class TestFastOverlayCheckBboxAccuracy:
+    """fast_overlay_check bbox must at least overlap the correct overlay."""
+
+    @pytest.mark.parametrize("key", _positive_ids(), ids=_positive_ids())
+    def test_fast_bbox_overlaps_overlay(self, key: str):
+        gt = _load_ground_truth()
+        gt_bbox = gt[key]["bbox"]
+        frame = _load_frame(key)
+        det = fast_overlay_check(frame)
+        assert det.found and det.bbox is not None, f"fast_overlay_check missed overlay in {key}"
+        iou = _compute_iou(list(det.bbox), gt_bbox)
+        assert iou > 0, (
+            f"fast_overlay_check bbox has zero overlap with ground truth in {key}: "
+            f"detected={list(det.bbox)}, expected={gt_bbox} — "
+            f"detector locked onto wrong region"
+        )
+
+
 class TestDetectOverlayFastGeometryFallback:
     """detect_overlay_fast should recover precise coords without a seed."""
 

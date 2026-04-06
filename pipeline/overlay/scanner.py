@@ -1005,9 +1005,27 @@ def _fast_overlay_check_impl(frame: np.ndarray) -> OverlayDetection:
             candidates.append((f, b[2] * b[3], b))
 
     # Phase 2: Map to full resolution + validate with checkerboard.
+    #
+    # Two pools of candidates:
+    #   strict  — alternation + regularity + checkerboard consistency
+    #   fallback — alternation + regularity only (cb_pass failed)
+    #
+    # Rendered overlays have solid-fill cells (high grid regularity) while
+    # OTB boards and random patches do not.  Requiring regularity >= 0.15
+    # rejects false positives from real boards and non-board content.
+    #
+    # When the strict pool is empty (overlay window is mis-sized so
+    # checkerboard std is inflated), the fallback pool rescues the
+    # detection using alignment score as a proxy for board quality.
+    _P2_MIN_REGULARITY = 0.15
+
     inv = 1.0 / scale_factor if scale_factor < 1.0 else 1.0
     validation_candidates = _select_fast_validation_candidates(candidates)
     relaxed_candidates = sorted(validation_candidates, key=lambda c: (c[0], c[1]), reverse=True)[:2]
+
+    # (alignment_score, frac, bbox)
+    p2_strict: list[tuple[float, float, tuple[int, int, int, int]]] = []
+    p2_fallback: list[tuple[float, float, tuple[int, int, int, int]]] = []
 
     for _, _, small_bbox in validation_candidates:
         if scale_factor < 1.0:
@@ -1050,6 +1068,16 @@ def _fast_overlay_check_impl(frame: np.ndarray) -> OverlayDetection:
         if max(fw, fh) <= 220 and best_p2_contrast < 40.0:
             continue
 
+        p2_region = gray_full[
+            best_p2_bbox[1]: best_p2_bbox[1] + best_p2_bbox[3],
+            best_p2_bbox[0]: best_p2_bbox[0] + best_p2_bbox[2],
+        ]
+        regularity = compute_grid_regularity(p2_region)
+        if regularity < _P2_MIN_REGULARITY:
+            continue
+
+        align = _overlay_alignment_score(p2_region)
+
         if min(orig_h, orig_w) >= 720:
             cb_pass = (
                 check_checkerboard_consistency(gray_full, full_bbox)
@@ -1066,14 +1094,27 @@ def _fast_overlay_check_impl(frame: np.ndarray) -> OverlayDetection:
                         if check_checkerboard_consistency(gray_full, (nx, ny, ns, ns)):
                             cb_pass = True
                             break
-            if not cb_pass:
-                continue
+            if cb_pass:
+                p2_strict.append((align, best_p2_frac, best_p2_bbox))
+            elif best_p2_frac >= 0.77:
+                # Only accept cb_pass failures with strong alternation —
+                # OTB boards captured at moderate resolution can reach
+                # frac ~0.73 with decent regularity, so 0.77 provides
+                # enough separation to avoid false positives.
+                p2_fallback.append((align, best_p2_frac, best_p2_bbox))
+        else:
+            p2_strict.append((align, best_p2_frac, best_p2_bbox))
 
+    # Prefer strict candidates; fall back to alternation+regularity only.
+    p2_pool = p2_strict if p2_strict else p2_fallback
+    if p2_pool:
+        p2_pool.sort(key=lambda t: t[0], reverse=True)
+        _, best_frac, best_bbox = p2_pool[0]
         return OverlayDetection(
             found=True,
-            bbox=best_p2_bbox,
-            seed_bbox=best_p2_bbox,
-            score=best_p2_frac,
+            bbox=best_bbox,
+            seed_bbox=best_bbox,
+            score=best_frac,
             frame_resolution=resolution,
         )
 
@@ -1118,6 +1159,13 @@ def _fast_overlay_check_impl(frame: np.ndarray) -> OverlayDetection:
             continue
 
         if max(fw, fh) <= 220 and best_p2_contrast < 40.0:
+            continue
+
+        relaxed_region = gray_full[
+            best_p2_bbox[1]: best_p2_bbox[1] + best_p2_bbox[3],
+            best_p2_bbox[0]: best_p2_bbox[0] + best_p2_bbox[2],
+        ]
+        if compute_grid_regularity(relaxed_region) < _P2_MIN_REGULARITY:
             continue
 
         cb_pass = (

@@ -286,7 +286,13 @@ def _case_verdict(
     if not expected_overlay:
         return "pass" if det_bbox is None else "fail"
     if detector_name == "fast":
-        return "pass" if det_bbox is not None else "fail"
+        if det_bbox is None:
+            return "fail"
+        if gt_bbox is not None:
+            iou = _compute_iou(det_bbox, gt_bbox)
+            if iou is not None and iou <= 0:
+                return "fail"
+        return "pass"
     if det_bbox is None or gt_bbox is None:
         return "fail"
     under = _bbox_undercoverage(det_bbox, gt_bbox)
