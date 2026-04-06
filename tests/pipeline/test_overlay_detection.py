@@ -45,7 +45,10 @@ def _compute_iou(a: list[int], b: list[int]) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def _bbox_undercoverage(a: list[int] | tuple[int, int, int, int], b: list[int] | tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+def _bbox_undercoverage(
+    a: list[int] | tuple[int, int, int, int],
+    b: list[int] | tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
     """Pixels of GT crop lost on each side: (left, top, right, bottom)."""
     ax, ay, aw, ah = a
     bx, by, bw, bh = b
