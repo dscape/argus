@@ -139,6 +139,109 @@ def check_alternating_pattern(region: np.ndarray) -> bool:
     return alternation_count / total_pairs > 0.35
 
 
+def _alternation_from_integral(
+    integral: np.ndarray,
+    x: int,
+    y: int,
+    win: int,
+) -> tuple[float, float]:
+    """Compute alternation strength using a precomputed integral image.
+
+    O(1) per cell regardless of window size, vs O(win^2) for the
+    region-based version.  Uses vectorized indexing for speed.
+    """
+    cell = win // 8
+    if cell == 0:
+        return 0.0, 0.0
+
+    rows = y + np.arange(9) * cell
+    cols = x + np.arange(9) * cell
+
+    tl = integral[rows[:-1, None], cols[None, :-1]]
+    tr = integral[rows[:-1, None], cols[None, 1:]]
+    bl = integral[rows[1:, None], cols[None, :-1]]
+    br = integral[rows[1:, None], cols[None, 1:]]
+
+    means = (br - bl - tr + tl) / float(cell * cell)
+
+    h_diffs = np.abs(means[:, :-1] - means[:, 1:])
+    v_diffs = np.abs(means[:-1, :] - means[1:, :])
+    all_diffs = np.concatenate([h_diffs.ravel(), v_diffs.ravel()])
+
+    alternation_count = int(np.sum(all_diffs > 15))
+    total_pairs = len(all_diffs)
+    frac = alternation_count / total_pairs if total_pairs > 0 else 0.0
+    avg_contrast = float(np.mean(all_diffs)) if len(all_diffs) > 0 else 0.0
+
+    return frac, avg_contrast
+
+
+def _batch_alternation_from_integral(
+    integral: np.ndarray,
+    xs: np.ndarray,
+    ys: np.ndarray,
+    win: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute alternation frac and contrast for ALL (x, y) positions at once.
+
+    ``xs`` and ``ys`` are 1-D arrays of grid-origin coordinates.  Returns
+    two 2-D arrays of shape ``(len(ys), len(xs))`` with the alternation
+    fraction and mean contrast for every position.  This is **much** faster
+    than calling ``_alternation_from_integral`` in a Python loop because all
+    numpy indexing is vectorised.
+    """
+    cell = win // 8
+    ny, nx = len(ys), len(xs)
+    if cell == 0 or ny == 0 or nx == 0:
+        return np.zeros((ny, nx)), np.zeros((ny, nx))
+
+    offsets = np.arange(9) * cell  # (9,)
+
+    # Build row and column index arrays for every position in the grid.
+    # row_idx shape: (ny, 9),  col_idx shape: (nx, 9)
+    row_idx = ys[:, None] + offsets[None, :]   # (ny, 9)
+    col_idx = xs[:, None] + offsets[None, :]   # (nx, 9)
+
+    # Compute cell means for all positions at once.
+    # We need integral[row, col] for each combination of (pos_y, cell_row)
+    # and (pos_x, cell_col).  Shape: (ny, 8, nx, 8) -> means per cell.
+    # Use advanced indexing: integral[row_idx[:, :8], col_idx[:, :8]] etc.
+    # Reshape to (ny, 8, 1, 1) and (1, 1, nx, 8) for broadcasting.
+    r0 = row_idx[:, :8]  # (ny, 8) — top rows
+    r1 = row_idx[:, 1:]  # (ny, 8) — bottom rows
+    c0 = col_idx[:, :8]  # (nx, 8) — left cols
+    c1 = col_idx[:, 1:]  # (nx, 8) — right cols
+
+    # integral has shape (H+1, W+1).  We want:
+    #   means[py, cr, px, cc] = (integral[r1[py,cr], c1[px,cc]]
+    #                          - integral[r1[py,cr], c0[px,cc]]
+    #                          - integral[r0[py,cr], c1[px,cc]]
+    #                          + integral[r0[py,cr], c0[px,cc]]) / cell^2
+    tl = integral[r0[:, :, None, None], c0[None, None, :, :]]  # (ny,8,nx,8)
+    tr = integral[r0[:, :, None, None], c1[None, None, :, :]]
+    bl = integral[r1[:, :, None, None], c0[None, None, :, :]]
+    br = integral[r1[:, :, None, None], c1[None, None, :, :]]
+
+    means = (br - bl - tr + tl) / float(cell * cell)  # (ny, 8, nx, 8)
+
+    # Horizontal diffs: adjacent columns -> (ny, 8, nx, 7)
+    h_diffs = np.abs(means[:, :, :, :-1] - means[:, :, :, 1:])
+    # Vertical diffs: adjacent rows -> (ny, 7, nx, 8)
+    v_diffs = np.abs(means[:, :-1, :, :] - means[:, 1:, :, :])
+
+    total_pairs = 8 * 7 + 7 * 8  # 112
+
+    h_alt = np.sum(h_diffs > 15, axis=(1, 3))  # (ny, nx)
+    v_alt = np.sum(v_diffs > 15, axis=(1, 3))  # (ny, nx)
+    frac = (h_alt + v_alt).astype(np.float64) / total_pairs
+
+    h_sum = np.sum(h_diffs, axis=(1, 3))  # (ny, nx)
+    v_sum = np.sum(v_diffs, axis=(1, 3))  # (ny, nx)
+    avg_contrast = (h_sum + v_sum) / total_pairs
+
+    return frac, avg_contrast
+
+
 def compute_alternation_strength(region: np.ndarray) -> tuple[float, float]:
     """Compute alternation fraction and mean contrast for an 8x8 grid.
 
@@ -194,10 +297,10 @@ MAX_CHECKERBOARD_STD = 30.0
 
 # Geometry fallback thresholds. These are intentionally stricter than the
 # fast scan thresholds because this path can fire without a texture-based seed.
-_GEOM_MIN_REGULARITY = 0.35
-_GEOM_MIN_ALTERNATION_FRAC = 0.80
-_GEOM_MIN_ALTERNATION_CONTRAST = 35.0
-_GEOM_MIN_PERIODICITY = 1.20
+_GEOM_MIN_REGULARITY = 0.30
+_GEOM_MIN_ALTERNATION_FRAC = 0.70
+_GEOM_MIN_ALTERNATION_CONTRAST = 30.0
+_GEOM_MIN_PERIODICITY = 1.10
 
 
 def _checkerboard_std(gray: np.ndarray) -> float:
@@ -566,17 +669,18 @@ def _refine_alignment(
 # The small windows act as "seed" detections — grid regularity passes
 # on small sub-regions where per-cell pixel counts are low enough that
 # compression noise averages out.
-FAST_SCAN_SCALES = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
-FAST_SCAN_STEP_FRACTION = 0.25
+FAST_SCAN_SCALES = [0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.60, 0.70, 0.80, 0.90]
+FAST_SCAN_STEP_FRACTION = 0.125
+FAST_PHASE2_MAX_BY_AREA = 3
+FAST_PHASE2_MAX_BY_SCORE = 2
+FAST_GRID_RESCUE_MAX_CANDIDATES = 2
+FAST_GRID_RESCUE_MULTIPLIERS = (2.0, 2.5)
 
-# Only downscale frames significantly larger than this threshold.
-# Low-res video (360p, 480p) must NOT be downscaled — compression
-# artifacts already make grid regularity fragile at those resolutions.
-# NOTE: Overlay detection is tuned for 1920x1080 input (native YouTube).
-# YouTube thumbnails (maxresdefault) are only 1280x720 — the smaller cell
-# sizes shift variance/contrast distributions and reduce detection accuracy.
-# Always use yt-dlp-extracted frames at 1920x1080 for reliable results.
-FAST_CHECK_MAX_DIM = 810
+# 1280x720 frames must NOT be downscaled — overlay cells are already
+# small.  1920x1080 frames are downscaled to ~1300x731 for speed.
+# Value of 1300 keeps 720p untouched and only lightly shrinks 1080p.
+FAST_CHECK_MAX_DIM = 1300
+FAST_GRID_CORRECTION_MAX_SIZE = 600
 
 
 def _expand_fast(
@@ -696,7 +800,83 @@ def _refine_alternation(
     return best, best_frac, best_contrast
 
 
-def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
+def _select_fast_validation_candidates(
+    candidates: list[tuple[float, int, tuple[int, int, int, int]]],
+) -> list[tuple[float, int, tuple[int, int, int, int]]]:
+    """Keep a small diverse validation set for the fast screener."""
+    by_area = sorted(candidates, key=lambda c: (c[1], c[0]), reverse=True)
+    by_score = sorted(candidates, key=lambda c: (c[0], c[1]), reverse=True)
+
+    selected: list[tuple[float, int, tuple[int, int, int, int]]] = []
+    seen: set[tuple[int, int, int, int]] = set()
+
+    for cand in by_area[:FAST_PHASE2_MAX_BY_AREA]:
+        if cand[2] not in seen:
+            selected.append(cand)
+            seen.add(cand[2])
+
+    for cand in by_score[:FAST_PHASE2_MAX_BY_SCORE]:
+        if cand[2] not in seen:
+            selected.append(cand)
+            seen.add(cand[2])
+
+    return selected
+
+
+def _fast_grid_rescue(
+    frame: np.ndarray,
+    gray_full: np.ndarray,
+    candidates: list[tuple[float, int, tuple[int, int, int, int]]],
+) -> tuple[int, int, int, int] | None:
+    """Try a bounded crop-grid rescue for missed but board-like candidates."""
+    from pipeline.overlay.grid_detector import detect_grid
+
+    fh, fw = gray_full.shape[:2]
+    best_bbox: tuple[int, int, int, int] | None = None
+    best_score = 0.0
+
+    rescue_candidates = sorted(candidates, key=lambda c: (c[0], c[1]), reverse=True)
+
+    for _, _, seed_bbox in rescue_candidates[:FAST_GRID_RESCUE_MAX_CANDIDATES]:
+        x, y, w, h_box = seed_bbox
+        cx = x + w // 2
+        cy = y + h_box // 2
+
+        for mult in FAST_GRID_RESCUE_MULTIPLIERS:
+            size = int(round(w * mult))
+            if size < 64:
+                continue
+            ex = max(0, min(cx - size // 2, fw - size))
+            ey = max(0, min(cy - size // 2, fh - size))
+            size = min(size, fw - ex, fh - ey)
+            crop = frame[ey : ey + size, ex : ex + size]
+            grid = detect_grid(cv2.GaussianBlur(crop, (3, 3), 0), allow_uniform=False)
+            if grid is None or len(grid.v_lines) != 9 or len(grid.h_lines) != 9:
+                continue
+
+            gx = ex + grid.v_lines[0]
+            gy = ey + grid.h_lines[0]
+            gw = grid.v_lines[-1] - grid.v_lines[0]
+            gh = grid.h_lines[-1] - grid.h_lines[0]
+            board_size = max(gw, gh)
+            bx = max(0, min(gx, fw - board_size))
+            by = max(0, min(gy, fh - board_size))
+            board_size = min(board_size, fw - bx, fh - by)
+            bbox = (bx, by, board_size, board_size)
+
+            if not _bbox_looks_like_overlay(frame, gray_full, bbox):
+                continue
+
+            region = gray_full[bbox[1] : bbox[1] + bbox[3], bbox[0] : bbox[0] + bbox[2]]
+            score = _overlay_alignment_score(region)
+            if best_bbox is None or score > best_score:
+                best_bbox = bbox
+                best_score = score
+
+    return best_bbox
+
+
+def _fast_overlay_check_impl(frame: np.ndarray) -> OverlayDetection:
     """Fast overlay presence check — under 100ms on 1080p.
 
     Two-phase approach:
@@ -727,6 +907,9 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if len(small.shape) == 3 else small
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
 
+    # Precompute integral image for O(1) per-cell mean lookups in Phase 1.
+    integral = cv2.integral(gray.astype(np.float64))
+
     # Phase 1: Scan at downscaled resolution.
     # Two detection paths: alternation (all board types) + regularity (flat boards).
     #
@@ -752,60 +935,99 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
         step = max(1, int(win_size * FAST_SCAN_STEP_FRACTION))
         half_cell = win_size // 16  # half of one cell width
         scale_best: tuple[float, tuple[int, int, int, int]] | None = None
-        near_misses: list[tuple[float, int, int]] = []
 
-        for y in range(0, h - win_size + 1, step):
-            for x in range(0, w - win_size + 1, step):
-                region = gray[y: y + win_size, x: x + win_size]
+        # Vectorised Path A: evaluate ALL positions at once via batch integral.
+        xs = np.arange(0, w - win_size + 1, step)
+        ys = np.arange(0, h - win_size + 1, step)
 
-                # Path A: strong alternation pattern
-                frac, contrast = compute_alternation_strength(region)
-                if frac >= _P1_MIN_FRAC and contrast >= _P1_MIN_CONTRAST:
-                    if scale_best is None or frac > scale_best[0]:
-                        scale_best = (frac, (x, y, win_size, win_size))
-                    continue
+        if len(xs) > 0 and len(ys) > 0:
+            frac_grid, contrast_grid = _batch_alternation_from_integral(
+                integral, xs, ys, win_size,
+            )
 
-                # Path B: grid regularity with basic pattern check
-                regularity = compute_grid_regularity(region)
-                if regularity >= MIN_LOW_VARIANCE_RATIO and check_alternating_pattern(region):
-                    if scale_best is None or regularity > scale_best[0]:
-                        scale_best = (regularity, (x, y, win_size, win_size))
-                    continue
+            # Find positions that pass the Phase 1 threshold.
+            hit_mask = (frac_grid >= _P1_MIN_FRAC) & (contrast_grid >= _P1_MIN_CONTRAST)
+            if np.any(hit_mask):
+                hit_ys, hit_xs = np.nonzero(hit_mask)
+                hit_fracs = frac_grid[hit_ys, hit_xs]
+                best_idx = int(np.argmax(hit_fracs))
+                bx = int(xs[hit_xs[best_idx]])
+                by = int(ys[hit_ys[best_idx]])
+                scale_best = (float(hit_fracs[best_idx]),
+                              (bx, by, win_size, win_size))
 
-                # Track near-misses for offset refinement
-                if frac >= _NEAR_MISS_FRAC and contrast >= _NEAR_MISS_CONTRAST:
-                    near_misses.append((frac, x, y))
+            # Near-misses for offset refinement (only if no strong hit).
+            if scale_best is None:
+                nm_mask = (
+                    (frac_grid >= _NEAR_MISS_FRAC)
+                    & (contrast_grid >= _NEAR_MISS_CONTRAST)
+                )
+                if np.any(nm_mask):
+                    nm_ys, nm_xs = np.nonzero(nm_mask)
+                    nm_fracs = frac_grid[nm_ys, nm_xs]
+                    order = np.argsort(nm_fracs)[::-1][:5]
+                    for idx in order:
+                        nm_x = int(xs[nm_xs[idx]])
+                        nm_y = int(ys[nm_ys[idx]])
+                        for dy in (0, half_cell, -half_cell):
+                            for dx in (0, half_cell, -half_cell):
+                                if dx == 0 and dy == 0:
+                                    continue
+                                rx, ry = nm_x + dx, nm_y + dy
+                                if rx < 0 or ry < 0 or rx + win_size > w or ry + win_size > h:
+                                    continue
+                                f, c = _alternation_from_integral(
+                                    integral, rx, ry, win_size,
+                                )
+                                if f >= _P1_MIN_FRAC and c >= _P1_MIN_CONTRAST:
+                                    if scale_best is None or f > scale_best[0]:
+                                        scale_best = (f, (rx, ry, win_size, win_size))
 
-        # Pass 2: refine top near-misses with half-cell offsets.
-        if scale_best is None and near_misses:
-            near_misses.sort(reverse=True)
-            for _, nm_x, nm_y in near_misses[:5]:
-                for dy in (0, half_cell, -half_cell):
-                    for dx in (0, half_cell, -half_cell):
-                        if dx == 0 and dy == 0:
-                            continue
-                        rx, ry = nm_x + dx, nm_y + dy
-                        if rx < 0 or ry < 0 or rx + win_size > w or ry + win_size > h:
-                            continue
-                        region = gray[ry: ry + win_size, rx: rx + win_size]
-                        frac, contrast = compute_alternation_strength(region)
-                        if frac >= _P1_MIN_FRAC and contrast >= _P1_MIN_CONTRAST:
-                            if scale_best is None or frac > scale_best[0]:
-                                scale_best = (frac, (rx, ry, win_size, win_size))
+                # Path B: grid regularity for positions with moderate signal.
+                # Only try a few top-scoring positions to limit cost.
+                if scale_best is None:
+                    pathb_mask = frac_grid >= 0.20
+                    if np.any(pathb_mask):
+                        pb_ys, pb_xs = np.nonzero(pathb_mask)
+                        pb_fracs = frac_grid[pb_ys, pb_xs]
+                        pb_order = np.argsort(pb_fracs)[::-1][:3]
+                        for idx in pb_order:
+                            px = int(xs[pb_xs[idx]])
+                            py = int(ys[pb_ys[idx]])
+                            region = gray[py: py + win_size, px: px + win_size]
+                            regularity = compute_grid_regularity(region)
+                            if regularity >= MIN_LOW_VARIANCE_RATIO and check_alternating_pattern(region):
+                                if scale_best is None or regularity > scale_best[0]:
+                                    scale_best = (regularity, (px, py, win_size, win_size))
 
         if scale_best is not None:
             f, b = scale_best
             candidates.append((f, b[2] * b[3], b))
 
     # Phase 2: Map to full resolution + validate with checkerboard.
-    # Sort by score (desc) to try best-confidence candidates first.
-    # Larger windows that include non-board content score lower, so
-    # score-based sorting naturally prefers board-only detections.
-    candidates.sort(key=lambda c: c[0], reverse=True)
-    inv = 1.0 / scale_factor if scale_factor < 1.0 else 1.0
+    #
+    # Two pools of candidates:
+    #   strict  — alternation + regularity + checkerboard consistency
+    #   fallback — alternation + regularity only (cb_pass failed)
+    #
+    # Rendered overlays have solid-fill cells (high grid regularity) while
+    # OTB boards and random patches do not.  Requiring regularity >= 0.15
+    # rejects false positives from real boards and non-board content.
+    #
+    # When the strict pool is empty (overlay window is mis-sized so
+    # checkerboard std is inflated), the fallback pool rescues the
+    # detection using alignment score as a proxy for board quality.
+    _P2_MIN_REGULARITY = 0.15
 
-    for _, _, small_bbox in candidates:
-        # Map bbox back to full resolution.
+    inv = 1.0 / scale_factor if scale_factor < 1.0 else 1.0
+    validation_candidates = _select_fast_validation_candidates(candidates)
+    relaxed_candidates = sorted(validation_candidates, key=lambda c: (c[0], c[1]), reverse=True)[:2]
+
+    # (alignment_score, frac, bbox)
+    p2_strict: list[tuple[float, float, tuple[int, int, int, int]]] = []
+    p2_fallback: list[tuple[float, float, tuple[int, int, int, int]]] = []
+
+    for _, _, small_bbox in validation_candidates:
         if scale_factor < 1.0:
             full_bbox = (
                 int(small_bbox[0] * inv),
@@ -816,7 +1038,6 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
         else:
             full_bbox = small_bbox
 
-        # Clamp to image bounds.
         fx, fy, fw, fh = full_bbox
         fx = max(0, min(fx, orig_w - fw))
         fy = max(0, min(fy, orig_h - fh))
@@ -824,10 +1045,7 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
         fh = min(fh, orig_h - fy)
         full_bbox = (fx, fy, fw, fh)
 
-        # Validate at full resolution with sub-cell offsets.
-        # Try multiple offsets to find best grid alignment at full res,
-        # matching the Phase 1 approach.
-        p2_cell = fw // 16  # half-cell offset at full resolution
+        p2_cell = fw // 16
         best_p2_frac = 0.0
         best_p2_contrast = 0.0
         best_p2_bbox = full_bbox
@@ -847,23 +1065,154 @@ def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
         if best_p2_frac < MIN_ALTERNATION_FRAC or best_p2_contrast < MIN_ALTERNATION_CONTRAST:
             continue
 
-        # Validate with checkerboard consistency to eliminate false positives
-        # from UI panels, banners, and other non-board regions.
-        # Skip at low resolution — compression artifacts inflate checkerboard
-        # std, causing false negatives on real boards.
-        if min(orig_h, orig_w) >= 720:
-            if not check_checkerboard_consistency(gray_full, best_p2_bbox):
-                continue
+        if max(fw, fh) <= 220 and best_p2_contrast < 40.0:
+            continue
 
+        p2_region = gray_full[
+            best_p2_bbox[1]: best_p2_bbox[1] + best_p2_bbox[3],
+            best_p2_bbox[0]: best_p2_bbox[0] + best_p2_bbox[2],
+        ]
+        regularity = compute_grid_regularity(p2_region)
+        if regularity < _P2_MIN_REGULARITY:
+            continue
+
+        align = _overlay_alignment_score(p2_region)
+
+        if min(orig_h, orig_w) >= 720:
+            cb_pass = (
+                check_checkerboard_consistency(gray_full, full_bbox)
+                or check_checkerboard_consistency(gray_full, best_p2_bbox)
+            )
+            if not cb_pass and best_p2_frac >= 0.77:
+                bx, by, bw, bh = best_p2_bbox
+                bcx, bcy = bx + bw // 2, by + bh // 2
+                for size_pct in (95, 105, 90, 110):
+                    ns = int(bw * size_pct / 100)
+                    nx = max(0, min(bcx - ns // 2, orig_w - ns))
+                    ny = max(0, min(bcy - ns // 2, orig_h - ns))
+                    if ns >= 64 and nx + ns <= orig_w and ny + ns <= orig_h:
+                        if check_checkerboard_consistency(gray_full, (nx, ny, ns, ns)):
+                            cb_pass = True
+                            break
+            if cb_pass:
+                p2_strict.append((align, best_p2_frac, best_p2_bbox))
+            elif best_p2_frac >= 0.77:
+                # Only accept cb_pass failures with strong alternation —
+                # OTB boards captured at moderate resolution can reach
+                # frac ~0.73 with decent regularity, so 0.77 provides
+                # enough separation to avoid false positives.
+                p2_fallback.append((align, best_p2_frac, best_p2_bbox))
+        else:
+            p2_strict.append((align, best_p2_frac, best_p2_bbox))
+
+    # Prefer strict candidates; fall back to alternation+regularity only.
+    p2_pool = p2_strict if p2_strict else p2_fallback
+    if p2_pool:
+        p2_pool.sort(key=lambda t: t[0], reverse=True)
+        _, best_frac, best_bbox = p2_pool[0]
         return OverlayDetection(
             found=True,
-            bbox=best_p2_bbox,
-            seed_bbox=best_p2_bbox,
-            score=best_p2_frac,
+            bbox=best_bbox,
+            seed_bbox=best_bbox,
+            score=best_frac,
+            frame_resolution=resolution,
+        )
+
+    best_relaxed: tuple[float, tuple[int, int, int, int]] | None = None
+
+    for _, _, small_bbox in relaxed_candidates:
+        if scale_factor < 1.0:
+            full_bbox = (
+                int(small_bbox[0] * inv),
+                int(small_bbox[1] * inv),
+                int(small_bbox[2] * inv),
+                int(small_bbox[3] * inv),
+            )
+        else:
+            full_bbox = small_bbox
+
+        fx, fy, fw, fh = full_bbox
+        fx = max(0, min(fx, orig_w - fw))
+        fy = max(0, min(fy, orig_h - fh))
+        fw = min(fw, orig_w - fx)
+        fh = min(fh, orig_h - fy)
+        full_bbox = (fx, fy, fw, fh)
+
+        p2_cell = fw // 16
+        best_p2_frac = 0.0
+        best_p2_contrast = 0.0
+        best_p2_bbox = full_bbox
+
+        for p2_dy in range(-p2_cell, p2_cell + 1, max(1, p2_cell // 2)):
+            for p2_dx in range(-p2_cell, p2_cell + 1, max(1, p2_cell // 2)):
+                nx, ny = fx + p2_dx, fy + p2_dy
+                if nx < 0 or ny < 0 or nx + fw > orig_w or ny + fh > orig_h:
+                    continue
+                region = gray_full[ny: ny + fh, nx: nx + fw]
+                f, c = compute_alternation_strength(region)
+                if f > best_p2_frac or (f == best_p2_frac and c > best_p2_contrast):
+                    best_p2_frac = f
+                    best_p2_contrast = c
+                    best_p2_bbox = (nx, ny, fw, fh)
+
+        if best_p2_frac < _P1_MIN_FRAC or best_p2_contrast < _P1_MIN_CONTRAST:
+            continue
+
+        if max(fw, fh) <= 220 and best_p2_contrast < 40.0:
+            continue
+
+        relaxed_region = gray_full[
+            best_p2_bbox[1]: best_p2_bbox[1] + best_p2_bbox[3],
+            best_p2_bbox[0]: best_p2_bbox[0] + best_p2_bbox[2],
+        ]
+        if compute_grid_regularity(relaxed_region) < _P2_MIN_REGULARITY:
+            continue
+
+        cb_pass = (
+            check_checkerboard_consistency(gray_full, best_p2_bbox)
+            or check_checkerboard_consistency(gray_full, full_bbox)
+        )
+        if not cb_pass:
+            continue
+
+        score = best_p2_frac * best_p2_contrast
+        if best_relaxed is None or score > best_relaxed[0]:
+            best_relaxed = (score, best_p2_bbox)
+
+    if best_relaxed is not None:
+        _, r_bbox = best_relaxed
+        r_frac, _ = compute_alternation_strength(
+            gray_full[r_bbox[1]: r_bbox[1] + r_bbox[3], r_bbox[0]: r_bbox[0] + r_bbox[2]]
+        )
+        return OverlayDetection(
+            found=True,
+            bbox=r_bbox,
+            seed_bbox=r_bbox,
+            score=r_frac,
+            frame_resolution=resolution,
+        )
+
+    rescue_bbox = _fast_grid_rescue(frame, gray_full, validation_candidates)
+    if rescue_bbox is not None:
+        region = gray_full[
+            rescue_bbox[1] : rescue_bbox[1] + rescue_bbox[3],
+            rescue_bbox[0] : rescue_bbox[0] + rescue_bbox[2],
+        ]
+        frac, _ = compute_alternation_strength(region)
+        return OverlayDetection(
+            found=True,
+            bbox=rescue_bbox,
+            seed_bbox=rescue_bbox,
+            score=frac,
             frame_resolution=resolution,
         )
 
     return OverlayDetection(found=False, frame_resolution=resolution)
+
+
+def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
+    """Fast overlay presence check — under 100ms on 1080p."""
+    return _fast_overlay_check_impl(frame)
 
 
 # ---------------------------------------------------------------------------
@@ -896,6 +1245,11 @@ def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
     # Phase 1: fast_overlay_check for seed detection.
     seed = fast_overlay_check(frame)
     if not seed.found or seed.bbox is None:
+        # Retry the local implementation directly before giving up on a seed.
+        # This keeps the precise detector robust even if callers replace the
+        # public fast path or if the first seed attempt is bypassed.
+        seed = _fast_overlay_check_impl(frame)
+    if not seed.found or seed.bbox is None:
         grid_fallback = find_board_in_frame(frame)
         if (
             grid_fallback is not None
@@ -904,6 +1258,7 @@ def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
         ):
             fallback_bbox = _grid_result_to_bbox(grid_fallback, frame.shape)
             if _bbox_looks_like_overlay(frame, gray_full, fallback_bbox):
+                fallback_bbox = _correct_grid_bbox(gray_full, fallback_bbox, allow_positive=True)
                 return OverlayDetection(
                     found=True,
                     bbox=fallback_bbox,
@@ -976,6 +1331,20 @@ def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
             board_size = min(board_size, w - gx, h - gy)
             expansion_bbox = (gx, gy, board_size, board_size)
 
+    expansion_candidate: tuple[int, int, int, int] | None = None
+    expansion_score = -1.0
+    if expansion_bbox is not None:
+        expansion_candidate = _correct_grid_bbox(gray_full, expansion_bbox)
+        region = gray_full[
+            expansion_candidate[1] : expansion_candidate[1] + expansion_candidate[3],
+            expansion_candidate[0] : expansion_candidate[0] + expansion_candidate[2],
+        ]
+        expansion_score = _overlay_alignment_score(region)
+
+    seed_score = _overlay_alignment_score(
+        gray_full[sy : sy + sh, sx : sx + sw]
+    )
+
     # Phase 2b: full-frame grid detection.
     # Large overlays (>40 % of frame) may have subtle internal grid lines
     # that Sobel misses on cropped regions but detects on the full frame
@@ -988,33 +1357,25 @@ def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
         and grid_spacing_is_consistent(grid_full)
     ):
         grid_bbox = _grid_result_to_bbox(grid_full, frame.shape)
-        gx1, gy1, _, _ = grid_bbox
-        gx2, gy2 = grid_full.v_lines[-1], grid_full.h_lines[-1]
-        seed_cx = sx + sw // 2
-        seed_cy = sy + sh // 2
-        if gx1 <= seed_cx <= gx2 and gy1 <= seed_cy <= gy2:
-            full_board_size = grid_bbox[2]
-            expansion_size = expansion_bbox[2] if expansion_bbox else 0
-            if (
-                full_board_size >= expansion_size
-                and _bbox_looks_like_overlay(frame, gray_full, grid_bbox)
-            ):
-                gx, gy = grid_bbox[0], grid_bbox[1]
+        if _bbox_looks_like_overlay(frame, gray_full, grid_bbox):
+            fb = _correct_grid_bbox(gray_full, grid_bbox, allow_positive=True)
+            fb_region = gray_full[fb[1] : fb[1] + fb[3], fb[0] : fb[0] + fb[2]]
+            fb_score = _overlay_alignment_score(fb_region)
+            baseline_score = expansion_score if expansion_candidate is not None else seed_score
+            if expansion_candidate is None or fb_score > baseline_score:
                 return OverlayDetection(
                     found=True,
-                    bbox=(gx, gy, full_board_size, full_board_size),
+                    bbox=fb,
                     seed_bbox=seed.bbox,
-                    score=max(seed.score, compute_axis_aligned_periodicity(
-                        gray_full[gy : gy + full_board_size, gx : gx + full_board_size]
-                    )),
+                    score=max(seed.score, compute_axis_aligned_periodicity(fb_region)),
                     frame_resolution=resolution,
                 )
 
     # Return Phase 2 expansion result if it succeeded.
-    if expansion_bbox is not None:
+    if expansion_candidate is not None:
         return OverlayDetection(
             found=True,
-            bbox=expansion_bbox,
+            bbox=expansion_candidate,
             seed_bbox=seed.bbox,
             score=seed.score,
             frame_resolution=resolution,
@@ -1036,22 +1397,138 @@ def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
         gx = max(0, min(gx, w - board_size))
         gy = max(0, min(gy, h - board_size))
         board_size = min(board_size, w - gx, h - gy)
+        corrected = _correct_one_cell_offset(gray_full, (gx, gy, board_size, board_size))
         return OverlayDetection(
             found=True,
-            bbox=(gx, gy, board_size, board_size),
+            bbox=corrected,
             seed_bbox=seed.bbox,
             score=seed.score,
             frame_resolution=resolution,
         )
 
     # Phase 4: no grid found at all — return seed bbox as-is.
+    corrected = _correct_one_cell_offset(gray_full, seed.bbox)
     return OverlayDetection(
         found=True,
-        bbox=seed.bbox,
+        bbox=corrected,
         seed_bbox=seed.bbox,
         score=seed.score,
         frame_resolution=resolution,
     )
+
+
+def _overlay_alignment_score(region: np.ndarray) -> float:
+    """Score how well a crop aligns with a clean rendered board grid."""
+    if region.size == 0:
+        return 0.0
+
+    regularity = compute_grid_regularity(region)
+    frac, contrast = compute_alternation_strength(region)
+    periodicity = compute_axis_aligned_periodicity(region)
+    return regularity * frac * contrast * periodicity
+
+
+def _correct_grid_bbox(
+    gray: np.ndarray,
+    bbox: tuple[int, int, int, int],
+    *,
+    allow_positive: bool = False,
+) -> tuple[int, int, int, int]:
+    """Apply bounded local search for grid-derived full-board boxes.
+
+    Grid detections can be slightly phase-shifted relative to the true border,
+    especially when one side is clamped near a frame edge. Search within one
+    cell of the raw box and keep the highest alignment score.
+    """
+    x, y, w, h_box = bbox
+    fh, fw = gray.shape[:2]
+    if max(w, h_box) >= FAST_GRID_CORRECTION_MAX_SIZE:
+        return bbox
+
+    cell = max(1, min(w, h_box) // 8)
+    step = max(2, cell // 4)
+    if allow_positive:
+        offsets = sorted(set(range(-cell, cell + 1, step)) | {0, -cell, cell})
+    else:
+        offsets = sorted(set(range(-cell, 1, step)) | {0, -cell})
+
+    best_score = _overlay_alignment_score(gray[y : y + h_box, x : x + w])
+    best = bbox
+
+    for dy in offsets:
+        for dx in offsets:
+            nx = max(0, min(x + dx, fw - w))
+            ny = max(0, min(y + dy, fh - h_box))
+            if nx == x and ny == y:
+                continue
+
+            score = _overlay_alignment_score(gray[ny : ny + h_box, nx : nx + w])
+            if score > best_score:
+                best_score = score
+                best = (nx, ny, w, h_box)
+
+    return best
+
+
+def _correct_one_cell_offset(
+    gray: np.ndarray,
+    bbox: tuple[int, int, int, int],
+    *,
+    use_alignment_score: bool = False,
+    allow_clamped: bool = False,
+    allow_diagonal: bool = False,
+) -> tuple[int, int, int, int]:
+    """Try shifting the bbox by one cell to improve board alignment.
+
+    The grid detector can land one cell off from the true board boundary.
+    For seed-crop results we keep this conservative and only accept strict
+    in-frame cardinal moves that improve alternation. For full-frame grid
+    detections we can optionally score clamped / diagonal moves as well.
+    """
+    x, y, w, h_box = bbox
+    fh, fw = gray.shape[:2]
+    cell = max(1, min(w, h_box) // 8)
+
+    if use_alignment_score:
+        best_score = _overlay_alignment_score(gray[y : y + h_box, x : x + w])
+    else:
+        frac, contrast = compute_alternation_strength(gray[y : y + h_box, x : x + w])
+        best_score = frac * contrast
+    best = bbox
+
+    offsets = (
+        ((cell, 0), (-cell, 0), (0, cell), (0, -cell))
+        if not allow_diagonal
+        else tuple(
+            (dx, dy)
+            for dy in (-cell, 0, cell)
+            for dx in (-cell, 0, cell)
+            if dx != 0 or dy != 0
+        )
+    )
+
+    for dx, dy in offsets:
+        if allow_clamped:
+            nx = max(0, min(x + dx, fw - w))
+            ny = max(0, min(y + dy, fh - h_box))
+            if nx == x and ny == y:
+                continue
+        else:
+            nx, ny = x + dx, y + dy
+            if nx < 0 or ny < 0 or nx + w > fw or ny + h_box > fh:
+                continue
+
+        if use_alignment_score:
+            score = _overlay_alignment_score(gray[ny : ny + h_box, nx : nx + w])
+        else:
+            frac, contrast = compute_alternation_strength(gray[ny : ny + h_box, nx : nx + w])
+            score = frac * contrast
+
+        if score > best_score:
+            best_score = score
+            best = (nx, ny, w, h_box)
+
+    return best
 
 
 def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:

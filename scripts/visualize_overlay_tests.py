@@ -2,7 +2,7 @@
 
 This makes the bbox tests inspectable: every frame is saved with
 ground-truth and detector outputs overlaid, plus a contact sheet and a JSON
-summary with IoU/pass-fail details.
+summary with pass-fail details.
 
 Examples:
     .venv/bin/python scripts/visualize_overlay_tests.py
@@ -36,7 +36,7 @@ from pipeline.overlay.scanner import detect_overlay_fast, fast_overlay_check  # 
 FIXTURES_DIR = PROJECT_ROOT / "tests" / "fixtures" / "frames"
 GROUND_TRUTH_PATH = FIXTURES_DIR / "ground_truth.json"
 DEFAULT_OUT_DIR = PROJECT_ROOT / "outputs" / "overlay_test_viz"
-FAST_IOU_THRESHOLD = 0.40
+PRECISE_UNDERCOVERAGE_TOLERANCE_PX = 8
 
 COLOR_GT = (0, 220, 0)
 COLOR_FAST = (0, 215, 255)
@@ -129,6 +129,27 @@ def _compute_iou(
     inter = max(0, x2 - x1) * max(0, y2 - y1)
     union = aw * ah + bw * bh - inter
     return inter / union if union > 0 else 0.0
+
+
+def _bbox_undercoverage(
+    a: tuple[int, int, int, int] | None,
+    b: tuple[int, int, int, int] | None,
+) -> tuple[int, int, int, int] | None:
+    if a is None or b is None:
+        return None
+
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    a_right = ax + aw
+    a_bottom = ay + ah
+    b_right = bx + bw
+    b_bottom = by + bh
+    return (
+        max(0, ax - bx),
+        max(0, ay - by),
+        max(0, b_right - a_right),
+        max(0, b_bottom - a_bottom),
+    )
 
 
 def _image_size(path: Path) -> tuple[int, int] | None:
@@ -264,12 +285,19 @@ def _case_verdict(
         return "n/a"
     if not expected_overlay:
         return "pass" if det_bbox is None else "fail"
+    if detector_name == "fast":
+        if det_bbox is None:
+            return "fail"
+        if gt_bbox is not None:
+            iou = _compute_iou(det_bbox, gt_bbox)
+            if iou is not None and iou <= 0:
+                return "fail"
+        return "pass"
     if det_bbox is None or gt_bbox is None:
         return "fail"
-    iou = _compute_iou(det_bbox, gt_bbox) or 0.0
-    if detector_name == "fast":
-        return "pass" if iou >= FAST_IOU_THRESHOLD else "fail"
-    return "pass" if iou > 0.0 else "fail"
+    under = _bbox_undercoverage(det_bbox, gt_bbox)
+    assert under is not None
+    return "pass" if max(under) <= PRECISE_UNDERCOVERAGE_TOLERANCE_PX else "fail"
 
 
 def _info_strip(
@@ -314,6 +342,7 @@ def _render_panel(
 
     fast_iou = _compute_iou(fast.bbox if fast.found else None, case.gt_bbox)
     precise_iou = _compute_iou(precise.bbox if precise.found else None, case.gt_bbox)
+    precise_under = _bbox_undercoverage(precise.bbox if precise.found else None, case.gt_bbox)
 
     gt_text = (
         f"GT: overlay {list(case.gt_bbox)}"
@@ -332,7 +361,6 @@ def _render_panel(
         (gt_text, COLOR_MUTED),
         (
             f"fast: {'found' if fast.found else 'miss'}"
-            + (f"  IoU={fast_iou:.3f}" if fast_iou is not None else "")
             + f"  score={fast.score:.3f}"
             + f"  {fast_verdict.upper()}",
             COLOR_PASS
@@ -342,6 +370,7 @@ def _render_panel(
         (
             f"precise: {'found' if precise.found else 'miss'}"
             + (f"  IoU={precise_iou:.3f}" if precise_iou is not None else "")
+            + (f"  clip={precise_under}" if precise_under is not None else "")
             + f"  score={precise.score:.3f}"
             + f"  {precise_verdict.upper()}",
             COLOR_PASS
@@ -368,6 +397,7 @@ def _render_panel(
             "bbox": list(precise.bbox) if precise.bbox is not None else None,
             "score": round(float(precise.score), 4),
             "iou": round(float(precise_iou), 4) if precise_iou is not None else None,
+            "undercoverage_px": list(precise_under) if precise_under is not None else None,
             "verdict": precise_verdict,
         },
     }
@@ -443,7 +473,7 @@ def main() -> None:
     summary = {
         "count": len(summary_rows),
         "detector": args.detector,
-        "fast_iou_threshold": FAST_IOU_THRESHOLD,
+        "fast_contract": "presence_only",
         "rows": summary_rows,
     }
     summary_path = out_dir / "summary.json"

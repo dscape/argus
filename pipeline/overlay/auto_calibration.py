@@ -13,7 +13,11 @@ import cv2
 import numpy as np
 
 from pipeline.overlay.calibration import BOARD_THEMES, hex_to_bgr
-from pipeline.overlay.scanner import OverlayDetection, detect_overlay_fast
+from pipeline.overlay.scanner import (
+    OverlayDetection,
+    detect_overlay_fast,
+    _overlay_alignment_score,
+)
 from pipeline.screen.frame_fetcher import fetch_youtube_frames
 
 logger = logging.getLogger(__name__)
@@ -656,19 +660,25 @@ def propose_calibration_for_clip(
     # Try detect_overlay_fast first (grid-line based, more precise).
     # Fall back to detect_overlay_in_frame (multi-scale scan) if the
     # fast method finds nothing on any frame.
+    #
+    # Score by overlay alignment (regularity × alternation × periodicity)
+    # rather than bbox area.  Max-area selection is fooled by oversized
+    # bboxes that extend past the actual board edge — they are a few
+    # pixels larger but score worse on grid alignment.
     best_detection = None
     best_frame = None
+    best_score = -1.0
 
     for frame, label in frames:
         detection = detect_overlay_fast(frame)
-        if detection.found:
-            bbox_area = detection.bbox[2] * detection.bbox[3] if detection.bbox else 0
-            best_area = (
-                best_detection.bbox[2] * best_detection.bbox[3]
-                if best_detection and best_detection.bbox
-                else 0
-            )
-            if bbox_area > best_area:
+        if detection.found and detection.bbox is not None:
+            x, y, w, h = detection.bbox
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray, (3, 3), 0)
+            region = gray[y : y + h, x : x + w]
+            score = _overlay_alignment_score(region) if region.size > 0 else 0.0
+            if score > best_score:
+                best_score = score
                 best_detection = detection
                 best_frame = frame
 
