@@ -32,6 +32,7 @@ coverage.xml
 
 # Training outputs
 outputs/
+output/
 checkpoints/
 wandb/
 runs/

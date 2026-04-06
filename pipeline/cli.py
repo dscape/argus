@@ -713,6 +713,36 @@ def cmd_fetch_frames(args):
     print(f"\nDone: {total_frames} frames from {len(videos)} videos")
 
 
+def cmd_mlx_analyze(args):
+    """Analyze a chess video using MLX models on Apple Silicon."""
+    from pathlib import Path
+
+    from pipeline.mlx.config import MLXPipelineConfig
+    from pipeline.mlx.pipeline import MLXChessPipeline
+
+    config = MLXPipelineConfig(
+        vlm_model=args.vlm_model,
+        fps=args.fps,
+        annotate=not args.no_annotate,
+        tts=args.tts,
+        output_dir=Path(args.output),
+        initial_fen=args.fen,
+    )
+
+    pipeline = MLXChessPipeline(config)
+    result = pipeline.run(
+        video_path=args.video,
+        vlm_only=args.vlm_only,
+        skip_vlm=args.skip_vlm,
+    )
+
+    print(f"\nDone: {result.total_moves} moves detected in {len(result.segments)} game(s)")
+    for pgn_path in result.pgn_files:
+        print(f"  PGN: {pgn_path}")
+    if result.annotated_video:
+        print(f"  Video: {result.annotated_video}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="pipeline",
@@ -934,6 +964,37 @@ def main():
     p.add_argument("--random", action="store_true",
                    help="Randomize video selection (avoids sampling bias)")
 
+    # mlx-analyze
+    p = subparsers.add_parser(
+        "mlx-analyze",
+        help="Analyze chess video with MLX models (Apple Silicon)",
+    )
+    p.add_argument("video", type=str, help="Path to the video file")
+    p.add_argument(
+        "--vlm-model", type=str,
+        default="mlx-community/gemma-4-26b-a4b-it-4bit",
+        help="VLM model ID (default: Gemma 4 26B-A4B-IT 4bit)",
+    )
+    p.add_argument("--fps", type=float, default=1.0, help="Target FPS for frame extraction")
+    p.add_argument(
+        "--output", type=str, default="output/mlx",
+        help="Output directory (default: output/mlx)",
+    )
+    p.add_argument("--fen", type=str, default=None, help="Starting FEN position")
+    p.add_argument("--tts", action="store_true", help="Announce moves via macOS TTS")
+    p.add_argument(
+        "--no-annotate", action="store_true",
+        help="Skip video annotation (just produce PGN)",
+    )
+    p.add_argument(
+        "--vlm-only", action="store_true",
+        help="Only run VLM scene description, skip detection",
+    )
+    p.add_argument(
+        "--skip-vlm", action="store_true",
+        help="Skip VLM analysis, go straight to board detection",
+    )
+
     # stats
     subparsers.add_parser("stats", help="Print pipeline statistics")
 
@@ -972,6 +1033,7 @@ def main():
         "inspect-calibration": cmd_inspect_calibration,
         "ai-extract-status": cmd_ai_extract_status,
         "fetch-frames": cmd_fetch_frames,
+        "mlx-analyze": cmd_mlx_analyze,
         "stats": cmd_stats,
     }
 
