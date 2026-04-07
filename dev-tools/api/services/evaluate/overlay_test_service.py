@@ -45,6 +45,10 @@ _KNOWN_FRAME_NAMES = ("thumb_hires", "thumb_sd", "thumb", "25pct", "50pct", "75p
 # Custom thumbnails (thumb_hires, thumb_sd, thumb) are often promotional/title images
 # that trigger false positives in the grid-regularity detector.
 _EXTRACTION_FRAME_NAMES = ("25pct", "50pct", "75pct")
+_APPROVED_OVERLAY_WHERE = """
+    screening_status = 'approved'
+    AND (layout_type = 'overlay' OR layout_type IS NULL)
+"""
 
 # Uniform grid for 400×400 chess-positions boards (50px squares)
 _GRID = GridResult(
@@ -70,6 +74,16 @@ def _video_has_frames(video_id: str) -> bool:
     """Check if a video has any extraction frames available."""
     for name in _EXTRACTION_FRAME_NAMES:
         if _resolve_frame_path(video_id, name) is not None:
+            return True
+    return False
+
+
+def _video_has_unsaved_frames(video_id: str, saved_keys: set[str]) -> bool:
+    """Return True when at least one extraction frame exists and is not saved."""
+    for frame_name in _EXTRACTION_FRAME_NAMES:
+        if f"{video_id}:{frame_name}" in saved_keys:
+            continue
+        if _resolve_frame_path(video_id, frame_name) is not None:
             return True
     return False
 
@@ -384,14 +398,12 @@ def get_extraction_candidates(
     limit: int = 200,
     video_ids: list[str] | None = None,
 ) -> list[str]:
-    """Return video IDs that have screening frames on disk and aren't fully saved.
+    """Return video IDs that have extraction frames on disk and unsaved samples.
 
-    Fast operation — DB query + ``is_dir()`` checks, no image processing.
+    Approved videos without an explicit ``layout_type`` are treated as overlay,
+    matching the rest of the screening pipeline.
     """
     saved_keys = _get_saved_frame_keys()
-    saved_vids: set[str] = set()
-    for key in saved_keys:
-        saved_vids.add(key.split(":")[0])
 
     if video_ids:
         raw = video_ids
@@ -399,8 +411,8 @@ def get_extraction_candidates(
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT video_id FROM youtube_videos
-                       WHERE layout_type = 'overlay'
+                    f"""SELECT video_id FROM youtube_videos
+                       WHERE {_APPROVED_OVERLAY_WHERE}
                        ORDER BY random()
                        LIMIT %s""",
                     (limit * 3,),
@@ -411,9 +423,7 @@ def get_extraction_candidates(
     for vid in raw:
         if len(result) >= limit:
             break
-        if vid in saved_vids:
-            continue
-        if _video_has_frames(vid):
+        if _video_has_unsaved_frames(vid, saved_keys):
             result.append(vid)
     return result
 
@@ -688,10 +698,10 @@ def validate_overlay_detection(limit: int = 100) -> dict:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT video_id, channel_handle
                 FROM youtube_videos
-                WHERE layout_type = 'overlay'
+                WHERE {_APPROVED_OVERLAY_WHERE}
                   AND channel_handle IS NOT NULL
                 ORDER BY random()
                 """
