@@ -9,8 +9,6 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
-from argus.chess.move_vocabulary import VOCAB_SIZE
-
 logger = logging.getLogger(__name__)
 
 

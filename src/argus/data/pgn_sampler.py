@@ -9,7 +9,9 @@ import chess
 import chess.pgn
 
 
-def sample_random_game(min_moves: int = 10, max_moves: int = 80, seed: int | None = None) -> list[str]:
+def sample_random_game(
+    min_moves: int = 10, max_moves: int = 80, seed: int | None = None
+) -> list[str]:
     rng = random.Random(seed)
     board = chess.Board()
     moves: list[str] = []
@@ -24,7 +26,9 @@ def sample_random_game(min_moves: int = 10, max_moves: int = 80, seed: int | Non
     return moves
 
 
-def load_pgn_games(pgn_path: str | Path, max_games: int = 1000, min_elo: int = 0, min_moves: int = 10) -> list[list[str]]:
+def load_pgn_games(
+    pgn_path: str | Path, max_games: int = 1000, min_elo: int = 0, min_moves: int = 10
+) -> list[list[str]]:
     games: list[list[str]] = []
     path = Path(pgn_path)
     if not path.exists():
@@ -54,8 +58,12 @@ def load_pgn_games(pgn_path: str | Path, max_games: int = 1000, min_elo: int = 0
 
 
 def generate_game_dataset(
-    num_games: int = 1000, pgn_path: str | Path | None = None,
-    min_moves: int = 10, max_moves: int = 80, min_elo: int = 1500, seed: int = 42,
+    num_games: int = 1000,
+    pgn_path: str | Path | None = None,
+    min_moves: int = 10,
+    max_moves: int = 80,
+    min_elo: int = 1500,
+    seed: int = 42,
 ) -> list[list[str]]:
     games: list[list[str]] = []
     if pgn_path is not None:
