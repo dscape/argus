@@ -18,6 +18,7 @@ import re
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 
 import cv2
 import numpy as np
@@ -41,6 +42,47 @@ _LABEL_DISPLAY = {
 }
 
 _MIN_FRAME_WIDTH = 100
+
+_UPCOMING_LIVE_MARKERS = (
+    "live event will begin",
+    "premieres in",
+    "premiere will begin",
+)
+
+
+@lru_cache(maxsize=512)
+def is_upcoming_live_event(video_id: str) -> bool:
+    """Return True when the video is an upcoming live event/premiere."""
+    if not _VIDEO_ID_RE.match(video_id):
+        return False
+
+    try:
+        import yt_dlp
+    except ImportError:
+        return False
+
+    try:
+        ydl = yt_dlp.YoutubeDL(
+            {
+                "quiet": True,
+                "no_warnings": True,
+                "socket_timeout": 5,
+                "retries": 0,
+                "extractor_retries": 0,
+            }
+        )
+        info = ydl.extract_info(
+            f"https://www.youtube.com/watch?v={video_id}",
+            download=False,
+        )
+    except Exception as exc:
+        message = str(exc).lower()
+        return any(marker in message for marker in _UPCOMING_LIVE_MARKERS)
+
+    if not isinstance(info, dict):
+        return False
+
+    return str(info.get("live_status") or "").lower() == "is_upcoming"
 
 
 def _load_cached_frame(video_id: str, label: str) -> np.ndarray | None:

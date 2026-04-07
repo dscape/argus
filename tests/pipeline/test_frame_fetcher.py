@@ -1,7 +1,14 @@
 """Tests for frame_fetcher video_id validation and vertical video detection."""
 
+import sys
+import types
+
 import numpy as np
-from pipeline.screen.frame_fetcher import fetch_youtube_frames, is_vertical_video
+from pipeline.screen.frame_fetcher import (
+    fetch_youtube_frames,
+    is_upcoming_live_event,
+    is_vertical_video,
+)
 
 
 class TestVideoIdValidation:
@@ -34,6 +41,49 @@ class TestVideoIdValidation:
         """URL-like video IDs should be rejected."""
         result = fetch_youtube_frames("http://evil.com/payload")
         assert result == []
+
+
+class TestUpcomingLiveDetection:
+    def teardown_method(self):
+        is_upcoming_live_event.cache_clear()
+
+    def test_upcoming_live_detected_from_error_message(self):
+        class FakeYDL:
+            def __init__(self, opts):
+                self.opts = opts
+
+            def extract_info(self, url, download=False):
+                raise RuntimeError("This live event will begin in 2 hours.")
+
+        fake_module = types.SimpleNamespace(YoutubeDL=FakeYDL)
+        original = sys.modules.get("yt_dlp")
+        sys.modules["yt_dlp"] = fake_module
+        try:
+            assert is_upcoming_live_event("dQw4w9WgXcQ") is True
+        finally:
+            if original is None:
+                sys.modules.pop("yt_dlp", None)
+            else:
+                sys.modules["yt_dlp"] = original
+
+    def test_non_live_errors_not_misclassified(self):
+        class FakeYDL:
+            def __init__(self, opts):
+                self.opts = opts
+
+            def extract_info(self, url, download=False):
+                raise RuntimeError("Video unavailable")
+
+        fake_module = types.SimpleNamespace(YoutubeDL=FakeYDL)
+        original = sys.modules.get("yt_dlp")
+        sys.modules["yt_dlp"] = fake_module
+        try:
+            assert is_upcoming_live_event("dQw4w9WgXcQ") is False
+        finally:
+            if original is None:
+                sys.modules.pop("yt_dlp", None)
+            else:
+                sys.modules["yt_dlp"] = original
 
 
 class TestVerticalVideoDetection:
