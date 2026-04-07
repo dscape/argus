@@ -108,7 +108,7 @@ async def crawl_channel(channel_id: str):
 
 @router.post("/channels/{channel_id}/fetch-frames")
 async def fetch_frames(channel_id: str, hires: bool = Query(True)):
-    """Fetch overlay frames for all overlay-tagged videos in a channel."""
+    """Fetch frames for approved overlay videos in a channel."""
     try:
         return await run_in_threadpool(
             crawl_service.fetch_frames_for_channel, channel_id, hires
