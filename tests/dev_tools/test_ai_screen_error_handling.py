@@ -42,8 +42,8 @@ class TestAiScreenBatchErrorHandling:
 
     @patch("api.services.evaluate.models_service.get_conn")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")
-    def test_fetch_returns_none_gives_thumbnail_error(self, mock_frames, mock_conn):
-        """If fetch_youtube_frames returns empty, should get a descriptive error."""
+    def test_fetch_returns_none_auto_rejects(self, mock_frames, mock_conn):
+        """If fetch_youtube_frames returns empty, the video is auto-rejected."""
         from api.services.evaluate.models_service import ai_screen_batch
 
         mock_cursor = MagicMock()
@@ -64,4 +64,7 @@ class TestAiScreenBatchErrorHandling:
 
         assert len(results) == 1
         assert results[0]["video_id"] == "vid2"
-        assert "Could not fetch thumbnails" in results[0]["error"]
+        assert results[0]["predicted_class"] == "reject"
+        assert results[0]["confidence"] == 1.0
+        assert results[0]["auto_decided"] is True
+        assert results[0]["error"] is None

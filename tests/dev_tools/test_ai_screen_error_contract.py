@@ -48,8 +48,9 @@ class TestErrorContractConsistency:
         results = ai_screen_batch(["vid1"], threshold=0.90)
         assert len(results) == 1
         assert set(results[0].keys()) >= REQUIRED_KEYS
-        assert results[0]["error"] is not None
-        assert results[0]["predicted_class"] is None
+        assert results[0]["error"] is None
+        assert results[0]["predicted_class"] == "reject"
+        assert results[0]["auto_decided"] is True
 
     @patch("api.services.evaluate.models_service.get_conn")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")

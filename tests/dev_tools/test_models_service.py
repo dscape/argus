@@ -88,6 +88,30 @@ class TestVerticalVideoHandling:
         assert results[0]["vertical"] is True
 
 
+class TestMissingThumbnailHandling:
+    """Verify missing thumbnails are treated as deterministic rejects."""
+
+    @patch("api.services.evaluate.models_service.get_conn")
+    @patch("api.services.evaluate.models_service.fetch_youtube_frames")
+    def test_missing_thumbnails_auto_rejected(self, mock_frames, mock_conn):
+        from api.services.evaluate.models_service import ai_screen_batch
+
+        mock_conn.return_value = _mock_db_conn(
+            [
+                ("vid1", "Chess game", None, None, None),
+            ]
+        )
+        mock_frames.return_value = []
+
+        results = ai_screen_batch(["vid1"], threshold=0.90)
+
+        assert len(results) == 1
+        assert results[0]["predicted_class"] == "reject"
+        assert results[0]["confidence"] == 1.0
+        assert results[0]["auto_decided"] is True
+        assert results[0]["error"] is None
+
+
 class TestThresholdBehavior:
     """Verify threshold affects auto_decided flag correctly."""
 

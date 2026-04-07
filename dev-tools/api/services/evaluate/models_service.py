@@ -464,7 +464,17 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
             # Always check vertical (only needs opencv/numpy)
             frames = fetch_youtube_frames(video_id)
             if not frames:
-                results.append({**base, "error": "Could not fetch thumbnails"})
+                results.append({**base,
+                    "predicted_class": "reject",
+                    "confidence": 1.0,
+                    "auto_decided": True,
+                })
+                db_updates.append({
+                    "video_id": video_id,
+                    "predicted_class": "reject",
+                    "confidence": 1.0,
+                    "auto_decided": True,
+                })
                 continue
 
             vertical = is_vertical_video(frames)

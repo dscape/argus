@@ -246,14 +246,19 @@ def crawl_all_channels() -> dict:
 
 
 def fetch_frames_for_channel(channel_id: str, hires: bool = True) -> dict:
-    """Fetch overlay frames for all overlay-tagged videos in a channel."""
+    """Fetch frames for approved overlay videos in a channel.
+
+    Approved videos with ``layout_type IS NULL`` are treated as overlay.
+    """
     from pipeline.screen.frame_fetcher import fetch_overlay_frames
 
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT video_id FROM youtube_videos
-                   WHERE channel_id = %s AND layout_type = 'overlay'
+                   WHERE channel_id = %s
+                     AND screening_status = 'approved'
+                     AND (layout_type = 'overlay' OR layout_type IS NULL)
                    ORDER BY video_id""",
                 (channel_id,),
             )
