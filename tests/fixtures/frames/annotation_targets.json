@@ -1,62 +1,38 @@
 [
   {
-    "key": "J-E_pxyfB-o/25pct",
-    "issue": "bbox slightly off"
+    "key": "WPBivTDae7I/25pct",
+    "issue": "shows Kasparov's head to the left of the overlay; only 6 columns visible"
   },
   {
-    "key": "HVdmqdJhdTs/25pct",
-    "issue": "bbox slightly off"
+    "key": "AdlCle5av0Y/25pct",
+    "issue": "shows a lady, not an overlay"
   },
   {
-    "key": "8GrcSZ6MlgI/25pct",
-    "issue": "bbox slightly off"
+    "key": "a-TXn07I3sw/25pct",
+    "issue": "shows only part of the board"
   },
   {
-    "key": "uR2l9SNF1FU/50pct",
-    "issue": "bbox slightly off"
+    "key": "hryRA0-fqm0/50pct",
+    "issue": "shows only part of the board"
   },
   {
-    "key": "QZyUUktKCC0/25pct",
-    "issue": "bbox slightly off"
+    "key": "tWpz6YUl2FA/50pct",
+    "issue": "shows a clock beneath the board; only 7 rows visible"
   },
   {
-    "key": "1l8OXSymDRk/25pct",
-    "issue": "bbox slightly off"
+    "key": "p2zvIFN8CUI/50pct",
+    "issue": "shows part of a head and background, no overlay"
   },
   {
-    "key": "kG_kYHX4QWU/25pct",
-    "issue": "bbox slightly off"
+    "key": "hJtpiLkFwXE/25pct",
+    "issue": "shows a real board and hand, not an overlay"
   },
   {
-    "key": "XUHPzeJW5f0/25pct",
-    "issue": "bbox slightly off"
+    "key": "EZdVJ2g-tFo/25pct",
+    "issue": "shows 6 rows and a clock beneath the board"
   },
   {
-    "key": "Ez4friJ-mjo/25pct",
-    "issue": "bbox slightly off"
-  },
-  {
-    "key": "vqddOTcW7WU/25pct",
-    "issue": "bbox slightly off"
-  },
-  {
-    "key": "miXdlOp2aQo/25pct",
-    "issue": "bbox slightly off"
-  },
-  {
-    "key": "OLTxPavNAAQ/25pct",
-    "issue": "bbox slightly off"
-  },
-  {
-    "key": "TBdlVu0Fnso/25pct",
-    "issue": "bbox slightly off"
-  },
-  {
-    "key": "EGAugf-WjP8/25pct",
-    "issue": "bbox slightly off"
-  },
-  {
-    "key": "4hLL0Gg0OPo/50pct",
-    "issue": "false negative"
+    "key": "eS2VM_kw5g8/25pct",
+    "issue": "shows only part of the board"
   }
 ]

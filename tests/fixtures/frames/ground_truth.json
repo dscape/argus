@@ -111,6 +111,14 @@
     "frame_height": 720,
     "annotated_at": "2026-04-05T22:56:06.141641+00:00"
   },
+  "AdlCle5av0Y/25pct": {
+    "image": "AdlCle5av0Y/25pct.jpg",
+    "has_overlay": false,
+    "bbox": null,
+    "frame_width": 1280,
+    "frame_height": 720,
+    "annotated_at": "2026-04-07T22:24:24.590864+00:00"
+  },
   "D6yhg6S6EkQ/50pct": {
     "image": "D6yhg6S6EkQ/50pct.jpg",
     "has_overlay": true,
@@ -149,6 +157,19 @@
     "frame_width": 1920,
     "frame_height": 1080,
     "annotated_at": "2026-04-07T19:04:26.913289+00:00"
+  },
+  "EZdVJ2g-tFo/25pct": {
+    "image": "EZdVJ2g-tFo/25pct.jpg",
+    "has_overlay": true,
+    "bbox": [
+      482,
+      33,
+      313,
+      313
+    ],
+    "frame_width": 1280,
+    "frame_height": 720,
+    "annotated_at": "2026-04-07T22:25:00.245489+00:00"
   },
   "Ez4friJ-mjo/25pct": {
     "image": "Ez4friJ-mjo/25pct.jpg",
@@ -275,6 +296,19 @@
     "frame_height": 720,
     "annotated_at": "2026-04-05T22:56:28.191561+00:00"
   },
+  "WPBivTDae7I/25pct": {
+    "image": "WPBivTDae7I/25pct.jpg",
+    "has_overlay": true,
+    "bbox": [
+      501,
+      2,
+      362,
+      362
+    ],
+    "frame_width": 1280,
+    "frame_height": 720,
+    "annotated_at": "2026-04-07T22:24:19.715177+00:00"
+  },
   "XUHPzeJW5f0/25pct": {
     "image": "XUHPzeJW5f0/25pct.jpg",
     "has_overlay": true,
@@ -295,6 +329,58 @@
     "frame_width": 1920,
     "frame_height": 1080,
     "annotated_at": "2026-04-02T22:17:12.491348+00:00"
+  },
+  "a-TXn07I3sw/25pct": {
+    "image": "a-TXn07I3sw/25pct.jpg",
+    "has_overlay": true,
+    "bbox": [
+      831,
+      136,
+      446,
+      446
+    ],
+    "frame_width": 1280,
+    "frame_height": 720,
+    "annotated_at": "2026-04-07T22:24:39.845539+00:00"
+  },
+  "eS2VM_kw5g8/25pct": {
+    "image": "eS2VM_kw5g8/25pct.jpg",
+    "has_overlay": true,
+    "bbox": [
+      711,
+      18,
+      468,
+      468
+    ],
+    "frame_width": 1920,
+    "frame_height": 1080,
+    "annotated_at": "2026-04-07T22:24:49.491777+00:00"
+  },
+  "hJtpiLkFwXE/25pct": {
+    "image": "hJtpiLkFwXE/25pct.jpg",
+    "has_overlay": true,
+    "bbox": [
+      478,
+      19,
+      323,
+      323
+    ],
+    "frame_width": 1280,
+    "frame_height": 720,
+    "annotated_at": "2026-04-07T22:25:09.425099+00:00"
+  },
+  "hryRA0-fqm0/50pct": {
+    "image": "hryRA0-fqm0/50pct.jpg",
+    "has_overlay": true,
+    "bbox": [
+      39,
+      7,
+      702,
+      702
+    ],
+    "frame_width": 1280,
+    "frame_height": 720,
+    "annotated_at": "2026-04-05T21:15:33.800400+00:00"
   },
   "ji-ZR2Nr5gI/50pct": {
     "image": "ji-ZR2Nr5gI/50pct.jpg",
@@ -368,6 +454,27 @@
     "frame_width": 1280,
     "frame_height": 720,
     "annotated_at": "2026-04-05T22:57:23.882999+00:00"
+  },
+  "p2zvIFN8CUI/50pct": {
+    "image": "p2zvIFN8CUI/50pct.jpg",
+    "has_overlay": false,
+    "bbox": null,
+    "frame_width": 1280,
+    "frame_height": 720,
+    "annotated_at": "2026-04-07T22:25:12.820480+00:00"
+  },
+  "tWpz6YUl2FA/50pct": {
+    "image": "tWpz6YUl2FA/50pct.jpg",
+    "has_overlay": true,
+    "bbox": [
+      482,
+      32,
+      313,
+      313
+    ],
+    "frame_width": 1280,
+    "frame_height": 720,
+    "annotated_at": "2026-04-07T22:25:23.637182+00:00"
   },
   "tuTPEk57u2A/75pct": {
     "image": "tuTPEk57u2A/75pct.jpg",
