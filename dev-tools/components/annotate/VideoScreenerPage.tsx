@@ -22,7 +22,6 @@ import {
   scoreColor,
   youtubeThumb,
   cardTintClass,
-  computePageSize,
   useToasts,
   ToastContainer,
   UnscreenedActions,
@@ -35,22 +34,60 @@ interface VideoScreenerPageProps {
 }
 
 export default function VideoScreenerPage({ channels, initialVideoIds }: VideoScreenerPageProps) {
-  const initialVideoIdsRef = useRef(initialVideoIds);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const footerRef = useRef<HTMLDivElement | null>(null);
+  const requestedVideoIdsRef = useRef(
+    initialVideoIds && initialVideoIds.length > 0 ? initialVideoIds.slice(0, 9) : null
+  );
+  const lastLoadedPageSizeRef = useRef<number | null>(null);
   const [videos, setVideos] = useState<VideoWithReason[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [pageSize, setPageSize] = useState(() => computePageSize());
+  const [pageSize, setPageSize] = useState(6);
+  const [pageSizeReady, setPageSizeReady] = useState(false);
+  const [availableHeight, setAvailableHeight] = useState<number | null>(null);
   const [autoRunning, setAutoRunning] = useState(false);
   const [aiScreenDone, setAiScreenDone] = useState(false);
   const [correctionStats, setCorrectionStats] = useState<CorrectionStats | null>(null);
   const { toasts, addToast, removeToast } = useToasts();
 
-  // Recompute page size on resize
+  // Recompute page size from the space actually visible above the fold.
   useEffect(() => {
-    const onResize = () => setPageSize(computePageSize());
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    const measure = () => {
+      const container = containerRef.current;
+      if (!container) return;
+
+      const cols = window.innerWidth >= 1280 ? 3 : 2;
+      const gridGap = 8;
+      const toolbarHeight = toolbarRef.current?.getBoundingClientRect().height ?? 0;
+      const footerHeight = footerRef.current?.getBoundingClientRect().height ?? 0;
+      const topOffset = container.getBoundingClientRect().top;
+      const nextAvailableHeight = Math.max(
+        320,
+        Math.floor(window.innerHeight - topOffset - footerHeight)
+      );
+      const gridHeight = Math.max(120, nextAvailableHeight - toolbarHeight - gridGap);
+      const cardWidth = (container.clientWidth - gridGap * (cols - 1)) / cols;
+      const thumbHeight = (((cardWidth - 2) / 3) * 9) / 16;
+      const cardHeight = 58 + thumbHeight;
+      const rows = Math.max(
+        1,
+        Math.floor((gridHeight + gridGap) / (cardHeight + gridGap))
+      );
+
+      setAvailableHeight(nextAvailableHeight);
+      setPageSize(Math.min(9, rows * cols));
+      setPageSizeReady(true);
+    };
+
+    const frame = window.requestAnimationFrame(measure);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", measure);
+    };
   }, []);
 
   // Ref to track whether AI screening should run after load
@@ -167,26 +204,27 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
   const loadVideos = useCallback(async () => {
     setLoading(true);
     try {
-      const ids = initialVideoIdsRef.current;
-      initialVideoIdsRef.current = undefined;
+      const requestedIds = requestedVideoIdsRef.current?.slice(0, pageSize);
 
-      const data = ids
-        ? await listCrawlVideos({ video_ids: ids })
+      const data = requestedIds
+        ? await listCrawlVideos({ video_ids: requestedIds })
         : await listCrawlVideos({ status: "unscreened", limit: pageSize, offset: 0 });
 
       setVideos(data.videos);
       setTotal(data.total);
       setSelected(new Set());
 
-      // Update URL with loaded video IDs
-      const loadedIds = data.videos.map((v: CrawlVideo) => v.video_id);
-      const url = new URL(window.location.href);
-      if (loadedIds.length > 0) {
-        url.searchParams.set("videos", loadedIds.join(","));
-      } else {
-        url.searchParams.delete("videos");
+      // Update URL only for the default queue, not explicit ?videos=... links.
+      if (!requestedVideoIdsRef.current) {
+        const loadedIds = data.videos.map((v: CrawlVideo) => v.video_id);
+        const url = new URL(window.location.href);
+        if (loadedIds.length > 0) {
+          url.searchParams.set("videos", loadedIds.join(","));
+        } else {
+          url.searchParams.delete("videos");
+        }
+        window.history.replaceState({}, "", url.toString());
       }
-      window.history.replaceState({}, "", url.toString());
 
       if (data.videos.some((v: CrawlVideo) => v.screening_status === null)) {
         shouldAutoScreenRef.current = true;
@@ -215,9 +253,14 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
   }, [loading, videos, runAiScreen]);
 
   useEffect(() => {
-    loadVideos();
     loadCorrectionStats();
-  }, [loadVideos, loadCorrectionStats]);
+  }, [loadCorrectionStats]);
+
+  useEffect(() => {
+    if (!pageSizeReady || lastLoadedPageSizeRef.current === pageSize) return;
+    lastLoadedPageSizeRef.current = pageSize;
+    loadVideos();
+  }, [pageSizeReady, pageSize, loadVideos]);
 
   const updateVideoInPlace = useCallback(
     (videoId: string, newStatus: string | null, layoutType?: string | null, inspectReason?: string) => {
@@ -433,7 +476,11 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
   }, [sortedVideos, allScreened, loading, videos, loadVideos, handleRejectAction, handleStatusChange]);
 
   return (
-    <div className="relative h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
+    <div
+      ref={containerRef}
+      className="relative flex min-h-0 flex-col overflow-hidden"
+      style={availableHeight ? { height: `${availableHeight}px` } : undefined}
+    >
       {/* Pulse animation for commit button */}
       <style>{`
         @keyframes commit-pulse {
@@ -448,7 +495,10 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
       <ToastContainer toasts={toasts} removeToast={removeToast} />
 
       {/* Sticky Toolbar */}
-      <div className="flex-shrink-0 z-40 bg-background/95 backdrop-blur pb-1 pt-1 mb-1">
+      <div
+        ref={toolbarRef}
+        className="flex-shrink-0 z-40 bg-background/95 backdrop-blur pb-1 pt-1 mb-1"
+      >
         <div className="flex items-center gap-1 rounded-2xl border bg-muted/30 p-1.5">
           {/* Showing X of N */}
           <span className="text-xs text-muted-foreground px-2 tabular-nums">
@@ -606,7 +656,10 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
       )}
 
       {/* Keyboard shortcuts bar */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <div
+        ref={footerRef}
+        className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80"
+      >
         <div className="flex items-center justify-center gap-4 px-4 py-1.5 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <kbd className="flex-shrink-0 w-4 h-4 rounded text-[10px] font-mono font-bold flex items-center justify-center bg-muted text-muted-foreground border">1</kbd>
