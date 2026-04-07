@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://argus:argus_dev@localhost:5432/argus"
+    "DATABASE_URL", "postgresql://argus:argus_dev@localhost:5433/argus"
 )
 
 

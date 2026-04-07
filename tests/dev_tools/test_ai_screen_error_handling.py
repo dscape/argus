@@ -12,13 +12,10 @@ class TestAiScreenBatchErrorHandling:
 
     @patch("api.services.evaluate.models_service.get_conn")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")
-    @patch("api.services.evaluate.models_service.score_title")
-    def test_single_video_failure_returns_error_entry(self, mock_score, mock_frames, mock_conn):
+    def test_single_video_failure_returns_error_entry(self, mock_frames, mock_conn):
         """If fetch_youtube_frames raises for one video, the batch should
         return an error entry for that video, not raise an exception."""
         from api.services.evaluate.models_service import ai_screen_batch
-
-        mock_score.return_value = (False, 0.3)
 
         # DB returns metadata for our test video
         mock_cursor = MagicMock()
@@ -45,12 +42,9 @@ class TestAiScreenBatchErrorHandling:
 
     @patch("api.services.evaluate.models_service.get_conn")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")
-    @patch("api.services.evaluate.models_service.score_title")
-    def test_fetch_returns_none_gives_thumbnail_error(self, mock_score, mock_frames, mock_conn):
-        """If fetch_youtube_frames returns empty, should get a descriptive error."""
+    def test_fetch_returns_none_auto_rejects(self, mock_frames, mock_conn):
+        """If fetch_youtube_frames returns empty, the video is auto-rejected."""
         from api.services.evaluate.models_service import ai_screen_batch
-
-        mock_score.return_value = (False, 0.3)
 
         mock_cursor = MagicMock()
         mock_cursor.fetchall.return_value = [
@@ -70,4 +64,7 @@ class TestAiScreenBatchErrorHandling:
 
         assert len(results) == 1
         assert results[0]["video_id"] == "vid2"
-        assert "Could not fetch thumbnails" in results[0]["error"]
+        assert results[0]["predicted_class"] == "reject"
+        assert results[0]["confidence"] == 1.0
+        assert results[0]["auto_decided"] is True
+        assert results[0]["error"] is None

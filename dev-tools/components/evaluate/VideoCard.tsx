@@ -20,7 +20,6 @@ export interface Prediction {
 export interface InspectResult {
   video_id: string;
   title: string;
-  title_score?: number | null;
   vertical?: boolean;
   frames: FrameResult[];
   prediction: Prediction | null;
@@ -112,18 +111,6 @@ export default function VideoCard({ result, pinned, onPin }: VideoCardProps) {
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <a href={`/videos/${result.video_id}`} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-foreground">{result.video_id}</a>
-            {result.title_score != null && (
-              <span
-                className={`px-1 rounded ${
-                  result.title_score >= 0.5
-                    ? "bg-green-100 text-green-700"
-                    : "bg-red-100 text-red-700"
-                }`}
-                title="Title score — below 0.5 would auto-reject"
-              >
-                title: {result.title_score}
-              </span>
-            )}
             {result.vertical && (
               <span className="px-1 rounded bg-orange-100 text-orange-700">
                 vertical

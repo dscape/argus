@@ -136,8 +136,6 @@ export interface CrawlVideo {
   published_at: string | null;
   screening_status: string | null;
   screening_confidence: number | null;
-  title_score: number;
-  title_is_match: boolean;
   layout_type?: string | null;
   screened_by?: string | null;
   annotations?: VideoAnnotations | null;
@@ -268,7 +266,6 @@ export interface AiScreenResult {
   confidence?: number;
   auto_decided?: boolean;
   vertical: boolean;
-  title_score: number;
   max_ovl_score?: number;
   max_otb_score?: number;
   model_version?: string | null;

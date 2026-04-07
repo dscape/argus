@@ -1,11 +1,10 @@
-"""Service layer for crawl management — channels, videos, title scoring, AI classification."""
+"""Service layer for crawl management — channels and videos."""
 
 import logging
 import os
 from datetime import datetime, timezone
 
 from pipeline.db.connection import get_conn
-from pipeline.screen.title_filter import score_title
 
 logger = logging.getLogger(__name__)
 
@@ -247,14 +246,19 @@ def crawl_all_channels() -> dict:
 
 
 def fetch_frames_for_channel(channel_id: str, hires: bool = True) -> dict:
-    """Fetch overlay frames for all overlay-tagged videos in a channel."""
+    """Fetch frames for approved overlay videos in a channel.
+
+    Approved videos with ``layout_type IS NULL`` are treated as overlay.
+    """
     from pipeline.screen.frame_fetcher import fetch_overlay_frames
 
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT video_id FROM youtube_videos
-                   WHERE channel_id = %s AND layout_type = 'overlay'
+                   WHERE channel_id = %s
+                     AND screening_status = 'approved'
+                     AND (layout_type = 'overlay' OR layout_type IS NULL)
                    ORDER BY video_id""",
                 (channel_id,),
             )
@@ -373,12 +377,6 @@ def list_videos(
             cols = [d[0] for d in cur.description]
             rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
-    # Score titles (no auto-rejection — reviewer decides)
-    for row in rows:
-        is_match, confidence = score_title(row["title"])
-        row["title_score"] = round(confidence, 3)
-        row["title_is_match"] = is_match
-
     return {"videos": rows, "total": total}
 
 
@@ -489,85 +487,6 @@ def get_correction_stats() -> dict:
             }
 
 
-# ── Screening ──────────────────────────────────────────────
-
-
-def screen_videos(channel_id: str | None = None, limit: int = 500) -> dict:
-    """Run title-based screening on unscreened videos.
-
-    Applies score_title() to each unscreened video. Titles that fail
-    are rejected; titles that pass stay unscreened with their confidence
-    score stored for sorting/filtering.
-    """
-    conditions = ["screening_status IS NULL"]
-    params: list = []
-
-    if channel_id:
-        conditions.append("channel_id = %s")
-        params.append(channel_id)
-
-    where = "WHERE " + " AND ".join(conditions)
-
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT video_id, title
-                FROM youtube_videos
-                {where}
-                ORDER BY published_at DESC
-                LIMIT %s
-                """,
-                params + [limit],
-            )
-            videos = cur.fetchall()
-
-    if not videos:
-        return {"screened": 0, "passed": 0, "rejected": 0}
-
-    passed_ids: list[tuple[str, float]] = []
-    rejected_ids: list[str] = []
-
-    for video_id, title in videos:
-        is_match, confidence = score_title(title)
-        if is_match:
-            passed_ids.append((video_id, confidence))
-        else:
-            rejected_ids.append(video_id)
-
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            if passed_ids:
-                for vid, conf in passed_ids:
-                    cur.execute(
-                        """
-                        UPDATE youtube_videos
-                        SET screening_confidence = %s,
-                            updated_at = now()
-                        WHERE video_id = %s
-                        """,
-                        (conf, vid),
-                    )
-            if rejected_ids:
-                cur.execute(
-                    """
-                    UPDATE youtube_videos
-                    SET screening_status = 'rejected',
-                        screening_confidence = 0,
-                        updated_at = now()
-                    WHERE video_id = ANY(%s)
-                    """,
-                    (rejected_ids,),
-                )
-            conn.commit()
-
-    return {
-        "screened": len(videos),
-        "passed": len(passed_ids),
-        "rejected": len(rejected_ids),
-    }
-
-
 # ── Quota ───────────────────────────────────────────────────
 
 
@@ -582,240 +501,6 @@ def get_quota_status() -> dict:
         "daily_usage": usage,
         "remaining": remaining,
         "daily_limit": qt.daily_limit,
-    }
-
-
-# ── AI Classification ──────────────────────────────────────
-
-
-def classify_titles(video_ids: list[str]) -> str:
-    """Use Claude to analyze training-positive titles and generate classification rules."""
-    import anthropic
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY not set in environment")
-
-    # Fetch positive titles
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT title, channel_handle
-                FROM youtube_videos
-                WHERE video_id = ANY(%s)
-                """,
-                (video_ids,),
-            )
-            positive_titles = [
-                f"{row[0]}  (channel: {row[1] or 'unknown'})"
-                for row in cur.fetchall()
-            ]
-
-            # Fetch negative examples
-            cur.execute(
-                """
-                SELECT title FROM youtube_videos
-                WHERE screening_status = 'rejected'
-                ORDER BY RANDOM() LIMIT 50
-                """
-            )
-            rejected = [row[0] for row in cur.fetchall()]
-
-            cur.execute(
-                """
-                SELECT title FROM youtube_videos
-                WHERE screening_status IS NULL
-                ORDER BY RANDOM() LIMIT 50
-                """
-            )
-            unscreened = [row[0] for row in cur.fetchall()]
-
-    negative_titles = rejected + unscreened
-
-    positive_list = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(positive_titles))
-    negative_list = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(negative_titles))
-
-    user_prompt = f"""## Positive examples (titles confirmed to have OTB chess footage with overlay)
-{positive_list}
-
-## Negative examples (titles that do NOT have usable footage)
-{negative_list}
-
-Based on these examples, write a concise set of classification rules (as a prompt) \
-that could be given to an AI to classify new YouTube video titles as likely containing \
-OTB chess footage with a 2D board overlay or not. The rules should capture:
-- What patterns indicate a positive match
-- What patterns indicate a negative match
-- Edge cases and how to handle them
-
-Output ONLY the classification prompt text, nothing else."""
-
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=2000,
-        system="You are an expert at classifying YouTube video titles. "
-               "You will analyze examples of titles that contain OTB (over-the-board) "
-               "chess footage with a 2D board overlay vs titles that do not.",
-        messages=[{"role": "user", "content": user_prompt}],
-    )
-    return response.content[0].text
-
-
-def auto_classify_titles(
-    channel_id: str | None = None, limit: int = 200
-) -> dict:
-    """Use Claude to batch-classify unscreened video titles.
-
-    Sends titles to Claude with approved examples as context and asks for
-    a structured classification. Updates screening_status in the database.
-    """
-    import json as _json
-
-    import anthropic
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY not set in environment")
-
-    # Fetch positive examples
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT title, channel_handle
-                FROM youtube_videos
-                WHERE screening_status = 'approved'
-                ORDER BY published_at DESC
-                LIMIT 100
-                """
-            )
-            positives = [
-                f"{row[0]}  (channel: {row[1] or 'unknown'})"
-                for row in cur.fetchall()
-            ]
-
-            # Fetch unscreened titles to classify
-            conditions = ["screening_status IS NULL"]
-            params: list = []
-            if channel_id:
-                conditions.append("channel_id = %s")
-                params.append(channel_id)
-            where = "WHERE " + " AND ".join(conditions)
-
-            cur.execute(
-                f"""
-                SELECT video_id, title, channel_handle
-                FROM youtube_videos
-                {where}
-                ORDER BY published_at DESC
-                LIMIT %s
-                """,
-                params + [limit],
-            )
-            to_classify = [
-                {"video_id": row[0], "title": row[1], "channel": row[2] or "unknown"}
-                for row in cur.fetchall()
-            ]
-
-    if not to_classify:
-        return {"classified": 0, "approved": 0, "rejected": 0}
-
-    if not positives:
-        raise ValueError(
-            "No approved videos to use as examples. Approve some videos first."
-        )
-
-    positive_list = "\n".join(f"  - {t}" for t in positives[:50])
-    titles_list = "\n".join(
-        f"  {i+1}. [{v['video_id']}] {v['title']}  (channel: {v['channel']})"
-        for i, v in enumerate(to_classify)
-    )
-
-    user_prompt = f"""## Positive examples (titles confirmed to have OTB chess footage with overlay)
-{positive_list}
-
-## Titles to classify
-{titles_list}
-
-Classify each title as "approved" (likely OTB chess game footage with board overlay) \
-or "rejected" (unlikely to have usable footage).
-
-Respond with a JSON array only, no other text:
-[{{"id": "VIDEO_ID", "status": "approved|rejected"}}]"""
-
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        system=(
-            "You are an expert at classifying YouTube video titles for OTB "
-            "(over-the-board) chess footage with 2D board overlay. You return valid JSON only.\n\n"
-            "POSITIVE indicators:\n"
-            "- Tournament names with years in format: '[Player] vs [Player] || [Tournament] ([Year])'\n"
-            "- Formal chess event references (Candidates, World Championship, named tournaments)\n"
-            "- Classical game analysis format with opponent names and tournament context\n"
-            "- Titles suggesting serious competitive chess coverage\n\n"
-            "NEGATIVE indicators:\n"
-            "- Sensationalized language (ALL CAPS, multiple exclamation marks, 'DESTROYS', 'INSANE')\n"
-            "- Casual/meme language ('rizz', 'cursed', reaction content)\n"
-            "- First-person references ('I got destroyed', 'MY MOVES', 'Join me')\n"
-            "- Clickbait phrases ('You won't believe', 'Wait for it', 'Do you see it?')\n"
-            "- Player reaction focus ('slams table', 'pushes camera')\n"
-            "- Educational/tutorial framing ('How To Win', 'Secret Rule')\n"
-            "- Streaming/live content references (lichess.org, 'blitz or bullet')\n"
-            "- Vague dramatic titles without specific game context\n"
-            "- Questions without tournament context\n"
-            "- Personal commentary format\n\n"
-            "If title contains formal tournament structure with specific players, venue, and year, "
-            "classify as 'approved'. Otherwise, classify as 'rejected'.\n"
-            "Edge cases: Titles mentioning famous players but without tournament context should be "
-            "classified as 'rejected' unless they follow the formal game analysis format."
-        ),
-        messages=[{"role": "user", "content": user_prompt}],
-    )
-
-    # Parse response
-    raw = response.content[0].text.strip()
-    # Strip markdown code fences if present
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-        if raw.endswith("```"):
-            raw = raw[:-3].strip()
-
-    classifications = _json.loads(raw)
-
-    # Apply classifications
-    approved_ids = [c["id"] for c in classifications if c["status"] == "approved"]
-    rejected_ids = [c["id"] for c in classifications if c["status"] == "rejected"]
-
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            if approved_ids:
-                cur.execute(
-                    """
-                    UPDATE youtube_videos
-                    SET screening_status = 'approved', updated_at = now()
-                    WHERE video_id = ANY(%s) AND screening_status IS NULL
-                    """,
-                    (approved_ids,),
-                )
-            if rejected_ids:
-                cur.execute(
-                    """
-                    UPDATE youtube_videos
-                    SET screening_status = 'rejected', updated_at = now()
-                    WHERE video_id = ANY(%s) AND screening_status IS NULL
-                    """,
-                    (rejected_ids,),
-                )
-            conn.commit()
-
-    return {
-        "classified": len(classifications),
-        "approved": len(approved_ids),
-        "rejected": len(rejected_ids),
     }
 
 
@@ -843,9 +528,6 @@ def get_video(video_id: str) -> dict | None:
             cols = [d[0] for d in cur.description]
             video = dict(zip(cols, row))
 
-    is_match, confidence = score_title(video["title"])
-    video["title_score"] = round(confidence, 3)
-    video["title_is_match"] = is_match
     return video
 
 

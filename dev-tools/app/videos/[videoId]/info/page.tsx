@@ -68,7 +68,6 @@ export default function InfoPage() {
           <Field label="File Size" value={dlStatus?.file_size_mb != null ? `${dlStatus.file_size_mb} MB` : "\u2014"} />
           <Field label="Status" value={video.screening_status || "unscreened"} />
           <Field label="Layout" value={video.layout_type || "\u2014"} />
-          <Field label="Title Score" value={String(video.title_score)} />
           <div>
             <a
               href={`https://www.youtube.com/watch?v=${video.video_id}`}
