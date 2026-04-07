@@ -24,16 +24,13 @@ class TestDbWriteFailureHandling:
     @patch("api.services.evaluate.models_service.get_conn")
     @patch("api.services.evaluate.models_service.is_vertical_video")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")
-    @patch("api.services.evaluate.models_service.score_title")
     @patch("api.services.evaluate.models_service.detect_overlay_in_frame")
     @patch("api.services.evaluate.models_service.detect_otb_region")
     def test_db_failure_flags_results(
-        self, mock_otb, mock_overlay, mock_score, mock_frames, mock_vertical, mock_conn
+        self, mock_otb, mock_overlay, mock_frames, mock_vertical, mock_conn
     ):
         """When DB update fails, results should contain db_write_failed flag."""
         from api.services.evaluate.models_service import ai_screen_batch
-
-        mock_score.return_value = (True, 0.8)
 
         # First call returns video metadata, second call (for DB write) raises
         mock_conn_ok = _mock_db_conn(
@@ -69,12 +66,10 @@ class TestVerticalVideoHandling:
     @patch("api.services.evaluate.models_service.get_conn")
     @patch("api.services.evaluate.models_service.is_vertical_video")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")
-    @patch("api.services.evaluate.models_service.score_title")
-    def test_vertical_video_auto_rejected(self, mock_score, mock_frames, mock_vertical, mock_conn):
+    def test_vertical_video_auto_rejected(self, mock_frames, mock_vertical, mock_conn):
         """Vertical videos should be auto-rejected with confidence 1.0."""
         from api.services.evaluate.models_service import ai_screen_batch
 
-        mock_score.return_value = (False, 0.3)
         mock_conn.return_value = _mock_db_conn(
             [
                 ("vid1", "test title", None, None, None),
@@ -99,16 +94,14 @@ class TestThresholdBehavior:
     @patch("api.services.evaluate.models_service.get_conn")
     @patch("api.services.evaluate.models_service.is_vertical_video")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")
-    @patch("api.services.evaluate.models_service.score_title")
     @patch("api.services.evaluate.models_service.detect_overlay_in_frame")
     @patch("api.services.evaluate.models_service.detect_otb_region")
     def test_high_threshold_prevents_auto_decide(
-        self, mock_otb, mock_overlay, mock_score, mock_frames, mock_vertical, mock_conn
+        self, mock_otb, mock_overlay, mock_frames, mock_vertical, mock_conn
     ):
         """With threshold=1.0, nothing should be auto-decided."""
         from api.services.evaluate.models_service import ai_screen_batch
 
-        mock_score.return_value = (True, 0.8)
         # Use DB fallback with existing AI prediction
         mock_conn.return_value = _mock_db_conn(
             [

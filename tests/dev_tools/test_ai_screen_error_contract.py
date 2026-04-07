@@ -13,7 +13,6 @@ REQUIRED_KEYS = {
     "confidence",
     "auto_decided",
     "vertical",
-    "title_score",
     "max_ovl_score",
     "max_otb_score",
     "model_version",
@@ -39,12 +38,10 @@ class TestErrorContractConsistency:
 
     @patch("api.services.evaluate.models_service.get_conn")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")
-    @patch("api.services.evaluate.models_service.score_title")
-    def test_thumbnail_failure_has_all_keys(self, mock_score, mock_frames, mock_conn):
+    def test_thumbnail_failure_has_all_keys(self, mock_frames, mock_conn):
         """When thumbnails can't be fetched, result still has all fields."""
         from api.services.evaluate.models_service import ai_screen_batch
 
-        mock_score.return_value = (False, 0.3)
         mock_conn.return_value = _mock_db_conn([("vid1", "test", None, None, None)])
         mock_frames.return_value = []
 
@@ -56,12 +53,10 @@ class TestErrorContractConsistency:
 
     @patch("api.services.evaluate.models_service.get_conn")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")
-    @patch("api.services.evaluate.models_service.score_title")
-    def test_exception_has_all_keys(self, mock_score, mock_frames, mock_conn):
+    def test_exception_has_all_keys(self, mock_frames, mock_conn):
         """When processing raises an exception, result still has all fields."""
         from api.services.evaluate.models_service import ai_screen_batch
 
-        mock_score.return_value = (False, 0.3)
         mock_conn.return_value = _mock_db_conn([("vid1", "test", None, None, None)])
         mock_frames.side_effect = RuntimeError("boom")
 

@@ -12,7 +12,6 @@ from pipeline.db.connection import get_conn
 from pipeline.overlay.scanner import detect_overlay_in_frame
 from pipeline.screen.dual_region_detector import detect_otb_region
 from pipeline.screen.frame_fetcher import fetch_youtube_frames, is_vertical_video
-from pipeline.screen.title_filter import score_title
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +63,6 @@ def inspect_ai_screening(video_id: str) -> dict | None:
             if row is None:
                 return None
             title, human_status, human_layout = row
-
-    # Compute title score on the fly
-    _, title_score = score_title(title)
 
     # Fetch 25/50/75% frames
     frames = fetch_youtube_frames(video_id)
@@ -154,7 +150,6 @@ def inspect_ai_screening(video_id: str) -> dict | None:
     return {
         "video_id": video_id,
         "title": title,
-        "title_score": title_score,
         "vertical": vertical,
         "frames": frame_results,
         "prediction": prediction,
@@ -392,9 +387,9 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
     2. DB fallback: reads existing ai_screening_* predictions from the database
        (populated by `pipeline ai-screen` CLI command).
 
-    In both modes, vertical detection and title scoring always run (only need
-    opencv/numpy). Returns per-video: predicted_class, confidence, auto_decided,
-    vertical, title_score, max_ovl_score, max_otb_score.
+    In both modes, vertical detection always runs (only needs opencv/numpy).
+    Returns per-video: predicted_class, confidence, auto_decided,
+    vertical, max_ovl_score, max_otb_score.
     """
     # Check if ML deps are available for inline inference
     has_ml_deps = True
@@ -452,8 +447,6 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
     for video_id in video_ids:
         try:
             vdata = video_data.get(video_id, {})
-            title = vdata.get("title", "")
-            _, title_score = score_title(title) if title else (False, 0.0)
 
             # Base result dict — all fields always present for consistent contract
             base = {
@@ -462,7 +455,6 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
                 "confidence": 0.0,
                 "auto_decided": False,
                 "vertical": False,
-                "title_score": round(title_score, 3),
                 "max_ovl_score": 0.0,
                 "max_otb_score": 0.0,
                 "model_version": model_version,
@@ -576,7 +568,6 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
                 "confidence": 0.0,
                 "auto_decided": False,
                 "vertical": False,
-                "title_score": 0.0,
                 "max_ovl_score": 0.0,
                 "max_otb_score": 0.0,
                 "model_version": model_version,

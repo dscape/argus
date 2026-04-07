@@ -12,7 +12,6 @@ import {
   VideoWithReason,
   SortIcon,
   FilterIcon,
-  scoreColor,
   youtubeThumb,
   useToasts,
   ToastContainer,
@@ -37,7 +36,6 @@ const STATUS_OPTIONS = [
 ];
 
 const SORT_OPTIONS = [
-  { label: "Title Score", value: "title_score_desc" },
   { label: "Date (newest)", value: "published_at_desc" },
   { label: "Channel", value: "channel_name" },
 ];
@@ -250,8 +248,6 @@ export default function VideoBrowser({
   const sortedVideos = useMemo(() => {
     const sorted = [...videos];
     switch (orderBy) {
-      case "title_score_desc":
-        return sorted.sort((a, b) => b.title_score - a.title_score);
       case "published_at_desc":
         return sorted.sort((a, b) =>
           (b.published_at ?? "").localeCompare(a.published_at ?? "")
@@ -407,9 +403,6 @@ export default function VideoBrowser({
             >
               {/* Header: title + score + status */}
               <div className="px-2 py-1 flex items-center gap-1.5 min-w-0">
-                <div
-                  className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${scoreColor(v.title_score)}`}
-                />
                 <span
                   className="text-xs font-medium line-clamp-1 flex-1 min-w-0 hover:text-primary transition-colors"
                 >

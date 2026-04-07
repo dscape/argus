@@ -1,4 +1,4 @@
-"""Crawl management endpoints — channels, videos, title scoring, AI classification."""
+"""Crawl management endpoints — channels and videos."""
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
@@ -29,20 +29,6 @@ class UpdateStatusRequest(BaseModel):
 class BatchStatusRequest(BaseModel):
     video_ids: list[str]
     status: str
-
-
-class ScreenRequest(BaseModel):
-    channel_id: str | None = None
-    limit: int = 500
-
-
-class AutoClassifyRequest(BaseModel):
-    channel_id: str | None = None
-    limit: int = 200
-
-
-class ClassifyRequest(BaseModel):
-    video_ids: list[str]
 
 
 class AiScreenRequest(BaseModel):
@@ -219,19 +205,6 @@ async def get_inspect_job(job_id: str):
     return result
 
 
-# ── Screening ─────────────────────────────────────────────
-
-
-@router.post("/screen")
-async def screen_videos(body: ScreenRequest):
-    try:
-        return await run_in_threadpool(
-            crawl_service.screen_videos, body.channel_id, body.limit
-        )
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
 # ── Quota ──────────────────────────────────────────────────
 
 
@@ -239,33 +212,6 @@ async def screen_videos(body: ScreenRequest):
 async def get_quota():
     return await run_in_threadpool(crawl_service.get_quota_status)
 
-
-# ── AI Classification ─────────────────────────────────────
-
-
-@router.post("/auto-classify")
-async def auto_classify(body: AutoClassifyRequest):
-    try:
-        return await run_in_threadpool(
-            crawl_service.auto_classify_titles, body.channel_id, body.limit
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-@router.post("/classify")
-async def classify_titles(body: ClassifyRequest):
-    try:
-        prompt = await run_in_threadpool(
-            crawl_service.classify_titles, body.video_ids
-        )
-        return {"prompt": prompt}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(500, str(e))
 
 
 @router.post("/ai-screen")

@@ -138,12 +138,6 @@ export function AiInfoIcon({ result }: { result: AiScreenResult }) {
             <span className="text-muted-foreground">vertical</span>
             <span className={result.vertical ? "text-red-600 font-medium" : ""}>{result.vertical ? "yes" : "no"}</span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">title</span>
-            <span className={result.title_score >= 0.3 ? "text-green-600" : "text-red-600"}>
-              {result.title_score >= 0.3 ? "good" : "bad"} ({result.title_score.toFixed(2)})
-            </span>
-          </div>
           {result.max_ovl_score != null && (
             <div className="flex justify-between">
               <span className="text-muted-foreground">OVL</span>
@@ -190,12 +184,6 @@ export function statusBadge(status: string | null, layoutType?: string | null) {
     default:
       return <Badge variant="outline" className="text-xs">unscreened</Badge>;
   }
-}
-
-export function scoreColor(score: number): string {
-  if (score >= 0.6) return "bg-green-500";
-  if (score >= 0.3) return "bg-yellow-500";
-  return "bg-muted-foreground/30";
 }
 
 const THUMB_URLS = ["0.jpg", "hq1.jpg", "hq2.jpg", "hq3.jpg"];

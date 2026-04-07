@@ -56,7 +56,7 @@ graph LR
 graph LR
     subgraph "Data Pipeline"
         A[YouTube Channels] --> B[Crawl]
-        B --> C[Screen — title filter + AI classifier]
+        B --> C[Screen — AI classifier]
         C --> D[Download Videos]
         D --> E[Auto-Calibrate or Manual Calibrate]
         E --> F[Generate Training Clips — with hard cut detection]
@@ -224,8 +224,7 @@ graph TD
     end
 
     subgraph "3. Screen"
-        DB_V -->|title_filter| TF[Title keyword filter]
-        TF -->|dual_region_detector| DRD["Frame sampling: overlay + OTB detection"]
+        DB_V -->|dual_region_detector| DRD["Frame sampling: overlay + OTB detection"]
         DRD -->|ai_classifier| AI["AI classifier: DINOv2 + scanner scores"]
         AI --> DB_S["youtube_videos (screening_status, ai_screening_*, overlay_bbox)"]
     end
@@ -298,9 +297,8 @@ For videos with a 2D board overlay:
 
 | Module | What it does |
 |--------|-------------|
-| `title_filter.py` | Keyword filter on video titles to identify chess commentary content. |
 | `dual_region_detector.py` | Frame sampling: detects overlay + OTB regions in video frames. |
-| `screen_pipeline.py` | Orchestrates title filtering, frame detection, and AI screening. |
+| `screen_pipeline.py` | Orchestrates frame detection and AI screening. |
 | `frame_fetcher.py` | Fetches 4 YouTube auto-generated thumbnails per video (no API quota). Shared by inspection and AI classification. |
 | `ai_classifier.py` | DINOv2-based 3-way screening classifier (overlay / otb_only / reject). Frozen DINOv2 features + overlay/OTB scanner scores → MLP head. |
 | `ai_train.py` | Feature caching + classifier training with channel-stratified train/val split. |
@@ -1015,7 +1013,6 @@ argus/
 │   │   ├── channel_resolver.py                 #     @Handle to channel_id
 │   │   └── crawl_videos.py                     #     Paginate + store raw + parsed
 │   ├── screen/                                 #   Stage 3: video screening
-│   │   ├── title_filter.py                     #     Keyword filter on video titles
 │   │   ├── dual_region_detector.py             #     Frame sampling: overlay + OTB detection
 │   │   ├── screen_pipeline.py                  #     Orchestrator (manual + AI screening)
 │   │   ├── frame_fetcher.py                    #     YouTube thumbnail fetching (shared)
