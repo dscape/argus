@@ -137,7 +137,7 @@ make down     # stop everything
 
 If Blender is not installed, `make up` skips it with a warning — the other services still start.
 
-On the first startup, `make up` also checks for the chess-positions dataset under
+On startup, `make up` also checks for the chess-positions dataset under
 `data/overlay/train/` and `data/overlay/val/`. If either split is missing, it prompts
 you to download it via the Kaggle CLI so overlay evaluation works out of the box.
 

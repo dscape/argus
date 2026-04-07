@@ -37,6 +37,16 @@ class DatasetStatus:
         return missing
 
 
+def _has_images(directory: Path) -> bool:
+    if not directory.exists():
+        return False
+
+    return any(
+        path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES
+        for path in directory.rglob("*")
+    )
+
+
 def _count_images(directory: Path) -> int:
     if not directory.exists():
         return 0
@@ -51,8 +61,8 @@ def _count_images(directory: Path) -> int:
 def get_dataset_status(overlay_dir: Path = _OVERLAY_DIR) -> DatasetStatus:
     """Return whether the expected train and val splits are populated."""
     return DatasetStatus(
-        train_ready=_count_images(overlay_dir / "train") > 0,
-        val_ready=_count_images(overlay_dir / "val") > 0,
+        train_ready=_has_images(overlay_dir / "train"),
+        val_ready=_has_images(overlay_dir / "val"),
     )
 
 
@@ -68,7 +78,7 @@ def _find_split_dir(root: Path, names: tuple[str, ...]) -> Path | None:
 
     return sorted(
         candidates,
-        key=lambda path: (len(path.parts), priority[path.name.casefold()], str(path)),
+        key=lambda path: (priority[path.name.casefold()], len(path.parts), str(path)),
     )[0]
 
 

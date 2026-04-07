@@ -109,7 +109,7 @@ pipeline-stats:
 # ── Dev tools targets ────────────────────────────────────────
 
 ensure-overlay-data:
-	@python3 -m pipeline.setup.chess_positions --prompt
+	@$(PYTHON) -m pipeline.setup.chess_positions --prompt
 
 dev-tools: ensure-overlay-data
 	docker compose --profile dev-tools up --build
