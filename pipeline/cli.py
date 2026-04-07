@@ -977,8 +977,8 @@ def main():
     )
     p.add_argument("--fps", type=float, default=1.0, help="Target FPS for frame extraction")
     p.add_argument(
-        "--output", type=str, default="output/mlx",
-        help="Output directory (default: output/mlx)",
+        "--output", type=str, default="outputs/mlx",
+        help="Output directory (default: outputs/mlx)",
     )
     p.add_argument("--fen", type=str, default=None, help="Starting FEN position")
     p.add_argument("--tts", action="store_true", help="Announce moves via macOS TTS")

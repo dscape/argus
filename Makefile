@@ -134,7 +134,10 @@ up: check-backup
 			echo $$! > $(BLENDER_PID_FILE); \
 		fi \
 	else \
-		echo "Blender not found — skipping render server (install Blender 4.0+ for synthetic data)"; \
+		echo "Blender not found — skipping render server."; \
+		echo "  Install:  brew install --cask blender   (macOS)"; \
+		echo "            sudo snap install blender --classic   (Linux)"; \
+		echo "  Docs:     See CONTRIBUTING.md § Prerequisites"; \
 	fi
 	@echo ""
 	@echo "=== All services up ==="
@@ -164,7 +167,10 @@ preview: check-backup
 			> $(BLENDER_LOG_FILE) 2>&1 & \
 		echo $$! > $(BLENDER_PID_FILE); \
 	else \
-		echo "Blender not found — skipping render server"; \
+		echo "Blender not found — skipping render server."; \
+		echo "  Install:  brew install --cask blender   (macOS)"; \
+		echo "            sudo snap install blender --classic   (Linux)"; \
+		echo "  Docs:     See CONTRIBUTING.md § Prerequisites"; \
 	fi
 	docker compose --profile dev-tools up --build
 

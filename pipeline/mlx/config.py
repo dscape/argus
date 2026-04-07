@@ -39,7 +39,7 @@ class MLXPipelineConfig:
     font_thickness: int = 2
 
     # Output
-    output_dir: Path = field(default_factory=lambda: Path("output/mlx"))
+    output_dir: Path = field(default_factory=lambda: Path("outputs/mlx"))
 
     # Starting position (None = standard start)
     initial_fen: str | None = None

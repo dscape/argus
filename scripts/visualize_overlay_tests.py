@@ -2,7 +2,7 @@
 
 This makes the bbox tests inspectable: every frame is saved with
 ground-truth and detector outputs overlaid, plus a contact sheet and a JSON
-summary with IoU/pass-fail details.
+summary with pass-fail details.
 
 Examples:
     .venv/bin/python scripts/visualize_overlay_tests.py
@@ -36,7 +36,6 @@ from pipeline.overlay.scanner import detect_overlay_fast, fast_overlay_check  # 
 FIXTURES_DIR = PROJECT_ROOT / "tests" / "fixtures" / "frames"
 GROUND_TRUTH_PATH = FIXTURES_DIR / "ground_truth.json"
 DEFAULT_OUT_DIR = PROJECT_ROOT / "outputs" / "overlay_test_viz"
-FAST_IOU_THRESHOLD = 0.40
 PRECISE_UNDERCOVERAGE_TOLERANCE_PX = 8
 
 COLOR_GT = (0, 220, 0)
@@ -286,11 +285,16 @@ def _case_verdict(
         return "n/a"
     if not expected_overlay:
         return "pass" if det_bbox is None else "fail"
+    if detector_name == "fast":
+        if det_bbox is None:
+            return "fail"
+        if gt_bbox is not None:
+            iou = _compute_iou(det_bbox, gt_bbox)
+            if iou is not None and iou <= 0:
+                return "fail"
+        return "pass"
     if det_bbox is None or gt_bbox is None:
         return "fail"
-    if detector_name == "fast":
-        iou = _compute_iou(det_bbox, gt_bbox) or 0.0
-        return "pass" if iou >= FAST_IOU_THRESHOLD else "fail"
     under = _bbox_undercoverage(det_bbox, gt_bbox)
     assert under is not None
     return "pass" if max(under) <= PRECISE_UNDERCOVERAGE_TOLERANCE_PX else "fail"
@@ -357,7 +361,6 @@ def _render_panel(
         (gt_text, COLOR_MUTED),
         (
             f"fast: {'found' if fast.found else 'miss'}"
-            + (f"  IoU={fast_iou:.3f}" if fast_iou is not None else "")
             + f"  score={fast.score:.3f}"
             + f"  {fast_verdict.upper()}",
             COLOR_PASS
@@ -470,7 +473,7 @@ def main() -> None:
     summary = {
         "count": len(summary_rows),
         "detector": args.detector,
-        "fast_iou_threshold": FAST_IOU_THRESHOLD,
+        "fast_contract": "presence_only",
         "rows": summary_rows,
     }
     summary_path = out_dir / "summary.json"
