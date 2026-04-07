@@ -11,11 +11,7 @@ import numpy as np
 from pipeline.db.connection import get_conn
 from pipeline.overlay.scanner import detect_overlay_in_frame
 from pipeline.screen.dual_region_detector import detect_otb_region
-from pipeline.screen.frame_fetcher import (
-    fetch_youtube_frames,
-    is_upcoming_live_event,
-    is_vertical_video,
-)
+from pipeline.screen.frame_fetcher import fetch_youtube_frames, is_vertical_video
 from pipeline.screen.title_filter import score_title
 
 logger = logging.getLogger(__name__)
@@ -476,20 +472,17 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
             # Always check vertical (only needs opencv/numpy)
             frames = fetch_youtube_frames(video_id)
             if not frames:
-                if is_upcoming_live_event(video_id):
-                    results.append({**base,
-                        "predicted_class": "reject",
-                        "confidence": 1.0,
-                        "auto_decided": True,
-                    })
-                    db_updates.append({
-                        "video_id": video_id,
-                        "predicted_class": "reject",
-                        "confidence": 1.0,
-                        "auto_decided": True,
-                    })
-                else:
-                    results.append({**base, "error": "Could not fetch thumbnails"})
+                results.append({**base,
+                    "predicted_class": "reject",
+                    "confidence": 1.0,
+                    "auto_decided": True,
+                })
+                db_updates.append({
+                    "video_id": video_id,
+                    "predicted_class": "reject",
+                    "confidence": 1.0,
+                    "auto_decided": True,
+                })
                 continue
 
             vertical = is_vertical_video(frames)

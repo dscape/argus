@@ -93,15 +93,14 @@ class TestVerticalVideoHandling:
         assert results[0]["vertical"] is True
 
 
-class TestUpcomingLiveHandling:
-    """Verify upcoming live events are auto-rejected instead of surfacing thumbnail errors."""
+class TestMissingThumbnailHandling:
+    """Verify missing thumbnails are treated as deterministic rejects."""
 
     @patch("api.services.evaluate.models_service.get_conn")
-    @patch("api.services.evaluate.models_service.is_upcoming_live_event")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")
     @patch("api.services.evaluate.models_service.score_title")
-    def test_upcoming_live_event_auto_rejected(
-        self, mock_score, mock_frames, mock_upcoming_live, mock_conn
+    def test_missing_thumbnails_auto_rejected(
+        self, mock_score, mock_frames, mock_conn
     ):
         from api.services.evaluate.models_service import ai_screen_batch
 
@@ -112,7 +111,6 @@ class TestUpcomingLiveHandling:
             ]
         )
         mock_frames.return_value = []
-        mock_upcoming_live.return_value = True
 
         results = ai_screen_batch(["vid1"], threshold=0.90)
 
