@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { VideoWorkbenchProvider, useVideoWorkbench } from "./_context";
-import { scoreColor, StatusDropdown, SpinnerIcon } from "@/components/video-shared";
+import { StatusDropdown, SpinnerIcon } from "@/components/video-shared";
 import type { VideoWithReason } from "@/components/video-shared";
 
 const STEPS = [
@@ -50,7 +50,6 @@ function WorkbenchHeader() {
       </button>
       <div className="flex items-center gap-2 mb-3">
         <h2 className="text-lg font-semibold line-clamp-1 flex-1">{video.title}</h2>
-        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${scoreColor(video.title_score)}`} />
         <StatusDropdown video={video as VideoWithReason} onStatusChange={handleStatusChange} />
       </div>
 

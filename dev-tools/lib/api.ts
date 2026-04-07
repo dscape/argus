@@ -380,19 +380,6 @@ export async function getQuotaStatus(): Promise<QuotaStatus> {
   return res.json();
 }
 
-export async function autoClassifyTitles(params?: {
-  channel_id?: string;
-  limit?: number;
-}): Promise<{ classified: number; approved: number; rejected: number }> {
-  const res = await fetch("/api/crawl/auto-classify", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params ?? {}),
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
 // ── Single video ────────────────────────────────────────────
 
 export async function getVideo(videoId: string): Promise<CrawlVideo> {
@@ -819,20 +806,6 @@ export async function validateOverlayDetection(
   return res.json();
 }
 
-
-// ── AI Classification ───────────────────────────────────────
-
-export async function classifyTitles(
-  videoIds: string[]
-): Promise<{ prompt: string }> {
-  const res = await fetch("/api/crawl/classify", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ video_ids: videoIds }),
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
 
 // ── Synthetic ────────────────────────────────────────────────
 

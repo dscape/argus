@@ -19,7 +19,6 @@ import {
   TrashIcon,
   SpinnerIcon,
   AiInfoIcon,
-  scoreColor,
   youtubeThumb,
   cardTintClass,
   useToasts,
@@ -418,8 +417,7 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
   };
 
   const sortedVideos = useMemo(() => {
-    const sorted = [...videos];
-    return sorted.sort((a, b) => b.title_score - a.title_score);
+    return [...videos];
   }, [videos]);
 
   const allScreened =
@@ -608,9 +606,6 @@ export default function VideoScreenerPage({ channels, initialVideoIds }: VideoSc
                       {shortcutKey}
                     </kbd>
                   )}
-                  <div
-                    className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${scoreColor(v.title_score)}`}
-                  />
                   {v.ai_result && <AiInfoIcon result={v.ai_result} />}
                   {v.inspect_reason && isUnscreened && (
                     <span className="text-[10px] text-amber-600 dark:text-amber-400 flex-shrink-0 truncate max-w-[120px]">

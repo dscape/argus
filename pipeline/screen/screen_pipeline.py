@@ -17,7 +17,6 @@ from pipeline.screen.dual_region_detector import (
     overlay_bbox_to_json,
     screen_video,
 )
-from pipeline.screen.title_filter import score_title
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +27,8 @@ def screen_all(
 ):
     """Screen crawled videos for overlay + OTB training suitability.
 
-    Stage 1: Score titles with keyword matching. Titles that fail are rejected.
-
-    Stage 2: For titles that pass, sample frames and detect overlay + OTB
-    regions. Videos with both get 'approved'; others get 'rejected'.
+    Samples frames and detects overlay + OTB regions. Videos with both
+    get 'approved'; others get 'rejected'.
 
     Args:
         channel_handle: If provided, only screen videos from this channel.
@@ -66,33 +63,11 @@ def screen_all(
 
     print(f"Screening {len(videos)} videos...")
 
-    # Stage 1: Title filtering
-    passed = []
-    rejected_title = 0
-
-    for video_id, handle, title in videos:
-        is_match, confidence = score_title(title)
-
-        if is_match:
-            passed.append((video_id, handle, title, confidence))
-        else:
-            rejected_title += 1
-            _update_screening_status(video_id, "rejected", confidence=0.0)
-
-    print(
-        f"Title filter: {len(passed)} passed, "
-        f"{rejected_title} rejected"
-    )
-
-    if not passed:
-        return
-
-    # Stage 2: Frame-level screening
     approved_count = 0
     rejected_frame = 0
     failed = 0
 
-    for video_id, handle, title, title_confidence in passed:
+    for video_id, handle, title in videos:
         url = f"https://www.youtube.com/watch?v={video_id}"
 
         try:
@@ -131,7 +106,7 @@ def screen_all(
 
     print(
         f"\nScreening complete: {approved_count} approved, "
-        f"{rejected_frame} rejected (frame), {failed} failed"
+        f"{rejected_frame} rejected, {failed} failed"
     )
 
 
