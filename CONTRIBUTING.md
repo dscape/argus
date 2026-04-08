@@ -7,6 +7,7 @@
 | Python | 3.10+ | ML code and pipeline | `brew install python@3.10` |
 | Node.js | 18+ | Dev tools web UI | `brew install node` |
 | Docker | Latest | PostgreSQL + dev tools | `brew install --cask docker` |
+| Git LFS | Latest | Committed model weights under `weights/` | `brew install git-lfs` |
 | Cairo | Latest | SVG rendering for synthetic data | `brew install cairo` |
 | Blender | 4.0+ | 3D synthetic data rendering | `brew install --cask blender` |
 | ffmpeg | Latest | Frame extraction from videos | `brew install ffmpeg` |
@@ -46,7 +47,7 @@ Verify Blender: `blender --version` should show 4.0 or later. You can also set t
 |--------------|--------|--------|-------------|
 | Add YouTube channels or improve video screening | Pipeline | `pipeline/` | Python + PostgreSQL + API keys |
 | Improve AI screening classifier accuracy | Pipeline (screen) | `pipeline/screen/ai_*.py` | Python + PyTorch + labelled videos in DB |
-| Improve overlay board reading or calibration | Pipeline (overlay) | `pipeline/overlay/` | Python + Cairo |
+| Improve the default YOLO overlay detector or calibration | Pipeline (overlay) | `pipeline/overlay/` | Python + Cairo |
 | Tune auto-calibration (theme/orientation detection) | Pipeline (overlay) | `pipeline/overlay/auto_calibration.py` | Python + Cairo |
 | Generate better synthetic training data | Data Generation | `src/argus/datagen/` | Python + Cairo (+ Blender 4.0+ for 3D) |
 | Train the model or tune hyperparameters | Training | `src/argus/model/`, `src/argus/training/` | Python + PyTorch + GPU |
@@ -61,6 +62,8 @@ Verify Blender: `blender --version` should show 4.0 or later. You can also set t
 
 ```bash
 git clone <repo-url> && cd argus
+git lfs install
+git lfs pull --include="weights/screening/*,weights/overlay/*,weights/overlay_yolo/*"
 cp .env.example .env    # fill in HF_TOKEN, API keys, etc.
 
 # Option 1: direnv (recommended) — auto-activates venv + loads .env on cd
@@ -73,12 +76,16 @@ python3 -m venv .venv && source .venv/bin/activate
 make dev
 ```
 
+`make dev` installs the host-side YOLO runtime dependency (`ultralytics`). `make up` installs the same dependency in the API container from `pipeline/requirements.txt`.
+
 Start all services (PostgreSQL, dev-tools API, dev-tools UI via Docker; Blender natively) in the background:
 
 ```bash
 make up       # start everything
 make down     # stop everything
 ```
+
+`make up`, `make test`, and the runtime pipeline targets now fail fast if committed model weights are missing or still Git LFS pointers.
 
 ### Pipeline
 
@@ -199,6 +206,33 @@ python -m pipeline inspect-clip --file data/argus/training_clips/overlay_VIDEO_I
 #    - Verify that game segments are split at hard cuts (multiple segments shown)
 ```
 
+### Validating the Default YOLO Overlay Detector
+
+The runtime overlay detector is YOLO-based. Bounding boxes stored in
+`data/videos/ground_truth.json` and `tests/fixtures/frames/ground_truth.json`
+exist only to train and evaluate that detector.
+
+```bash
+# 1. Export the current training labels
+python -m pipeline overlay-yolo-export
+
+# 2. Train a detector
+python -m pipeline overlay-yolo-train --epochs 40 --batch 8
+
+# 3. Visualize detector output on the committed fixture set
+#    Run this after every detector change.
+.venv/bin/python3 scripts/visualize_overlay_tests.py --out-dir outputs/overlay_test_viz
+
+# 4. Full validation
+make typecheck
+make lint
+make test
+```
+
+If you touch detector code, do not ship a change that only looks good in unit
+metrics. The contact sheet from `scripts/visualize_overlay_tests.py` is the
+source of truth for whether the detector actually improved.
+
 ### Validating Auto-Calibration
 
 Auto-calibration proposes overlay/camera crop regions, theme, and board orientation from YouTube thumbnails.
@@ -282,6 +316,7 @@ make docker-ai-extract-status
 | Feature | Where to verify in dev-tools |
 |---------|------------------------------|
 | **Hard cuts** | `/videos/VIDEO_ID` → run "Detect Moves" → check segment count and per-move confidence in the move list |
+| **YOLO overlay detector** | `Annotate > BBox` for training labels, plus `scripts/visualize_overlay_tests.py` for the actual detector regression view |
 | **Auto-calibration** | `POST /api/calibration/{channel}/propose` → compare returned bboxes with manual calibration. Or use the Annotate > Calibrate page to view/edit proposed values |
 | **AI screening** | Evaluate > Screening > "Sample & Inspect" — shows model prediction vs human label per video with accuracy summary. Also available per-video at `/videos/VIDEO_ID` > Info > "Run AI Screen" |
 

@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from pipeline.overlay.scanner import detect_overlay_in_frame
+from pipeline.overlay.scanner import OverlayDetection, fast_overlay_check
 from pipeline.screen.dual_region_detector import detect_otb_region
 from pipeline.screen.frame_fetcher import fetch_youtube_frames
 
@@ -34,6 +34,17 @@ EMBED_DIM = 768
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 INPUT_SIZE = 224
+
+
+def screening_overlay_check(frame: np.ndarray) -> OverlayDetection:
+    """Return the heuristic overlay score expected by the committed v3 screener.
+
+    The current screening checkpoint was trained on heuristic overlay scores,
+    not on the runtime YOLO detector output. Keep this path stable until the
+    screening model/version and cached features are retrained for YOLO-derived
+    inputs.
+    """
+    return fast_overlay_check(frame)
 
 
 class ScreeningClassifier(nn.Module):
@@ -155,8 +166,7 @@ class ScreeningFeatureExtractor:
                     scanner_scores[i] = precomputed_scores[i][0]
                     otb_scores[i] = precomputed_scores[i][1]
                 else:
-                    # Overlay scanner score
-                    detection = detect_overlay_in_frame(frame_bgr)
+                    detection = screening_overlay_check(frame_bgr)
                     scanner_scores[i] = detection.score if detection.found else 0.0
 
                     # OTB detection score

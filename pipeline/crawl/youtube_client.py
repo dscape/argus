@@ -1,9 +1,9 @@
 """YouTube Data API v3 client with exponential backoff."""
 
+import logging
 import os
 import random
 import time
-import logging
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError

@@ -31,7 +31,7 @@ def test_image(
     Args:
         image_path: Path to a screenshot/frame image.
         overlay_bbox: Optional manual overlay bbox (x, y, w, h). If None,
-                      auto-detect via the scanner.
+                      auto-detect via the default YOLO detector.
         flipped: Whether the board is from Black's perspective.
         theme: Board theme for the reader.
         output_path: Where to save the annotated image. Defaults to
@@ -39,7 +39,7 @@ def test_image(
     """
     from pipeline.overlay.grid_detector import detect_grid
     from pipeline.overlay.piece_classifier import read_fen_with_grid
-    from pipeline.overlay.scanner import detect_overlay_in_frame
+    from pipeline.overlay.scanner import detect_overlay_runtime
 
     frame = cv2.imread(image_path)
     if frame is None:
@@ -56,8 +56,8 @@ def test_image(
         print(f"Using manual overlay bbox: x={x}, y={y}, w={bw}, h={bh}")
         detection_score = None
     else:
-        print("Scanning for 2D overlay board...")
-        detection = detect_overlay_in_frame(frame)
+        print("Running YOLO overlay detector...")
+        detection = detect_overlay_runtime(frame)
         if not detection.found:
             print("  NOT FOUND: No 2D overlay board detected in this image.")
             print("  Tip: Try providing --overlay x,y,w,h manually.")
@@ -319,7 +319,11 @@ def test_reader(
         theme: Board theme for piece recognition.
     """
     from pipeline.overlay.grid_detector import detect_grid
-    from pipeline.overlay.piece_classifier import CLASS_TO_PIECE, classify_squares, read_fen_with_grid
+    from pipeline.overlay.piece_classifier import (
+        CLASS_TO_PIECE,
+        classify_squares,
+        read_fen_with_grid,
+    )
 
     frame = cv2.imread(image_path)
     if frame is None:

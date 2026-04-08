@@ -31,7 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from pipeline.overlay.scanner import detect_overlay_fast, fast_overlay_check  # noqa: E402
+from pipeline.overlay.scanner import detect_overlay_runtime, runtime_overlay_check  # noqa: E402
 
 FIXTURES_DIR = PROJECT_ROOT / "tests" / "fixtures" / "frames"
 GROUND_TRUTH_PATH = FIXTURES_DIR / "ground_truth.json"
@@ -321,8 +321,8 @@ def _render_panel(
     draw_fast: bool,
     draw_precise: bool,
 ) -> tuple[np.ndarray, dict]:
-    fast = fast_overlay_check(image)
-    precise = detect_overlay_fast(image)
+    fast = runtime_overlay_check(image)
+    precise = detect_overlay_runtime(image)
     annotated = image.copy()
 
     if case.gt_bbox is not None:

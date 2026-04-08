@@ -1,7 +1,8 @@
-"""Diagnostic script for overlay detection alignment issues.
+"""Diagnostic script for the legacy heuristic overlay detector.
 
-Runs fast_overlay_check internals with verbose logging on both test fixtures
-and real frames to compare scores and identify why detection fails.
+The runtime overlay detector is YOLO-based. This script exists only to inspect
+historical heuristic-scanner behavior when maintaining training-label tooling
+or comparing against old experiments.
 
 Usage:
     docker exec argus-dev-api python3 scripts/diagnose_overlay.py

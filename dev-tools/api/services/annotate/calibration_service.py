@@ -3,11 +3,10 @@
 from pipeline.overlay.calibration import (
     LayoutCalibration,
     get_calibration,
-    set_calibration,
     list_calibrations,
     load_config,
     save_config,
-    CONFIG_PATH,
+    set_calibration,
 )
 
 
@@ -74,9 +73,9 @@ def delete(channel_handle: str) -> bool:
 def propose(channel_handle: str, video_id: str | None = None) -> dict | None:
     """Auto-propose calibration from screening data.
 
-    Uses YouTube thumbnails to detect overlay region, theme, and orientation.
-    If video_id is given, proposes from that single video; otherwise
-    aggregates proposals from multiple approved videos on the channel.
+    Uses sampled video frames to detect the overlay, OTB board, theme, and
+    orientation. If video_id is given, proposes from that single video;
+    otherwise aggregates proposals from multiple approved videos on the channel.
     """
     from pipeline.overlay.auto_calibration import (
         propose_calibration,

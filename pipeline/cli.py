@@ -311,6 +311,123 @@ def cmd_overlay_test_reader(args):
     )
 
 
+def cmd_overlay_yolo_export(args):
+    """Export bbox training annotations as a YOLO dataset."""
+    from pathlib import Path
+
+    from pipeline.overlay.yolo_dataset import export_overlay_yolo_dataset
+
+    export = export_overlay_yolo_dataset(
+        dataset_dir=Path(args.out_dir),
+        val_fraction=args.val_fraction,
+        seed=args.seed,
+    )
+
+    print(f"Dataset: {export.dataset_dir}")
+    print(f"  YAML: {export.dataset_yaml}")
+    print(f"  Manifest: {export.manifest_path}")
+    print(
+        f"  Train: {export.train.images} images "
+        f"({export.train.positives} pos, {export.train.negatives} neg)"
+    )
+    print(
+        f"  Val:   {export.val.images} images "
+        f"({export.val.positives} pos, {export.val.negatives} neg)"
+    )
+    print(
+        f"  Test:  {export.test.images} images "
+        f"({export.test.positives} pos, {export.test.negatives} neg)"
+    )
+
+
+
+def cmd_overlay_yolo_train(args):
+    """Train the default YOLO overlay detector."""
+    from pathlib import Path
+
+    from pipeline.overlay.yolo_train import train_overlay_yolo
+
+    result = train_overlay_yolo(
+        dataset_yaml=Path(args.data),
+        model_name=args.model,
+        epochs=args.epochs,
+        imgsz=args.imgsz,
+        batch=args.batch,
+        device=args.device,
+        project=Path(args.project),
+        name=args.name,
+    )
+
+    print(f"Run dir: {result.save_dir}")
+    print(f"Best weights: {result.best_weights}")
+    print("Use for ad-hoc evaluation via:")
+    print(
+        "  ARGUS_OVERLAY_YOLO_WEIGHTS="
+        f"{result.best_weights} .venv/bin/python3 scripts/visualize_overlay_tests.py"
+    )
+
+
+
+def cmd_otb_yolo_export(args):
+    """Export cached OTB/reject frames as a YOLO dataset."""
+    from pathlib import Path
+
+    from pipeline.screen.otb_yolo_dataset import export_otb_yolo_dataset
+
+    export = export_otb_yolo_dataset(
+        dataset_dir=Path(args.out_dir),
+        positive_video_limit=args.positive_video_limit,
+        negative_video_limit=args.negative_video_limit,
+        val_fraction=args.val_fraction,
+        test_fraction=args.test_fraction,
+        seed=args.seed,
+    )
+
+    print(f"Dataset: {export.dataset_dir}")
+    print(f"  YAML: {export.dataset_yaml}")
+    print(f"  Manifest: {export.manifest_path}")
+    print(
+        f"  Train: {export.train.images} images "
+        f"({export.train.positives} pos, {export.train.negatives} neg)"
+    )
+    print(
+        f"  Val:   {export.val.images} images "
+        f"({export.val.positives} pos, {export.val.negatives} neg)"
+    )
+    print(
+        f"  Test:  {export.test.images} images "
+        f"({export.test.positives} pos, {export.test.negatives} neg)"
+    )
+
+
+
+def cmd_otb_yolo_train(args):
+    """Train the default YOLO OTB-board detector."""
+    from pathlib import Path
+
+    from pipeline.screen.otb_yolo_train import train_otb_yolo
+
+    result = train_otb_yolo(
+        dataset_yaml=Path(args.data),
+        model_name=args.model,
+        epochs=args.epochs,
+        imgsz=args.imgsz,
+        batch=args.batch,
+        device=args.device,
+        project=Path(args.project),
+        name=args.name,
+    )
+
+    print(f"Run dir: {result.save_dir}")
+    print(f"Best weights: {result.best_weights}")
+    print("Use for runtime experiments via:")
+    print(
+        "  ARGUS_OTB_YOLO_WEIGHTS="
+        f"{result.best_weights} .venv/bin/python3 -m pipeline.cli auto-calibrate --video-id <video_id>"
+    )
+
+
+
 def cmd_inspect_clip(args):
     """Inspect a .pt training clip file."""
     from pipeline.overlay.diagnostics import inspect_clip
@@ -845,6 +962,150 @@ def main():
     p.add_argument("--flipped", action="store_true", help="Board is flipped (Black at bottom)")
     p.add_argument("--theme", type=str, default=None, help="Board theme")
 
+    # overlay-yolo-export
+    p = subparsers.add_parser(
+        "overlay-yolo-export",
+        help="Export overlay bbox training annotations as a YOLO dataset",
+    )
+    p.add_argument(
+        "--out-dir",
+        type=str,
+        default="data/overlay/yolo",
+        help="Output dataset directory",
+    )
+    p.add_argument(
+        "--val-fraction",
+        type=float,
+        default=0.2,
+        help="Validation fraction for non-fixture annotations",
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for the train/val split",
+    )
+
+    # overlay-yolo-train
+    p = subparsers.add_parser(
+        "overlay-yolo-train",
+        help="Train the default YOLO overlay detector",
+    )
+    p.add_argument(
+        "--data",
+        type=str,
+        default="data/overlay/yolo/dataset.yaml",
+        help="Path to YOLO dataset.yaml",
+    )
+    p.add_argument(
+        "--model",
+        type=str,
+        default="yolo11n.pt",
+        help="Pretrained Ultralytics nano checkpoint",
+    )
+    p.add_argument("--epochs", type=int, default=100, help="Training epochs")
+    p.add_argument("--imgsz", type=int, default=640, help="Training image size")
+    p.add_argument("--batch", type=int, default=16, help="Batch size")
+    p.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        help="Torch device (auto, cpu, mps, cuda)",
+    )
+    p.add_argument(
+        "--project",
+        type=str,
+        default="outputs/overlay_yolo",
+        help="Ultralytics project output directory",
+    )
+    p.add_argument(
+        "--name",
+        type=str,
+        default="train",
+        help="Ultralytics run name",
+    )
+
+    # otb-yolo-export
+    p = subparsers.add_parser(
+        "otb-yolo-export",
+        help="Export OTB-board pseudo-labels as a YOLO dataset",
+    )
+    p.add_argument(
+        "--out-dir",
+        type=str,
+        default="data/screening/otb_yolo",
+        help="Output dataset directory",
+    )
+    p.add_argument(
+        "--positive-video-limit",
+        type=int,
+        default=None,
+        help="Optional cap on approved otb_only videos",
+    )
+    p.add_argument(
+        "--negative-video-limit",
+        type=int,
+        default=None,
+        help="Optional cap on rejected videos used as negatives",
+    )
+    p.add_argument(
+        "--val-fraction",
+        type=float,
+        default=0.1,
+        help="Validation fraction by video",
+    )
+    p.add_argument(
+        "--test-fraction",
+        type=float,
+        default=0.1,
+        help="Test fraction by video",
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for video-level splits",
+    )
+
+    # otb-yolo-train
+    p = subparsers.add_parser(
+        "otb-yolo-train",
+        help="Train the default YOLO OTB-board detector",
+    )
+    p.add_argument(
+        "--data",
+        type=str,
+        default="data/screening/otb_yolo/dataset.yaml",
+        help="Path to YOLO dataset.yaml",
+    )
+    p.add_argument(
+        "--model",
+        type=str,
+        default="yolo11n.pt",
+        help="Pretrained Ultralytics nano checkpoint",
+    )
+    p.add_argument("--epochs", type=int, default=100, help="Training epochs")
+    p.add_argument("--imgsz", type=int, default=640, help="Training image size")
+    p.add_argument("--batch", type=int, default=16, help="Batch size")
+    p.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        help="Torch device (auto, cpu, mps, cuda)",
+    )
+    p.add_argument(
+        "--project",
+        type=str,
+        default="outputs/otb_yolo",
+        help="Ultralytics project output directory",
+    )
+    p.add_argument(
+        "--name",
+        type=str,
+        default="train",
+        help="Ultralytics run name",
+    )
+
     # inspect-clip
     p = subparsers.add_parser("inspect-clip", help="Inspect a .pt training clip file")
     p.add_argument("--file", type=str, required=True, help="Path to .pt clip file")
@@ -1021,6 +1282,10 @@ def main():
         "generate-clips": cmd_generate_clips,
         "overlay-test": cmd_overlay_test,
         "overlay-test-reader": cmd_overlay_test_reader,
+        "overlay-yolo-export": cmd_overlay_yolo_export,
+        "overlay-yolo-train": cmd_overlay_yolo_train,
+        "otb-yolo-export": cmd_otb_yolo_export,
+        "otb-yolo-train": cmd_otb_yolo_train,
         "inspect-clip": cmd_inspect_clip,
         "ai-extract": cmd_ai_extract,
         "ai-train": cmd_ai_train,

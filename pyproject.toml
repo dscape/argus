@@ -27,6 +27,7 @@ dependencies = [
     "matplotlib>=3.8",
     "cairosvg>=2.7",
     "tqdm>=4.66",
+    "ultralytics>=8.4.35",
 ]
 
 [project.optional-dependencies]
@@ -78,6 +79,7 @@ module = [
     "timm.*",
     "torchvision.*",
     "transnetv2_pytorch.*",
+    "ultralytics.*",
 ]
 ignore_missing_imports = true
 

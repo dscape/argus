@@ -1,0 +1,21 @@
+{
+  "code_version": "v1",
+  "revision": 1,
+  "version": "v1r1",
+  "trained_at": "2026-04-08T00:00:00+00:00",
+  "model": "yolo11n.pt",
+  "epochs": 30,
+  "imgsz": 640,
+  "batch": 16,
+  "device": "mps",
+  "train_images": 4856,
+  "val_images": 540,
+  "test_images": 600,
+  "val_mAP50": 0.995,
+  "val_mAP50_95": 0.93,
+  "test_mAP50": 0.9949,
+  "test_mAP50_95": 0.9224,
+  "label_source": "OwlV2BoardLabeler",
+  "dataset_dir": "data/screening/otb_yolo",
+  "notes": "Default runtime OTB-board detector. Positives come from approved otb_only screening frames pseudo-labeled with OWLv2; negatives come from rejected videos."
+}

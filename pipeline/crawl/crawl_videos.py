@@ -4,8 +4,8 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from pipeline.crawl.youtube_client import YouTubeClient
 from pipeline.crawl.quota_tracker import QuotaTracker
+from pipeline.crawl.youtube_client import YouTubeClient
 from pipeline.db.connection import get_conn
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ def crawl_channel(
 
         # If refreshing, stop when we hit videos we already have
         if refresh and new_in_page == 0:
-            logger.info(f"Refresh: no new videos on this page, stopping.")
+            logger.info("Refresh: no new videos on this page, stopping.")
             break
 
         page_token = response.get("nextPageToken")

@@ -6,17 +6,13 @@ import time
 
 import cv2
 import numpy as np
-
-from api.services.videos import crawl_service
 from pipeline.overlay.auto_calibration import (
     _get_video_path,
-    _scale_bbox,
-    compute_camera_bbox,
-    detect_board_orientation,
-    detect_board_theme,
     propose_calibration_for_clip,
 )
 from pipeline.overlay.segmenter import segment_video_layouts
+
+from api.services.videos import crawl_service
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +35,6 @@ def auto_segment_video(
 
     Returns a dict with ``segments``, ``gaps``, ``video_resolution``, etc.
     """
-    from pipeline.db.connection import get_conn
 
     video_path = _get_video_path(video_id)
     if not video_path:
@@ -138,7 +133,6 @@ def auto_calibrate_clip(video_id: str, clip_id: int) -> dict:
             "proposal": None,
             "applied": False,
             "preview_frame_b64": None,
-            "camera_heatmap_b64": None,
         }
 
     # Update the clip in the DB
@@ -152,7 +146,6 @@ def auto_calibrate_clip(video_id: str, clip_id: int) -> dict:
 
     # Generate preview frame with bboxes drawn
     preview_b64 = None
-    heatmap_b64 = None
 
     cap = cv2.VideoCapture(video_path)
     mid_time = (clip["start_time"] + (clip["end_time"] or 0)) / 2
@@ -169,29 +162,10 @@ def auto_calibrate_clip(video_id: str, clip_id: int) -> dict:
         cx, cy, cw, ch = proposal.camera
         cv2.rectangle(annotated, (cx, cy), (cx + cw, cy + ch), (0, 0, 255), 3)
         cv2.putText(
-            annotated, "Camera", (cx + 6, cy + 28),
+            annotated, "OTB board", (cx + 6, cy + 28),
             cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2,
         )
         preview_b64 = _frame_to_base64(annotated)
-
-        # Camera motion heatmap: compare two frames within clip
-        clip_end = clip["end_time"] or mid_time * 2
-        t1 = clip["start_time"] + (clip_end - clip["start_time"]) * 0.25
-        t2 = clip["start_time"] + (clip_end - clip["start_time"]) * 0.75
-        cap.set(cv2.CAP_PROP_POS_MSEC, t1 * 1000)
-        ret1, f1 = cap.read()
-        cap.set(cv2.CAP_PROP_POS_MSEC, t2 * 1000)
-        ret2, f2 = cap.read()
-        if ret1 and ret2:
-            gray1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY).astype(np.float32)
-            gray2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY).astype(np.float32)
-            if gray2.shape != gray1.shape:
-                gray2 = cv2.resize(gray2, (gray1.shape[1], gray1.shape[0])).astype(np.float32)
-            diff = np.abs(gray1 - gray2)
-            diff[oy: oy + oh, ox: ox + ow] = 0
-            diff_norm = np.clip(diff / 30.0 * 255, 0, 255).astype(np.uint8)
-            heatmap = cv2.applyColorMap(diff_norm, cv2.COLORMAP_JET)
-            heatmap_b64 = _frame_to_base64(heatmap)
 
     cap.release()
 
@@ -208,5 +182,4 @@ def auto_calibrate_clip(video_id: str, clip_id: int) -> dict:
         },
         "applied": True,
         "preview_frame_b64": preview_b64,
-        "camera_heatmap_b64": heatmap_b64,
     }
