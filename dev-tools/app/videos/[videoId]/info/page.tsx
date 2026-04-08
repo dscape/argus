@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { getDownloadStatus } from "@/lib/api";
-import type { DownloadStatus } from "@/lib/types";
 import { youtubeThumb } from "@/components/video-shared";
 import VideoCard, { computeAgreement, type InspectResult } from "@/components/evaluate/VideoCard";
 import { useVideoWorkbench } from "../_context";
@@ -17,15 +15,9 @@ function Field({ label, value }: { label: string; value: string }) {
 }
 
 export default function InfoPage() {
-  const { video } = useVideoWorkbench();
-  const [dlStatus, setDlStatus] = useState<DownloadStatus | null>(null);
+  const { video, downloadStatus } = useVideoWorkbench();
   const [aiResult, setAiResult] = useState<InspectResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
-
-  useEffect(() => {
-    if (!video) return;
-    getDownloadStatus(video.video_id).then(setDlStatus);
-  }, [video?.video_id]);
 
   useEffect(() => {
     if (!video) return;
@@ -40,7 +32,9 @@ export default function InfoPage() {
         });
         if (!res.ok) throw new Error(await res.text());
         if (!cancelled) setAiResult(await res.json());
-      } catch { /* silently fail */ }
+      } catch {
+        // silently fail
+      }
       if (!cancelled) setAiLoading(false);
     })();
     return () => { cancelled = true; };
@@ -64,8 +58,8 @@ export default function InfoPage() {
           <Field label="Video ID" value={video.video_id} />
           <Field label="Channel" value={video.channel_handle || "\u2014"} />
           <Field label="Published" value={video.published_at ? new Date(video.published_at).toLocaleDateString() : "\u2014"} />
-          <Field label="Duration" value={dlStatus?.duration_seconds != null ? fmtDuration(dlStatus.duration_seconds) : "\u2014"} />
-          <Field label="File Size" value={dlStatus?.file_size_mb != null ? `${dlStatus.file_size_mb} MB` : "\u2014"} />
+          <Field label="Duration" value={downloadStatus?.duration_seconds != null ? fmtDuration(downloadStatus.duration_seconds) : "\u2014"} />
+          <Field label="File Size" value={downloadStatus?.file_size_mb != null ? `${downloadStatus.file_size_mb} MB` : "\u2014"} />
           <Field label="Status" value={video.screening_status || "unscreened"} />
           <Field label="Layout" value={video.layout_type || "\u2014"} />
           <div>
