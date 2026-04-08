@@ -302,6 +302,15 @@ _GEOM_MIN_ALTERNATION_FRAC = 0.70
 _GEOM_MIN_ALTERNATION_CONTRAST = 30.0
 _GEOM_MIN_PERIODICITY = 1.10
 
+# Some legitimate broadcast overlays use textured / gradient square fills that
+# lower the simple low-variance regularity score. When alternation, periodicity,
+# and checkerboard consistency are all strong, allow a slightly lower
+# regularity floor.
+_GEOM_RELAXED_MIN_REGULARITY = 0.10
+_GEOM_RELAXED_MIN_ALTERNATION_FRAC = 0.85
+_GEOM_RELAXED_MIN_ALTERNATION_CONTRAST = 45.0
+_GEOM_RELAXED_MIN_PERIODICITY = 1.50
+
 
 def _checkerboard_std(gray: np.ndarray) -> float:
     """Compute max(light_std, dark_std) for the 8x8 grid of a region."""
@@ -476,14 +485,22 @@ def _bbox_looks_like_overlay(
     periodicity = compute_axis_aligned_periodicity(region_gray)
 
     if (
-        regularity < _GEOM_MIN_REGULARITY
-        or frac < _GEOM_MIN_ALTERNATION_FRAC
-        or contrast < _GEOM_MIN_ALTERNATION_CONTRAST
-        or periodicity < _GEOM_MIN_PERIODICITY
+        regularity >= _GEOM_MIN_REGULARITY
+        and frac >= _GEOM_MIN_ALTERNATION_FRAC
+        and contrast >= _GEOM_MIN_ALTERNATION_CONTRAST
+        and periodicity >= _GEOM_MIN_PERIODICITY
     ):
-        return False
+        return True
 
-    return True
+    if (
+        regularity >= _GEOM_RELAXED_MIN_REGULARITY
+        and frac >= _GEOM_RELAXED_MIN_ALTERNATION_FRAC
+        and contrast >= _GEOM_RELAXED_MIN_ALTERNATION_CONTRAST
+        and periodicity >= _GEOM_RELAXED_MIN_PERIODICITY
+    ):
+        return check_checkerboard_consistency(gray_full, bbox)
+
+    return False
 
 
 def check_color_consistency(region: np.ndarray) -> bool:
@@ -862,16 +879,27 @@ def _fast_grid_rescue(
             bx = max(0, min(gx, fw - board_size))
             by = max(0, min(gy, fh - board_size))
             board_size = min(board_size, fw - bx, fh - by)
-            bbox = (bx, by, board_size, board_size)
+            raw_bbox = (bx, by, board_size, board_size)
+            corrected_bbox = _correct_one_cell_offset(
+                gray_full,
+                raw_bbox,
+                use_alignment_score=True,
+                allow_clamped=True,
+                allow_diagonal=True,
+            )
 
-            if not _bbox_looks_like_overlay(frame, gray_full, bbox):
-                continue
+            for bbox in (corrected_bbox, raw_bbox):
+                if not _bbox_looks_like_overlay(frame, gray_full, bbox):
+                    continue
 
-            region = gray_full[bbox[1] : bbox[1] + bbox[3], bbox[0] : bbox[0] + bbox[2]]
-            score = _overlay_alignment_score(region)
-            if best_bbox is None or score > best_score:
-                best_bbox = bbox
-                best_score = score
+                region = gray_full[
+                    bbox[1] : bbox[1] + bbox[3],
+                    bbox[0] : bbox[0] + bbox[2],
+                ]
+                score = _overlay_alignment_score(region)
+                if best_bbox is None or score > best_score:
+                    best_bbox = bbox
+                    best_score = score
 
     return best_bbox
 
@@ -1026,6 +1054,7 @@ def _fast_overlay_check_impl(frame: np.ndarray) -> OverlayDetection:
     # (alignment_score, frac, bbox)
     p2_strict: list[tuple[float, float, tuple[int, int, int, int]]] = []
     p2_fallback: list[tuple[float, float, tuple[int, int, int, int]]] = []
+    p2_checkerboard_only: list[tuple[float, float, tuple[int, int, int, int]]] = []
 
     for _, _, small_bbox in validation_candidates:
         if scale_factor < 1.0:
@@ -1073,11 +1102,11 @@ def _fast_overlay_check_impl(frame: np.ndarray) -> OverlayDetection:
             best_p2_bbox[0]: best_p2_bbox[0] + best_p2_bbox[2],
         ]
         regularity = compute_grid_regularity(p2_region)
-        if regularity < _P2_MIN_REGULARITY:
+        checkerboard_only_ok = best_p2_frac >= 0.85 and best_p2_contrast >= 45.0
+        if regularity < _P2_MIN_REGULARITY and not checkerboard_only_ok:
             continue
 
-        align = _overlay_alignment_score(p2_region)
-
+        cb_pass = True
         if min(orig_h, orig_w) >= 720:
             cb_pass = (
                 check_checkerboard_consistency(gray_full, full_bbox)
@@ -1094,6 +1123,15 @@ def _fast_overlay_check_impl(frame: np.ndarray) -> OverlayDetection:
                         if check_checkerboard_consistency(gray_full, (nx, ny, ns, ns)):
                             cb_pass = True
                             break
+
+        align = _overlay_alignment_score(p2_region)
+
+        if regularity < _P2_MIN_REGULARITY:
+            if cb_pass and checkerboard_only_ok:
+                p2_checkerboard_only.append((align, best_p2_frac, best_p2_bbox))
+            continue
+
+        if min(orig_h, orig_w) >= 720:
             if cb_pass:
                 p2_strict.append((align, best_p2_frac, best_p2_bbox))
             elif best_p2_frac >= 0.77:
@@ -1110,6 +1148,17 @@ def _fast_overlay_check_impl(frame: np.ndarray) -> OverlayDetection:
     if p2_pool:
         p2_pool.sort(key=lambda t: t[0], reverse=True)
         _, best_frac, best_bbox = p2_pool[0]
+        return OverlayDetection(
+            found=True,
+            bbox=best_bbox,
+            seed_bbox=best_bbox,
+            score=best_frac,
+            frame_resolution=resolution,
+        )
+
+    if p2_checkerboard_only:
+        p2_checkerboard_only.sort(key=lambda t: t[0], reverse=True)
+        _, best_frac, best_bbox = p2_checkerboard_only[0]
         return OverlayDetection(
             found=True,
             bbox=best_bbox,
@@ -1256,18 +1305,19 @@ def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
             and len(grid_fallback.v_lines) == 9
             and len(grid_fallback.h_lines) == 9
         ):
-            fallback_bbox = _grid_result_to_bbox(grid_fallback, frame.shape)
-            if _bbox_looks_like_overlay(frame, gray_full, fallback_bbox):
-                fallback_bbox = _correct_grid_bbox(gray_full, fallback_bbox, allow_positive=True)
-                return OverlayDetection(
-                    found=True,
-                    bbox=fallback_bbox,
-                    score=compute_axis_aligned_periodicity(gray_full[
-                        fallback_bbox[1] : fallback_bbox[1] + fallback_bbox[3],
-                        fallback_bbox[0] : fallback_bbox[0] + fallback_bbox[2],
-                    ]),
-                    frame_resolution=resolution,
-                )
+            raw_bbox = _grid_result_to_bbox(grid_fallback, frame.shape)
+            corrected_bbox = _correct_grid_bbox(gray_full, raw_bbox, allow_positive=True)
+            for candidate in (corrected_bbox, raw_bbox):
+                if _bbox_looks_like_overlay(frame, gray_full, candidate):
+                    return OverlayDetection(
+                        found=True,
+                        bbox=candidate,
+                        score=compute_axis_aligned_periodicity(gray_full[
+                            candidate[1] : candidate[1] + candidate[3],
+                            candidate[0] : candidate[0] + candidate[2],
+                        ]),
+                        frame_resolution=resolution,
+                    )
         return OverlayDetection(found=False, frame_resolution=resolution)
 
     sx, sy, sw, sh = seed.bbox
@@ -1356,16 +1406,24 @@ def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
         and len(grid_full.h_lines) == 9
         and grid_spacing_is_consistent(grid_full)
     ):
-        grid_bbox = _grid_result_to_bbox(grid_full, frame.shape)
-        if _bbox_looks_like_overlay(frame, gray_full, grid_bbox):
-            fb = _correct_grid_bbox(gray_full, grid_bbox, allow_positive=True)
-            fb_region = gray_full[fb[1] : fb[1] + fb[3], fb[0] : fb[0] + fb[2]]
+        raw_grid_bbox = _grid_result_to_bbox(grid_full, frame.shape)
+        grid_candidates = [
+            _correct_grid_bbox(gray_full, raw_grid_bbox, allow_positive=True),
+            raw_grid_bbox,
+        ]
+        for candidate in grid_candidates:
+            if not _bbox_looks_like_overlay(frame, gray_full, candidate):
+                continue
+            fb_region = gray_full[
+                candidate[1] : candidate[1] + candidate[3],
+                candidate[0] : candidate[0] + candidate[2],
+            ]
             fb_score = _overlay_alignment_score(fb_region)
             baseline_score = expansion_score if expansion_candidate is not None else seed_score
             if expansion_candidate is None or fb_score > baseline_score:
                 return OverlayDetection(
                     found=True,
-                    bbox=fb,
+                    bbox=candidate,
                     seed_bbox=seed.bbox,
                     score=max(seed.score, compute_axis_aligned_periodicity(fb_region)),
                     frame_resolution=resolution,
@@ -1397,7 +1455,20 @@ def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
         gx = max(0, min(gx, w - board_size))
         gy = max(0, min(gy, h - board_size))
         board_size = min(board_size, w - gx, h - gy)
-        corrected = _correct_one_cell_offset(gray_full, (gx, gy, board_size, board_size))
+        raw_bbox = (gx, gy, board_size, board_size)
+        if (
+            abs(raw_bbox[0] - sx) <= 4
+            and abs(raw_bbox[1] - sy) <= 4
+            and abs(raw_bbox[2] - sw) <= 4
+        ):
+            corrected = _correct_grid_bbox(
+                gray_full,
+                raw_bbox,
+                allow_positive=True,
+            )
+            corrected = _rescue_large_seed_bbox(gray_full, corrected)
+        else:
+            corrected = _correct_one_cell_offset(gray_full, raw_bbox)
         return OverlayDetection(
             found=True,
             bbox=corrected,
@@ -1407,7 +1478,7 @@ def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
         )
 
     # Phase 4: no grid found at all — return seed bbox as-is.
-    corrected = _correct_one_cell_offset(gray_full, seed.bbox)
+    corrected = _rescue_large_seed_bbox(gray_full, seed.bbox)
     return OverlayDetection(
         found=True,
         bbox=corrected,
@@ -1428,46 +1499,207 @@ def _overlay_alignment_score(region: np.ndarray) -> float:
     return regularity * frac * contrast * periodicity
 
 
+
+def _bbox_edge_values(
+    gray: np.ndarray,
+    bbox: tuple[int, int, int, int],
+) -> list[float]:
+    """Return per-side boundary contrasts for the crop."""
+    x, y, w, h_box = bbox
+    fh, fw = gray.shape[:2]
+    contrasts: list[float] = []
+
+    if x > 0:
+        contrasts.append(float(np.mean(np.abs(
+            gray[y : y + h_box, x].astype(np.float32)
+            - gray[y : y + h_box, x - 1].astype(np.float32)
+        ))))
+    if x + w < fw:
+        contrasts.append(float(np.mean(np.abs(
+            gray[y : y + h_box, x + w - 1].astype(np.float32)
+            - gray[y : y + h_box, x + w].astype(np.float32)
+        ))))
+    if y > 0:
+        contrasts.append(float(np.mean(np.abs(
+            gray[y, x : x + w].astype(np.float32)
+            - gray[y - 1, x : x + w].astype(np.float32)
+        ))))
+    if y + h_box < fh:
+        contrasts.append(float(np.mean(np.abs(
+            gray[y + h_box - 1, x : x + w].astype(np.float32)
+            - gray[y + h_box, x : x + w].astype(np.float32)
+        ))))
+
+    return contrasts
+
+
+
+def _bbox_edge_contrast(
+    gray: np.ndarray,
+    bbox: tuple[int, int, int, int],
+) -> float:
+    """Average contrast across the crop boundaries."""
+    contrasts = _bbox_edge_values(gray, bbox)
+    return float(np.mean(contrasts)) if contrasts else 0.0
+
+
+
+def _bbox_correction_score(
+    gray: np.ndarray,
+    bbox: tuple[int, int, int, int],
+) -> float:
+    """Score a candidate full-board crop for local correction search."""
+    x, y, w, h_box = bbox
+    region = gray[y : y + h_box, x : x + w]
+    return (
+        _overlay_alignment_score(region)
+        - _checkerboard_std(region)
+        + 0.2 * _bbox_edge_contrast(gray, bbox)
+    )
+
+
+
+def _search_bbox_nearby(
+    gray: np.ndarray,
+    bbox: tuple[int, int, int, int],
+    *,
+    span_cells: int,
+    allow_positive: bool,
+    size_offsets: list[int],
+    independent_axes: bool,
+) -> tuple[int, int, int, int]:
+    """Search nearby square crops and keep the highest board-correction score."""
+    x, y, w, h_box = bbox
+    fh, fw = gray.shape[:2]
+    cell = max(1, min(w, h_box) // 8)
+    step = max(1, cell // 4)
+
+    if allow_positive:
+        offsets = sorted(
+            set(range(-span_cells * cell, span_cells * cell + 1, step))
+            | {0, -span_cells * cell, span_cells * cell}
+        )
+    else:
+        offsets = sorted(
+            set(range(-span_cells * cell, 1, step))
+            | {0, -span_cells * cell}
+        )
+
+    best = bbox
+    best_score = _bbox_correction_score(gray, bbox)
+
+    for size_delta in size_offsets:
+        side = w + size_delta
+        if side < 64 or side > min(fw, fh):
+            continue
+
+        for dy in offsets:
+            for dx in offsets:
+                if independent_axes:
+                    nx = max(0, min(x + dx, fw - side))
+                    ny = max(0, min(y + dy, fh - side))
+                else:
+                    center_x = x + w // 2 + dx
+                    center_y = y + h_box // 2 + dy
+                    nx = max(0, min(center_x - side // 2, fw - side))
+                    ny = max(0, min(center_y - side // 2, fh - side))
+
+                candidate = (nx, ny, side, side)
+                score = _bbox_correction_score(gray, candidate)
+                if score > best_score:
+                    best = candidate
+                    best_score = score
+
+    return best
+
+
+
 def _correct_grid_bbox(
     gray: np.ndarray,
     bbox: tuple[int, int, int, int],
     *,
-    allow_positive: bool = False,
+    allow_positive: bool = True,
 ) -> tuple[int, int, int, int]:
     """Apply bounded local search for grid-derived full-board boxes.
 
-    Grid detections can be slightly phase-shifted relative to the true border,
-    especially when one side is clamped near a frame edge. Search within one
-    cell of the raw box and keep the highest alignment score.
+    Grid detections can be one file / rank off or a few pixels oversized.
+    Search within one cell of the raw box, including small size tweaks, and
+    score candidates by checkerboard consistency, alignment, and boundary
+    contrast.
     """
     x, y, w, h_box = bbox
-    fh, fw = gray.shape[:2]
-    if max(w, h_box) >= FAST_GRID_CORRECTION_MAX_SIZE:
+    if max(w, h_box) > FAST_GRID_CORRECTION_MAX_SIZE:
         return bbox
 
     cell = max(1, min(w, h_box) // 8)
-    step = max(2, cell // 4)
-    if allow_positive:
-        offsets = sorted(set(range(-cell, cell + 1, step)) | {0, -cell, cell})
-    else:
-        offsets = sorted(set(range(-cell, 1, step)) | {0, -cell})
+    size_offsets = sorted({0, -(cell // 2), -2, -1, 1, 2, cell // 2})
+    return _search_bbox_nearby(
+        gray,
+        bbox,
+        span_cells=1,
+        allow_positive=allow_positive,
+        size_offsets=size_offsets,
+        independent_axes=False,
+    )
 
-    best_score = _overlay_alignment_score(gray[y : y + h_box, x : x + w])
+
+
+def _bbox_seed_rescue_score(
+    gray: np.ndarray,
+    bbox: tuple[int, int, int, int],
+) -> float:
+    """Score large seed rescues by edge strength and checkerboard consistency."""
+    x, y, w, h_box = bbox
+    region = gray[y : y + h_box, x : x + w]
+    contrasts = _bbox_edge_values(gray, bbox)
+    edge_score = 0.0
+    if contrasts:
+        edge_score = float(np.mean(contrasts) + min(contrasts))
+    return edge_score - _checkerboard_std(region)
+
+
+
+def _rescue_large_seed_bbox(
+    gray: np.ndarray,
+    bbox: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    """Run a broader local search for large seed-only detections.
+
+    This path is only used when expansion and full-frame grid fallback both
+    fail. Large seeds can still be close to the true board but miss by several
+    cells, especially on graphics-heavy broadcasts. Require a meaningful score
+    improvement before accepting the broader search result.
+    """
+    if max(bbox[2], bbox[3]) < 400:
+        return bbox
+
+    x, y, w, h_box = bbox
+    fh, fw = gray.shape[:2]
+    cell = max(1, min(w, h_box) // 8)
+    step = max(1, cell // 4)
+    offsets = sorted(set(range(-4 * cell, 4 * cell + 1, step)) | {0, -4 * cell, 4 * cell})
+    size_offsets = sorted(set(range(-cell, cell + 1, step)) | {0, -cell, cell})
+
     best = bbox
+    best_score = _bbox_seed_rescue_score(gray, bbox)
 
-    for dy in offsets:
+    for size_delta in size_offsets:
+        side = w + size_delta
+        if side < 64 or side > min(fw, fh):
+            continue
         for dx in offsets:
-            nx = max(0, min(x + dx, fw - w))
-            ny = max(0, min(y + dy, fh - h_box))
-            if nx == x and ny == y:
-                continue
+            nx = max(0, min(x + dx, fw - side))
+            for dy in offsets:
+                ny = max(0, min(y + dy, fh - side))
+                candidate = (nx, ny, side, side)
+                score = _bbox_seed_rescue_score(gray, candidate)
+                if score > best_score:
+                    best = candidate
+                    best_score = score
 
-            score = _overlay_alignment_score(gray[ny : ny + h_box, nx : nx + w])
-            if score > best_score:
-                best_score = score
-                best = (nx, ny, w, h_box)
-
-    return best
+    if best_score > _bbox_seed_rescue_score(gray, bbox) + 5.0:
+        return best
+    return bbox
 
 
 def _correct_one_cell_offset(

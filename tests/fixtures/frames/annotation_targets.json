@@ -1,0 +1,38 @@
+[
+  {
+    "key": "WPBivTDae7I/25pct",
+    "issue": "shows Kasparov's head to the left of the overlay; only 6 columns visible"
+  },
+  {
+    "key": "AdlCle5av0Y/25pct",
+    "issue": "shows a lady, not an overlay"
+  },
+  {
+    "key": "a-TXn07I3sw/25pct",
+    "issue": "shows only part of the board"
+  },
+  {
+    "key": "hryRA0-fqm0/50pct",
+    "issue": "shows only part of the board"
+  },
+  {
+    "key": "tWpz6YUl2FA/50pct",
+    "issue": "shows a clock beneath the board; only 7 rows visible"
+  },
+  {
+    "key": "p2zvIFN8CUI/50pct",
+    "issue": "shows part of a head and background, no overlay"
+  },
+  {
+    "key": "hJtpiLkFwXE/25pct",
+    "issue": "shows a real board and hand, not an overlay"
+  },
+  {
+    "key": "EZdVJ2g-tFo/25pct",
+    "issue": "shows 6 rows and a clock beneath the board"
+  },
+  {
+    "key": "eS2VM_kw5g8/25pct",
+    "issue": "shows only part of the board"
+  }
+]

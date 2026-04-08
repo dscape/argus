@@ -17,13 +17,14 @@ import cv2
 import numpy as np
 from pipeline.db.connection import get_conn
 from pipeline.overlay.auto_calibration import (
+    _grid_scan_frames,
     compute_camera_bbox,
     detect_board_orientation,
     detect_board_theme,
 )
 from pipeline.overlay.grid_detector import detect_grid
 from pipeline.overlay.piece_classifier import CLASS_TO_PIECE, classify_squares
-from pipeline.overlay.scanner import detect_overlay_in_frame
+from pipeline.overlay.scanner import OverlayDetection, detect_overlay_fast
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,25 @@ def _draw_bboxes(
         cv2.rectangle(vis, (x, y - th - 6), (x + tw + 4, y), color, -1)
         cv2.putText(vis, label, (x + 2, y - 4), font, font_scale, (255, 255, 255), thickness)
     return vis
+
+
+def _detect_overlay_for_eval(frame: np.ndarray) -> OverlayDetection:
+    """Use the same overlay-localization strategy as auto-calibration.
+
+    Calibration evaluation is meant to validate the auto-calibration stack, so
+    it should not rely on the older generic frame scanner. Prefer the precise
+    detector used by auto-calibration, then fall back to the grid scan used
+    when the fast seed is unavailable.
+    """
+    detection = detect_overlay_fast(frame)
+    if detection.found and detection.bbox is not None:
+        return detection
+
+    grid_detection, _ = _grid_scan_frames([(frame, "eval")])
+    if grid_detection is not None:
+        return grid_detection
+
+    return OverlayDetection(found=False, frame_resolution=(frame.shape[1], frame.shape[0]))
 
 
 def _is_valid_fen(class_grid: list[list[int]]) -> tuple[bool, str]:
@@ -287,7 +307,7 @@ def inspect_calibration(clip_id: int) -> dict:
         frame_result: dict = {"timestamp": round(ts, 2)}
 
         # 5a. Overlay detection IoU
-        detection = detect_overlay_in_frame(frame)
+        detection = _detect_overlay_for_eval(frame)
         if detection.found and detection.bbox:
             detected_bbox = detection.bbox
             iou = _bbox_iou(detected_bbox, scaled_overlay_bbox)

@@ -29,6 +29,7 @@ _CACHE_TTL = 300  # 5 minutes
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 _LEGACY_FRAMES_DIR = _PROJECT_ROOT / "data" / "overlay" / "dataset" / "frames"
 _LEGACY_GT_PATH = _LEGACY_FRAMES_DIR / "ground_truth.json"
+_FIXTURE_TARGETS_PATH = _PROJECT_ROOT / "tests" / "fixtures" / "frames" / "annotation_targets.json"
 
 
 def _load_ground_truth() -> dict:
@@ -47,14 +48,48 @@ def _save_ground_truth(data: dict) -> None:
     tmp.replace(GROUND_TRUTH_PATH)
 
 
+def _load_annotation_targets() -> tuple[list[str], dict[str, str]]:
+    """Return tracked fixture targets in the order they should be annotated."""
+    if not _FIXTURE_TARGETS_PATH.exists():
+        return [], {}
+
+    raw = json.loads(_FIXTURE_TARGETS_PATH.read_text())
+    if not isinstance(raw, list):
+        return [], {}
+
+    ordered_keys: list[str] = []
+    issues: dict[str, str] = {}
+
+    for item in raw:
+        if isinstance(item, str):
+            key = item.strip()
+            issue = ""
+        elif isinstance(item, dict):
+            key = str(item.get("key", "")).strip()
+            issue = str(item.get("issue", "")).strip()
+        else:
+            continue
+
+        if not key or key in issues or key in ordered_keys:
+            continue
+
+        ordered_keys.append(key)
+        if issue:
+            issues[key] = issue
+
+    return ordered_keys, issues
+
+
+
 def _discover_frame_paths() -> list[tuple[str, str]]:
-    """Scan filesystem for hires frames. Result is cached in-memory."""
+    """Scan filesystem for annotation frames. Result is cached in-memory."""
     global _frame_cache, _frame_cache_time  # noqa: PLW0603
     now = time.monotonic()
     if _frame_cache is not None and (now - _frame_cache_time) < _CACHE_TTL:
         return _frame_cache
 
     found: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
 
     if VIDEOS_DIR.exists():
         base = str(VIDEOS_DIR)
@@ -62,16 +97,22 @@ def _discover_frame_paths() -> list[tuple[str, str]]:
             for entry in os.scandir(base):
                 if not entry.is_dir(follow_symlinks=False):
                     continue
-                hires = os.path.join(entry.path, "hires")
-                if not os.path.isdir(hires):
-                    continue
                 vid = entry.name
-                try:
-                    for img in os.scandir(hires):
-                        if img.name.endswith(".jpg"):
-                            found.append((vid, img.name[:-4]))
-                except OSError:
-                    continue
+                for tier in ("hires", "fullres"):
+                    frame_dir = os.path.join(entry.path, tier)
+                    if not os.path.isdir(frame_dir):
+                        continue
+                    try:
+                        for img in os.scandir(frame_dir):
+                            if not img.name.endswith(".jpg"):
+                                continue
+                            item = (vid, img.name[:-4])
+                            if item in seen:
+                                continue
+                            seen.add(item)
+                            found.append(item)
+                    except OSError:
+                        continue
         except OSError:
             pass
 
@@ -82,7 +123,11 @@ def _discover_frame_paths() -> list[tuple[str, str]]:
                 continue
             vid = video_dir.name
             for img_path in video_dir.glob("*.jpg"):
-                found.append((vid, img_path.stem))
+                item = (vid, img_path.stem)
+                if item in seen:
+                    continue
+                seen.add(item)
+                found.append(item)
 
     _frame_cache = found
     _frame_cache_time = now
@@ -95,13 +140,11 @@ def _invalidate_frame_cache() -> None:
 
 
 def list_frames() -> list[dict]:
-    """List all hires frames with annotation status.
-
-    Returns unannotated frames in random order (to avoid sampling bias),
-    followed by annotated frames sorted by annotation time.
-    """
+    """List all annotation frames with target fixtures prioritized first."""
     gt = _load_ground_truth()
     paths = _discover_frame_paths()
+    target_keys, target_issues = _load_annotation_targets()
+    target_index = {key: idx for idx, key in enumerate(target_keys)}
 
     frames = []
     for video_id, label in paths:
@@ -121,32 +164,74 @@ def list_frames() -> list[dict]:
                     annotation.get("bbox")
                     if annotation else None
                 ),
+                "is_target": key in target_index,
+                "target_issue": target_issues.get(key),
             }
         )
 
-    # Split into annotated vs unannotated
-    annotated = [f for f in frames if f["annotated"]]
-    unannotated = [f for f in frames if not f["annotated"]]
+    target_unannotated = [
+        f for f in frames if f["is_target"] and not f["annotated"]
+    ]
+    target_annotated = [
+        f for f in frames if f["is_target"] and f["annotated"]
+    ]
+    other_unannotated = [
+        f for f in frames if not f["is_target"] and not f["annotated"]
+    ]
+    other_annotated = [
+        f for f in frames if not f["is_target"] and f["annotated"]
+    ]
 
-    # Randomize unannotated to avoid sampling bias
-    random.shuffle(unannotated)
-
-    # Annotated at end, sorted by annotation time (most recent first)
-    annotated.sort(
+    target_unannotated.sort(key=lambda f: target_index[f["key"]])
+    target_annotated.sort(key=lambda f: target_index[f["key"]])
+    random.shuffle(other_unannotated)
+    other_annotated.sort(
         key=lambda f: gt.get(f["key"], {}).get("annotated_at", ""),
         reverse=True,
     )
 
-    return unannotated + annotated
+    return target_unannotated + target_annotated + other_unannotated + other_annotated
+
+
+def _read_image_size(path: Path) -> tuple[int, int] | None:
+    """Return image dimensions as (width, height)."""
+    img = cv2.imread(str(path))
+    if img is None:
+        return None
+    height, width = img.shape[:2]
+    return width, height
+
 
 
 def get_frame_path(video_id: str, label: str) -> Path | None:
-    """Resolve and validate a frame file path (hires preferred)."""
-    # New layout
-    path = _frame_path(video_id, "hires", label)
-    if path.exists():
-        return path
-    # Legacy
+    """Resolve and validate a frame file path.
+
+    Existing annotations keep using the tier whose dimensions match the saved
+    ground-truth entry. New annotations keep the historical hires-first
+    behavior, with fullres filling gaps when hires is unavailable.
+    """
+    key = f"{video_id}/{label}"
+    annotation = _load_ground_truth().get(key)
+    expected_size = None
+    if annotation is not None:
+        expected_size = (
+            annotation.get("frame_width"),
+            annotation.get("frame_height"),
+        )
+
+    hires = _frame_path(video_id, "hires", label)
+    fullres = _frame_path(video_id, "fullres", label)
+
+    if expected_size is not None:
+        for path in (hires, fullres):
+            if path.exists() and _read_image_size(path) == expected_size:
+                return path
+
+    if hires.exists():
+        return hires
+    if fullres.exists():
+        return fullres
+
     legacy = _LEGACY_FRAMES_DIR / video_id / f"{label}.jpg"
     if legacy.exists():
         return legacy

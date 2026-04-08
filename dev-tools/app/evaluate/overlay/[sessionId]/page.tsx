@@ -2,17 +2,17 @@
 
 import { useParams } from "next/navigation";
 import { useState, useEffect } from "react";
-import OverlayInspector from "@/components/evaluate/OverlayInspector";
-import { getOverlayTestSession, type OverlayTestResult } from "@/lib/api";
+import OverlayEvalInspector from "@/components/evaluate/OverlayEvalInspector";
+import { getOverlayEvalSession, type OverlayEvalResult } from "@/lib/api";
 
-export default function OverlaySessionPage() {
+export default function OverlayEvalSessionPage() {
   const params = useParams();
   const sessionId = params.sessionId as string;
   const [session, setSession] = useState<{
     id: string;
-    results: OverlayTestResult[];
-    accuracy: number | null;
-    piece_accuracy: number | null;
+    results: OverlayEvalResult[];
+    detection_rate: number | null;
+    fen_success_rate: number | null;
     pin_state: Record<string, boolean>;
     created_at: string;
   } | null>(null);
@@ -22,12 +22,12 @@ export default function OverlaySessionPage() {
   useEffect(() => {
     async function load() {
       try {
-        const data = await getOverlayTestSession(sessionId);
+        const data = await getOverlayEvalSession(sessionId);
         setSession({
           id: data.id,
-          results: (data.results ?? []) as OverlayTestResult[],
-          accuracy: data.accuracy,
-          piece_accuracy: data.piece_accuracy,
+          results: (data.results ?? []) as OverlayEvalResult[],
+          detection_rate: data.detection_rate,
+          fen_success_rate: data.fen_success_rate,
           pin_state: data.pin_state ?? {},
           created_at: data.created_at,
         });
@@ -54,5 +54,5 @@ export default function OverlaySessionPage() {
     return <p className="text-sm text-red-600">{error ?? "Session not found"}</p>;
   }
 
-  return <OverlayInspector initialSession={session} />;
+  return <OverlayEvalInspector initialSession={session} />;
 }

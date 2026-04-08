@@ -1,7 +1,7 @@
 "use client";
 
-import OverlayInspector from "@/components/evaluate/OverlayInspector";
+import OverlayEvalInspector from "@/components/evaluate/OverlayEvalInspector";
 
-export default function OverlayPage() {
-  return <OverlayInspector />;
+export default function OverlayEvalPage() {
+  return <OverlayEvalInspector />;
 }

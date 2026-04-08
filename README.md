@@ -137,6 +137,10 @@ make down     # stop everything
 
 If Blender is not installed, `make up` skips it with a warning — the other services still start.
 
+On startup, `make up` also checks for the chess-positions dataset under
+`data/overlay/train/` and `data/overlay/val/`. If either split is missing, it prompts
+you to download it via the Kaggle CLI so overlay evaluation works out of the box.
+
 ---
 
 ## Quick Start: Training
@@ -484,12 +488,15 @@ Feature caching pre-computes DINOv2 embeddings once, then trains only the MLP he
 
 ### Data Setup
 
-The chess-positions dataset is not included in the repo. Extract from the downloaded zip:
+The chess-positions dataset is not included in the repo.
 
-```bash
-mkdir -p data/overlay
-cd data/overlay && unzip ~/Downloads/ChessPositions.zip "train/*" "test/*"
-```
+If `data/overlay/train/` or `data/overlay/val/` is missing, `make up` prompts to
+download it with the Kaggle CLI.
+
+For manual setup, put the dataset splits here:
+
+- `train/` → `data/overlay/train/`
+- `test/` → `data/overlay/val/`
 
 ---
 

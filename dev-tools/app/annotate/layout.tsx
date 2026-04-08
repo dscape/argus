@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 
 const TABS = [
   { id: "screen", label: "Screen", href: "/annotate/screen" },
-  { id: "overlay", label: "Overlay", href: "/annotate/overlay" },
   { id: "bbox", label: "BBox", href: "/annotate/bbox" },
 ] as const;
 

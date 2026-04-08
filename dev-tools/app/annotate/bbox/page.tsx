@@ -12,6 +12,8 @@ interface FrameEntry {
   annotated: boolean;
   has_overlay: boolean | null;
   bbox: number[] | null;
+  is_target?: boolean;
+  target_issue?: string | null;
 }
 
 interface RefineResult {
@@ -52,6 +54,16 @@ export default function OverlayBboxPage() {
   useEffect(() => {
     fetchFrames();
   }, [fetchFrames]);
+
+  useEffect(() => {
+    if (frames.length === 0) {
+      if (selectedKey !== null) setSelectedKey(null);
+      return;
+    }
+    if (!selectedKey || !frames.some((frame) => frame.key === selectedKey)) {
+      setSelectedKey(frames[0].key);
+    }
+  }, [frames, selectedKey]);
 
   // Load image when selection changes
   useEffect(() => {
@@ -257,15 +269,23 @@ export default function OverlayBboxPage() {
   };
 
   const annotatedCount = frames.filter((f) => f.annotated).length;
+  const remainingTargetCount = frames.filter(
+    (f) => f.is_target && !f.annotated,
+  ).length;
 
   return (
     <div className="flex gap-4 h-[calc(100vh-180px)]">
       {/* Sidebar */}
       <div className="w-64 shrink-0 border rounded-lg overflow-y-auto">
-        <div className="p-3 border-b bg-muted/50">
+        <div className="p-3 border-b bg-muted/50 space-y-1">
           <div className="text-sm font-medium">
             Frames ({annotatedCount}/{frames.length} annotated)
           </div>
+          {remainingTargetCount > 0 && (
+            <div className="text-xs text-amber-700">
+              {remainingTargetCount} fixture targets remaining
+            </div>
+          )}
         </div>
         {frames.map((f) => (
           <button
@@ -273,9 +293,14 @@ export default function OverlayBboxPage() {
             onClick={() => setSelectedKey(f.key)}
             className={`w-full text-left px-3 py-2 text-sm border-b flex items-center gap-2 hover:bg-muted/50 transition-colors ${
               f.key === selectedKey ? "bg-muted" : ""
-            }`}
+            } ${f.is_target ? "border-l-2 border-l-amber-500" : ""}`}
           >
             <span className="flex-1 truncate font-mono text-xs">{f.key}</span>
+            {f.is_target && (
+              <span className="text-[10px] px-1 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">
+                target
+              </span>
+            )}
             {f.annotated &&
               (f.has_overlay ? (
                 <Check className="w-4 h-4 text-green-500 shrink-0" />
@@ -306,7 +331,13 @@ export default function OverlayBboxPage() {
             </div>
 
             {/* Controls */}
-            <div className="mt-3 flex items-center gap-3 flex-wrap">
+            <div className="mt-3 space-y-3">
+              {selected?.is_target && selected.target_issue && (
+                <div className="text-xs px-2.5 py-2 rounded border border-amber-200 bg-amber-50 text-amber-800">
+                  Fixture target: {selected.target_issue}
+                </div>
+              )}
+              <div className="flex items-center gap-3 flex-wrap">
               {currentBbox && (
                 <div className="text-xs font-mono text-muted-foreground">
                   bbox: [{currentBbox.join(", ")}]
@@ -369,6 +400,7 @@ export default function OverlayBboxPage() {
                 Next
                 <ChevronRight className="w-3 h-3 inline ml-1" />
               </button>
+              </div>
             </div>
           </>
         ) : (

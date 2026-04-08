@@ -38,7 +38,7 @@ wandb/
 runs/
 
 # Data (generated, not source)
-data/
+/data
 *.pt
 *.pth
 *.ckpt

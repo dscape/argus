@@ -25,13 +25,11 @@ class TestVideoHasUnsavedFrames:
     @patch.object(overlay_test_service, "_resolve_frame_path")
     def test_partial_saves_still_count_as_candidates(self, mock_resolve) -> None:
         """A video stays eligible while it still has an unsaved extraction frame."""
-        mock_resolve.side_effect = (
-            lambda _video_id, frame_name: object() if frame_name in ("25pct", "50pct") else None
+        mock_resolve.side_effect = lambda _video_id, frame_name: (
+            object() if frame_name in ("25pct", "50pct") else None
         )
 
-        assert overlay_test_service._video_has_unsaved_frames(
-            "vid-partial", {"vid-partial:25pct"}
-        )
+        assert overlay_test_service._video_has_unsaved_frames("vid-partial", {"vid-partial:25pct"})
 
 
 class TestGetExtractionCandidates:

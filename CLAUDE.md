@@ -26,6 +26,8 @@ UI: http://localhost:3000 | API: http://localhost:8000. Frontend proxies `/api/*
 | `data/` | Training data, cached features, board images |
 | `weights/` | Committed model weights (screening, overlay, dinov2-base) |
 | `pipeline/db/` | PostgreSQL schema and migrations |
+| `outputs/` | For any sort of non-transient outputs, for human inspection |
+| `scripts/` | Scripts that can be re-used to assist development of argus |
 
 ## Naming Conventions
 
@@ -34,7 +36,7 @@ Consistent identifiers used across nav, code, data dirs, configs, and weights:
 | Identifier | Meaning |
 |-----------|---------|
 | `screening` | Video classification (OTB vs not) |
-| `overlay` | Overlay detection + piece classification |
+| `overlay` | Overlay detection + piece classification. An overlay is a digital chess board shown on stream — "overlay" or NULL can have one |
 | `segmentation` | Video segmentation |
 | `calibration` | Board calibration |
 | `argus` | The main VLA model |
