@@ -1,10 +1,5 @@
-"""VLM prompt templates for chess video analysis.
+"""Prompt templates for video analysis."""
 
-All prompts are designed for Gemma 4 via mlx-vlm. They leverage the model's
-vision capabilities (SigLIP2 encoder) for chess-specific understanding.
-"""
-
-# Scene understanding: describe what's happening in the chess video
 SCENE_ANALYSIS = """\
 You are analyzing a chess video frame. Describe what you see:
 
@@ -26,7 +21,6 @@ Respond in JSON format:
     "additional_notes": "any other relevant observations"
 }"""
 
-# Board position reading: identify pieces on the board
 BOARD_READING = """\
 You are looking at a chess board. For each square, identify the piece.
 Use standard chess notation:
@@ -40,31 +34,3 @@ For empty squares, use the count (e.g., "8" for an empty rank).
 
 Respond with just the FEN piece placement, nothing else.
 Example: rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR"""
-
-# Move detection: compare two frames to identify a move
-MOVE_DETECTION = """\
-Compare these two chess board positions. A move has been made between them.
-
-1. What piece moved?
-2. From which square to which square?
-3. Was anything captured?
-4. Is this a special move (castling, en passant, promotion)?
-
-Respond in JSON format:
-{
-    "piece": "piece that moved (e.g., Knight)",
-    "from_square": "e.g., e2",
-    "to_square": "e.g., e4",
-    "capture": true | false,
-    "special": null | "castling_kingside" | "castling_queenside" | "en_passant" | "promotion",
-    "uci": "e.g., e2e4",
-    "san": "e.g., e4",
-    "confidence": 0.0 to 1.0
-}"""
-
-# Piece identification on a cropped square
-PIECE_IDENTIFICATION = """\
-What chess piece is on this square? If empty, say "empty".
-Identify the color (white or black) and piece type.
-Respond with the piece symbol: K, Q, R, B, N, P (white),
-k, q, r, b, n, p (black), or "." for empty."""
