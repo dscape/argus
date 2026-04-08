@@ -314,25 +314,13 @@ async def update_overlay_pins(session_id: str, body: UpdateOverlayPinsRequest):
 
 @router.get("/overlay-test/board-image/{filename}")
 async def get_board_image(filename: str):
-    """Serve a test board image by filename.
-
-    Real samples are prefixed with ``real__`` and served from the real overlay
-    test directory; all other filenames are served from the synthetic test dir.
-    """
-    if ".." in filename:
+    """Serve a synthetic or real board image used by the FEN inspector."""
+    if ".." in filename or "/" in filename:
         raise HTTPException(400, "Invalid filename")
-    _REAL_PREFIX = overlay_test_service._REAL_PREFIX
-    if filename.startswith(_REAL_PREFIX):
-        actual = filename[len(_REAL_PREFIX):]
-        if ".." in actual or "/" in actual:
-            raise HTTPException(400, "Invalid filename")
-        path = overlay_test_service.REAL_OVERLAY_TEST_DIR / actual
-    else:
-        if "/" in filename:
-            raise HTTPException(400, "Invalid filename")
-        path = overlay_test_service.CHESS_POSITIONS_TEST_DIR / filename
-    if not path.exists():
-        raise HTTPException(404, f"Board image not found: {filename}")
+    try:
+        path = overlay_test_service.resolve_board_image_path(filename)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
     return FileResponse(path, media_type="image/jpeg")
 
 

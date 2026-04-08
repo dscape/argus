@@ -86,6 +86,7 @@ export default function FenInspector({
     [],
   );
   const [showSessionList, setShowSessionList] = useState(false);
+  const [emptyMessage, setEmptyMessage] = useState<string | null>(null);
   const inspectedFiles = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const sessionListRef = useRef<HTMLDivElement>(null);
@@ -175,6 +176,7 @@ export default function FenInspector({
     setPinnedIds(new Set());
     setExpandedIds(new Set());
     setSessionId(null);
+    setEmptyMessage(null);
 
     const collected: OverlayTestResult[] = [];
     const autoPinned = new Set<string>();
@@ -184,6 +186,13 @@ export default function FenInspector({
       // Step 1: get sample filenames
       const excludeArr = Array.from(inspectedFiles.current);
       const { filenames } = await sampleOverlayBoards(sampleSize, excludeArr);
+
+      if (filenames.length === 0) {
+        setEmptyMessage(
+          "No board samples are available. Populate the local overlay board dataset or keep the committed fixture boards checked out.",
+        );
+        return;
+      }
 
       setProgress({ current: 0, total: filenames.length });
 
@@ -307,7 +316,7 @@ export default function FenInspector({
       <div className="flex gap-2 items-center flex-wrap">
         <span className="text-sm text-muted-foreground">
           Samples from overlays:
-          <InfoIcon tip="Randomly samples chess-position boards: 80% synthetic (400×400 rendered boards) and 20% real overlay crops extracted from video footage." />
+          <InfoIcon tip="Samples local synthetic/real overlay boards when available, and falls back to committed board fixtures so the inspector remains usable in a fresh clone." />
         </span>
         <input
           type="number"
@@ -392,6 +401,12 @@ export default function FenInspector({
           </button>
         )}
       </div>
+
+      {emptyMessage && (
+        <div className="border rounded-lg px-3 py-2 text-sm text-muted-foreground">
+          {emptyMessage}
+        </div>
+      )}
 
       {/* Progress bar */}
       {loading && progress.total > 0 && (

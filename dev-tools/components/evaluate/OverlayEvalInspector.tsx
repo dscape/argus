@@ -87,6 +87,7 @@ export default function OverlayEvalInspector({
     [],
   );
   const [showSessionList, setShowSessionList] = useState(false);
+  const [emptyMessage, setEmptyMessage] = useState<string | null>(null);
 
   // Save/reject/edit state
   const [editedFens, setEditedFens] = useState<Record<string, string>>({});
@@ -219,6 +220,7 @@ export default function OverlayEvalInspector({
     setEditedFens({});
     setRejected(new Set());
     setSaved(new Set());
+    setEmptyMessage(null);
 
     const collected: OverlayEvalResult[] = [];
     const autoPinned = new Set<string>();
@@ -233,6 +235,13 @@ export default function OverlayEvalInspector({
       );
       if (!candRes.ok) throw new Error(await candRes.text());
       const { video_ids } = await candRes.json();
+
+      if (video_ids.length === 0) {
+        setEmptyMessage(
+          "No overlay samples are available. Approve/download overlay videos or keep the committed fixture frames checked out.",
+        );
+        return;
+      }
 
       setProgress({ current: 0, total: video_ids.length });
 
@@ -493,7 +502,7 @@ export default function OverlayEvalInspector({
       <div className="flex gap-2 items-center flex-wrap">
         <span className="text-sm text-muted-foreground">
           Sample from overlay videos:
-          <InfoIcon tip="Samples approved overlay videos and attempts to detect the overlay, extract the grid, and classify the chess position from cached screening frames." />
+          <InfoIcon tip="Samples approved overlay videos when local screening data exists, then falls back to committed fixture frames so the inspector still works in a fresh clone." />
         </span>
         <input
           type="number"
@@ -578,6 +587,12 @@ export default function OverlayEvalInspector({
           </button>
         )}
       </div>
+
+      {emptyMessage && (
+        <div className="border rounded-lg px-3 py-2 text-sm text-muted-foreground">
+          {emptyMessage}
+        </div>
+      )}
 
       {/* Progress bar */}
       {loading && progress.total > 0 && (
