@@ -1,8 +1,7 @@
-"""Board segmentation for the MLX pipeline.
+"""Board segmentation for the optional MLX analysis fallback.
 
 Detection priority:
-1. Existing overlay scanner (fast_overlay_check) — proven, <100ms, handles
-   rendered 2D boards with alternation/checkerboard validation.
+1. Runtime overlay detector — default path for rendered 2D overlays.
 2. SAM 3 text-prompted segmentation — for 3D/OTB boards without overlays.
 3. OpenCV contour fallback — last resort.
 """
@@ -17,7 +16,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from pipeline.mlx.config import MLXPipelineConfig
+from pipeline.analysis.config import VideoAnalysisConfig
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +34,14 @@ class BoardSegment:
     mask: np.ndarray  # (H, W) boolean mask
     confidence: float
     cropped_board: np.ndarray  # (h, w, 3) cropped board region
-    method: str  # "overlay_scanner", "sam3", "contour"
+    method: str  # "overlay_runtime", "sam3", "contour"
 
 
 def _detect_with_overlay_scanner(frame_bgr: np.ndarray) -> BoardSegment | None:
-    """Use the existing overlay scanner to find a rendered 2D board.
+    """Use the runtime overlay detector to find a rendered 2D board."""
+    from pipeline.overlay.scanner import detect_overlay_runtime
 
-    This is the most reliable path for broadcast chess videos with overlays.
-    """
-    from pipeline.overlay.scanner import fast_overlay_check
-
-    detection = fast_overlay_check(frame_bgr)
+    detection = detect_overlay_runtime(frame_bgr)
 
     if not detection.found or detection.bbox is None:
         return None
@@ -76,11 +72,11 @@ def _detect_with_overlay_scanner(frame_bgr: np.ndarray) -> BoardSegment | None:
         mask=mask,
         confidence=detection.score,
         cropped_board=cropped,
-        method="overlay_scanner",
+        method="overlay_runtime",
     )
 
 
-def _load_sam(config: MLXPipelineConfig) -> None:
+def _load_sam(config: VideoAnalysisConfig) -> None:
     """Lazy-load SAM 3 model."""
     global _sam_model, _sam_processor, _sam_loaded
 
@@ -102,7 +98,7 @@ def _load_sam(config: MLXPipelineConfig) -> None:
         logger.debug("sam3 not available, will use contour fallback for non-overlay boards")
 
 
-def _detect_with_sam3(frame_rgb: np.ndarray, config: MLXPipelineConfig) -> BoardSegment | None:
+def _detect_with_sam3(frame_rgb: np.ndarray, config: VideoAnalysisConfig) -> BoardSegment | None:
     """Use SAM 3 text-prompted segmentation."""
     _load_sam(config)
 
@@ -202,7 +198,7 @@ def _detect_with_contours(frame_bgr: np.ndarray) -> BoardSegment | None:
 
 def segment_board(
     frame: np.ndarray,
-    config: MLXPipelineConfig,
+    config: VideoAnalysisConfig,
 ) -> BoardSegment | None:
     """Segment the chess board from a video frame.
 
@@ -212,17 +208,17 @@ def segment_board(
     3. OpenCV contour fallback
 
     Args:
-        frame: (H, W, 3) image. Accepts both RGB and BGR.
+        frame: (H, W, 3) RGB image.
         config: Pipeline configuration.
 
     Returns:
         BoardSegment with the board region, or None if no board found.
     """
     # The overlay scanner expects BGR (OpenCV convention).
-    # The frame from PyAV is RGB, so convert.
+    # The shared analysis pipeline passes RGB frames from PyAV, so convert here.
     frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
-    # 1. Overlay scanner — best for broadcast chess videos
+    # 1. Runtime overlay detector — best for broadcast chess videos
     result = _detect_with_overlay_scanner(frame_bgr)
     if result is not None:
         return result

@@ -152,9 +152,10 @@ export function videoFrameUrl(sessionId: string, index: number): string {
 export async function readOverlayFrame(
   sessionId: string,
   index: number,
-  clipId?: number
+  clipId?: number,
+  readerBackend: string = "overlay"
 ): Promise<FrameOverlayResponse> {
-  let url = `/api/video/${sessionId}/overlay-read?index=${index}`;
+  let url = `/api/video/${sessionId}/overlay-read?index=${index}&reader_backend=${encodeURIComponent(readerBackend)}`;
   if (clipId !== undefined) url += `&clip_id=${clipId}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(await res.text());
@@ -164,9 +165,13 @@ export async function readOverlayFrame(
 export async function detectVideoMoves(
   sessionId: string,
   sampleFps: number = 2.0,
-  clipId?: number
+  clipId?: number,
+  readerBackend: string = "overlay"
 ): Promise<VideoMoveDetectionResponse> {
-  const body: Record<string, unknown> = { sample_fps: sampleFps };
+  const body: Record<string, unknown> = {
+    sample_fps: sampleFps,
+    reader_backend: readerBackend,
+  };
   if (clipId !== undefined) body.clip_id = clipId;
   const res = await fetch(`/api/video/${sessionId}/detect-moves`, {
     method: "POST",

@@ -81,6 +81,7 @@ export interface FrameOverlayResponse {
   timestamp_seconds: number;
   fen: string | null;
   board_ascii: string | null;
+  read_method: string | null;
   overlay_crop_b64: string;
   camera_crop_b64: string;
 }
@@ -107,6 +108,7 @@ export interface GameSegmentResponse {
 export interface VideoMoveDetectionResponse {
   num_frames_sampled: number;
   num_readable: number;
+  reader_backend: string;
   segments: GameSegmentResponse[];
 }
 

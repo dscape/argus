@@ -1,27 +1,20 @@
-"""Piece detection combining grid+PieceClassifier, RF-DETR, and VLM fallback.
+"""Piece detection combining the overlay classifier and a VLM fallback.
 
 Detection priority:
 1. Grid detection + DINOv2 PieceClassifier (proven for 2D overlays)
-2. RF-DETR object proposals (3D boards)
-3. VLM direct board reading (universal fallback)
+2. VLM direct board reading (fallback)
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
 
 import numpy as np
 
-from pipeline.mlx.config import MLXPipelineConfig
+from pipeline.analysis.config import VideoAnalysisConfig
 
 logger = logging.getLogger(__name__)
-
-# Lazy-loaded RF-DETR model
-_rfdetr_model: Any = None
-_rfdetr_loaded: bool = False
-
 
 @dataclass
 class BoardState:
@@ -35,6 +28,7 @@ class BoardState:
 
 def _detect_with_grid_classifier(
     board_crop_bgr: np.ndarray,
+    device: str,
 ) -> BoardState | None:
     """Detect pieces using grid detector + DINOv2 piece classifier.
 
@@ -47,7 +41,7 @@ def _detect_with_grid_classifier(
     from pipeline.overlay.piece_classifier import read_fen_from_frame
 
     try:
-        fen = read_fen_from_frame(board_crop_bgr, device="mps")
+        fen = read_fen_from_frame(board_crop_bgr, device=device)
         if fen is None:
             return None
 
@@ -63,7 +57,7 @@ def _detect_with_grid_classifier(
 
 def _detect_with_vlm(
     board_crop_rgb: np.ndarray,
-    config: MLXPipelineConfig,
+    config: VideoAnalysisConfig,
 ) -> BoardState | None:
     """Use VLM to directly read the board position.
 
@@ -89,19 +83,19 @@ def _detect_with_vlm(
 
 def detect_pieces(
     board_crop: np.ndarray,
-    config: MLXPipelineConfig,
+    config: VideoAnalysisConfig,
     segmenter_method: str = "",
 ) -> BoardState | None:
     """Detect pieces on a board crop and return FEN.
 
-    The crop may be BGR (from overlay scanner) or RGB (from SAM 3).
+    The crop may be BGR (from the runtime overlay detector) or RGB (from SAM 3).
     The segmenter_method hint tells us the format.
 
     Args:
         board_crop: (H, W, 3) cropped board image.
         config: Pipeline configuration.
-        segmenter_method: How the crop was produced ("overlay_scanner"=BGR,
-            "sam3"/"contour"=BGR, else assume BGR).
+        segmenter_method: How the crop was produced ("overlay_runtime" and
+            "contour" produce BGR crops; "sam3" produces RGB).
 
     Returns:
         BoardState with FEN, or None if all methods fail.
@@ -115,13 +109,13 @@ def detect_pieces(
         board_bgr = cv2.cvtColor(board_crop, cv2.COLOR_RGB2BGR)
         board_rgb = board_crop
     else:
-        # overlay_scanner and contour both produce BGR crops
+        # overlay_runtime and contour both produce BGR crops
         board_bgr = board_crop
         board_rgb = cv2.cvtColor(board_crop, cv2.COLOR_BGR2RGB)
 
     # Path 1: Grid + PieceClassifier (fast, proven for overlays)
     if config.use_piece_classifier:
-        result = _detect_with_grid_classifier(board_bgr)
+        result = _detect_with_grid_classifier(board_bgr, config.device)
         if result is not None:
             return result
 

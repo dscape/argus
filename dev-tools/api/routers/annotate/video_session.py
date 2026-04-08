@@ -18,6 +18,7 @@ class OpenVideoRequest(BaseModel):
 class DetectMovesRequest(BaseModel):
     sample_fps: float = 2.0
     clip_id: int | None = None
+    reader_backend: str = "overlay"
 
 
 class GenerateClipsRequest(BaseModel):
@@ -50,11 +51,20 @@ async def get_frame(session_id: str, index: int = Query(...)):
 
 
 @router.get("/{session_id}/overlay-read")
-async def read_overlay(session_id: str, index: int = Query(...), clip_id: int | None = Query(None)):
+async def read_overlay(
+    session_id: str,
+    index: int = Query(...),
+    clip_id: int | None = Query(None),
+    reader_backend: str = Query("overlay"),
+):
     """Read overlay FEN at a specific frame."""
     try:
         return await run_in_threadpool(
-            video_service.read_overlay_at_frame, session_id, index, clip_id
+            video_service.read_overlay_at_frame,
+            session_id,
+            index,
+            clip_id,
+            reader_backend,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -65,7 +75,11 @@ async def detect_moves(session_id: str, body: DetectMovesRequest):
     """Run full move detection on the video."""
     try:
         return await run_in_threadpool(
-            video_service.detect_moves, session_id, body.sample_fps, body.clip_id
+            video_service.detect_moves,
+            session_id,
+            body.sample_fps,
+            body.clip_id,
+            body.reader_backend,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

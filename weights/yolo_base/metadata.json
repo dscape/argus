@@ -1,0 +1,13 @@
+{
+  "source": "Ultralytics assets release v8.4.0",
+  "checkpoints": {
+    "yolo11n.pt": {
+      "intended_use": "Default bootstrap checkpoint for overlay-yolo-train and otb-yolo-train"
+    },
+    "yolov8s-worldv2.pt": {
+      "intended_use": "Optional open-vocabulary YOLO-World checkpoint for experiments",
+      "used_by_default": false
+    }
+  },
+  "notes": "These are committed bootstrap weights for training and experiments. The default runtime detectors still load weights/overlay_yolo/ and weights/otb_yolo/."
+}

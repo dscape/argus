@@ -830,28 +830,25 @@ def cmd_fetch_frames(args):
     print(f"\nDone: {total_frames} frames from {len(videos)} videos")
 
 
-def cmd_mlx_analyze(args):
-    """Analyze a chess video using MLX models on Apple Silicon."""
+def cmd_analyze_video(args):
+    """Analyze a local chess video into PGN and an annotated video."""
     from pathlib import Path
 
-    from pipeline.mlx.config import MLXPipelineConfig
-    from pipeline.mlx.pipeline import MLXChessPipeline
+    from pipeline.analysis.config import VideoAnalysisConfig
+    from pipeline.analysis.pipeline import VideoAnalysisPipeline
 
-    config = MLXPipelineConfig(
-        vlm_model=args.vlm_model,
+    config = VideoAnalysisConfig(
         fps=args.fps,
+        device=args.device,
+        reader_backend=args.reader,
+        scene_backend=args.scene,
         annotate=not args.no_annotate,
         tts=args.tts,
         output_dir=Path(args.output),
-        initial_fen=args.fen,
+        vlm_model=args.vlm_model,
     )
 
-    pipeline = MLXChessPipeline(config)
-    result = pipeline.run(
-        video_path=args.video,
-        vlm_only=args.vlm_only,
-        skip_vlm=args.skip_vlm,
-    )
+    result = VideoAnalysisPipeline(config).run(video_path=args.video)
 
     print(f"\nDone: {result.total_moves} moves detected in {len(result.segments)} game(s)")
     for pgn_path in result.pgn_files:
@@ -1000,8 +997,8 @@ def main():
     p.add_argument(
         "--model",
         type=str,
-        default="yolo11n.pt",
-        help="Pretrained Ultralytics nano checkpoint",
+        default="weights/yolo_base/yolo11n.pt",
+        help="Bootstrap YOLO checkpoint path",
     )
     p.add_argument("--epochs", type=int, default=100, help="Training epochs")
     p.add_argument("--imgsz", type=int, default=640, help="Training image size")
@@ -1081,8 +1078,8 @@ def main():
     p.add_argument(
         "--model",
         type=str,
-        default="yolo11n.pt",
-        help="Pretrained Ultralytics nano checkpoint",
+        default="weights/yolo_base/yolo11n.pt",
+        help="Bootstrap YOLO checkpoint path",
     )
     p.add_argument("--epochs", type=int, default=100, help="Training epochs")
     p.add_argument("--imgsz", type=int, default=640, help="Training image size")
@@ -1225,35 +1222,40 @@ def main():
     p.add_argument("--random", action="store_true",
                    help="Randomize video selection (avoids sampling bias)")
 
-    # mlx-analyze
+    # analyze-video
     p = subparsers.add_parser(
-        "mlx-analyze",
-        help="Analyze chess video with MLX models (Apple Silicon)",
+        "analyze-video",
+        help="Analyze a local chess video into PGN and an annotated video",
     )
     p.add_argument("video", type=str, help="Path to the video file")
     p.add_argument(
+        "--reader", type=str, default="overlay",
+        choices=["overlay", "hybrid"],
+        help="Board reader backend (default: overlay)",
+    )
+    p.add_argument(
+        "--scene", type=str, default="none",
+        choices=["none", "mlx_vlm"],
+        help="Scene analysis backend (default: none)",
+    )
+    p.add_argument(
+        "--device", type=str, default="mps",
+        help="Torch device for overlay piece classification (default: mps)",
+    )
+    p.add_argument(
         "--vlm-model", type=str,
         default="mlx-community/gemma-4-26b-a4b-it-4bit",
-        help="VLM model ID (default: Gemma 4 26B-A4B-IT 4bit)",
+        help="VLM model ID used by hybrid/scene backends",
     )
-    p.add_argument("--fps", type=float, default=1.0, help="Target FPS for frame extraction")
+    p.add_argument("--fps", type=float, default=2.0, help="Target FPS for frame extraction")
     p.add_argument(
-        "--output", type=str, default="outputs/mlx",
-        help="Output directory (default: outputs/mlx)",
+        "--output", type=str, default="outputs/analysis",
+        help="Output directory (default: outputs/analysis)",
     )
-    p.add_argument("--fen", type=str, default=None, help="Starting FEN position")
     p.add_argument("--tts", action="store_true", help="Announce moves via macOS TTS")
     p.add_argument(
         "--no-annotate", action="store_true",
         help="Skip video annotation (just produce PGN)",
-    )
-    p.add_argument(
-        "--vlm-only", action="store_true",
-        help="Only run VLM scene description, skip detection",
-    )
-    p.add_argument(
-        "--skip-vlm", action="store_true",
-        help="Skip VLM analysis, go straight to board detection",
     )
 
     # stats
@@ -1298,7 +1300,7 @@ def main():
         "inspect-calibration": cmd_inspect_calibration,
         "ai-extract-status": cmd_ai_extract_status,
         "fetch-frames": cmd_fetch_frames,
-        "mlx-analyze": cmd_mlx_analyze,
+        "analyze-video": cmd_analyze_video,
         "stats": cmd_stats,
     }
 

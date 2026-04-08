@@ -85,11 +85,12 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
   const [detection, setDetection] = useState<VideoMoveDetectionResponse | null>(null);
   const [detectingMoves, setDetectingMoves] = useState(false);
   const [expandedSegment, setExpandedSegment] = useState<number | null>(null);
+  const [readerBackend, setReaderBackend] = useState<"overlay" | "hybrid">("overlay");
 
   const handleReadFrame = async () => {
     setReadingFrame(true);
     try {
-      const result = await readOverlayFrame(session.session_id, frameIdx, clip.id);
+      const result = await readOverlayFrame(session.session_id, frameIdx, clip.id, readerBackend);
       setOverlayResult(result);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to read overlay");
@@ -101,7 +102,7 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
   const handleDetectMoves = async () => {
     setDetectingMoves(true);
     try {
-      const result = await detectVideoMoves(session.session_id, 2.0, clip.id);
+      const result = await detectVideoMoves(session.session_id, 2.0, clip.id, readerBackend);
       setDetection(result);
       if (result.segments.length > 0) setExpandedSegment(0);
     } catch (e) {
@@ -122,6 +123,17 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
 
       <div className="space-y-2">
         <div className="flex items-center gap-3">
+          <label className="text-xs text-muted-foreground flex flex-col gap-1">
+            Reader
+            <select
+              value={readerBackend}
+              onChange={(e) => setReaderBackend(e.target.value as "overlay" | "hybrid")}
+              className="h-8 rounded-md border bg-background px-2 text-xs"
+            >
+              <option value="overlay">overlay</option>
+              <option value="hybrid">hybrid (MLX fallback)</option>
+            </select>
+          </label>
           <div className="flex-1">
             <div className="text-xs text-muted-foreground mb-1">
               Frame {frameIdx} ({fps > 0 ? (frameIdx / fps).toFixed(1) : 0}s)
@@ -163,6 +175,9 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
                 <div className="space-y-1">
                   <ChessBoard fen={overlayResult.fen} size={200} />
                   <code className="text-[10px] text-muted-foreground break-all block">{overlayResult.fen}</code>
+                  {overlayResult.read_method && (
+                    <p className="text-[10px] text-muted-foreground">method: {overlayResult.read_method}</p>
+                  )}
                 </div>
               ) : (
                 <p className="text-xs text-destructive">Could not read board</p>
@@ -186,7 +201,7 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
           <div className="space-y-2 pl-2">
             <div className="text-xs text-muted-foreground">
               Sampled {detection.num_frames_sampled} frames, {detection.num_readable} readable.
-              Found {detection.segments.length} game(s).
+              Found {detection.segments.length} game(s) using {detection.reader_backend}.
             </div>
             {detection.segments.map((seg) => (
               <SegmentCard

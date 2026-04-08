@@ -63,7 +63,7 @@ Verify Blender: `blender --version` should show 4.0 or later. You can also set t
 ```bash
 git clone <repo-url> && cd argus
 git lfs install
-git lfs pull --include="weights/screening/*,weights/overlay/*,weights/overlay_yolo/*"
+git lfs pull --include="weights/screening/*,weights/overlay/*,weights/overlay_yolo/*,weights/otb_yolo/*,weights/yolo_base/*"
 cp .env.example .env    # fill in HF_TOKEN, API keys, etc.
 
 # Option 1: direnv (recommended) — auto-activates venv + loads .env on cd
@@ -155,6 +155,31 @@ make typecheck  # mypy on src/argus/
 make format     # ruff format + auto-fix (run before committing)
 ```
 
+### Pre-merge Validation for Video Analysis Changes
+
+Use this checklist before merging any change that touches `pipeline/analysis/`, `pipeline/overlay/`, `pipeline/mlx/`, or the dev-tools video flows.
+
+```bash
+# Automated gates
+make typecheck
+make lint
+make test
+
+# Local-video analysis smoke test
+python -m pipeline.cli analyze-video data/videos/<VIDEO_ID>/<VIDEO_ID>.mp4 \
+  --reader overlay --scene none --no-annotate
+python -m pipeline.cli analyze-video data/videos/<VIDEO_ID>/<VIDEO_ID>.mp4 \
+  --reader hybrid --scene mlx_vlm --no-annotate
+```
+
+Manual checks to record in the PR description or merge notes:
+
+1. **Synthetic data** — generate a small synthetic batch (`make datagen ARGS="--num-clips 10 --output-dir data/dev"`) and verify it still loads.
+2. **Video Annotator** — in dev-tools, read a frame and run move detection with both `overlay` and `hybrid` readers.
+3. **Segmentation + calibration** — run auto-segment and auto-calibrate on at least one downloaded video.
+4. **Evaluations** — sample at least one screening / overlay / segmentation / calibration evaluation flow in dev-tools.
+5. **End-to-end videos** — process several downloaded videos through screening, segmentation, calibration, move reading, and clip generation.
+
 ---
 
 ## Code Style
@@ -216,7 +241,7 @@ exist only to train and evaluate that detector.
 # 1. Export the current training labels
 python -m pipeline overlay-yolo-export
 
-# 2. Train a detector
+# 2. Train a detector (defaults to weights/yolo_base/yolo11n.pt)
 python -m pipeline overlay-yolo-train --epochs 40 --batch 8
 
 # 3. Visualize detector output on the committed fixture set

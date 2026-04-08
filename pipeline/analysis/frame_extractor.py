@@ -1,8 +1,4 @@
-"""Video frame extraction using PyAV.
-
-Generator-based extraction to avoid loading entire videos into memory.
-Follows the same PyAV pattern as src/argus/inference/pipeline.py.
-"""
+"""Video frame extraction helpers."""
 
 from __future__ import annotations
 
@@ -21,24 +17,13 @@ logger = logging.getLogger(__name__)
 class FrameData:
     """A single extracted video frame."""
 
-    index: int  # Sequential frame number (0-based)
-    timestamp: float  # Timestamp in seconds
-    image: np.ndarray  # (H, W, 3) RGB uint8
+    index: int
+    timestamp: float
+    image: np.ndarray
 
 
-def extract_frames(
-    video_path: str | Path,
-    fps: float = 1.0,
-) -> Iterator[FrameData]:
-    """Extract frames from a video at the target FPS.
-
-    Args:
-        video_path: Path to the video file.
-        fps: Target frames per second for extraction.
-
-    Yields:
-        FrameData for each extracted frame.
-    """
+def extract_frames(video_path: str | Path, fps: float = 1.0) -> Iterator[FrameData]:
+    """Extract frames from a video at the target FPS."""
     video_path = Path(video_path)
     if not video_path.exists():
         raise FileNotFoundError(f"Video not found: {video_path}")
@@ -57,7 +42,6 @@ def extract_frames(
 
     frame_count = 0
     extracted = 0
-
     for frame in container.decode(video=0):
         if frame_count % frame_skip == 0:
             image = frame.to_ndarray(format="rgb24")
@@ -70,21 +54,8 @@ def extract_frames(
     logger.info("Extracted %d frames from %d total", extracted, frame_count)
 
 
-def sample_frames(
-    video_path: str | Path,
-    count: int = 8,
-) -> list[FrameData]:
-    """Sample N evenly-spaced frames from a video.
-
-    Useful for VLM scene analysis where we need a few representative frames.
-
-    Args:
-        video_path: Path to the video file.
-        count: Number of frames to sample.
-
-    Returns:
-        List of sampled FrameData.
-    """
+def sample_frames(video_path: str | Path, count: int = 8) -> list[FrameData]:
+    """Sample evenly spaced frames from a video."""
     video_path = Path(video_path)
     if not video_path.exists():
         raise FileNotFoundError(f"Video not found: {video_path}")
@@ -94,14 +65,12 @@ def sample_frames(
     total_frames = stream.frames or 0
     stream_fps = float(stream.average_rate or 30.0)
 
-    # If total_frames is unknown, do a first pass to count
     if total_frames <= 0:
         for _ in container.decode(video=0):
             total_frames += 1
         container.close()
         container = av.open(str(video_path))
 
-    # Compute which frame indices to grab
     if total_frames <= count:
         target_indices = set(range(total_frames))
     else:
@@ -111,7 +80,6 @@ def sample_frames(
     frames: list[FrameData] = []
     frame_idx = 0
     sample_idx = 0
-
     for frame in container.decode(video=0):
         if frame_idx in target_indices:
             image = frame.to_ndarray(format="rgb24")

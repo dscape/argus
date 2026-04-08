@@ -8,6 +8,7 @@ from pathlib import Path
 from pipeline.paths import PROJECT_ROOT
 
 DEFAULT_RUNS_DIR = PROJECT_ROOT / "outputs" / "otb_yolo"
+DEFAULT_MODEL_PATH = PROJECT_ROOT / "weights" / "yolo_base" / "yolo11n.pt"
 
 
 @dataclass(frozen=True)
@@ -19,7 +20,7 @@ class YoloTrainResult:
 def train_otb_yolo(
     dataset_yaml: Path,
     *,
-    model_name: str = "yolo11n.pt",
+    model_name: str = str(DEFAULT_MODEL_PATH),
     epochs: int = 100,
     imgsz: int = 640,
     batch: int = 16,

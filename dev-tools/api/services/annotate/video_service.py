@@ -11,6 +11,9 @@ import chess
 import cv2
 import numpy as np
 
+from pipeline.analysis.board_reading import read_overlay_crop
+from pipeline.analysis.config import VideoAnalysisConfig
+
 _FRAME_CACHE_MAX = 64
 
 # Session storage
@@ -135,10 +138,13 @@ def _get_clip_calibration(clip_id: int):
     )
 
 
-def read_overlay_at_frame(session_id: str, frame_index: int, clip_id: int | None = None) -> dict:
+def read_overlay_at_frame(
+    session_id: str,
+    frame_index: int,
+    clip_id: int | None = None,
+    reader_backend: str = "overlay",
+) -> dict:
     """Read overlay FEN at a specific frame. Optionally use a clip's calibration."""
-    from pipeline.overlay.grid_detector import detect_grid
-    from pipeline.overlay.piece_classifier import read_fen_with_grid
 
     session = _sessions.get(session_id)
     if session is None:
@@ -166,11 +172,11 @@ def read_overlay_at_frame(session_id: str, frame_index: int, clip_id: int | None
     ox, oy, ow, oh = calibration.overlay
     overlay_img = frame[oy : oy + oh, ox : ox + ow]
 
-    grid = detect_grid(overlay_img)
-    fen: str | None = None
+    config = VideoAnalysisConfig(reader_backend=reader_backend, scene_backend="none", device="cpu")
+    read_result = read_overlay_crop(overlay_img, config)
+    fen = read_result.fen
     board: chess.Board | None = None
-    if grid is not None:
-        fen = read_fen_with_grid(overlay_img, grid)
+    if fen is not None:
         board = chess.Board(fen=None)
         board.set_fen(fen + " w - - 0 1")
 
@@ -179,18 +185,20 @@ def read_overlay_at_frame(session_id: str, frame_index: int, clip_id: int | None
         "timestamp_seconds": round(frame_index / fps, 3) if fps > 0 else 0,
         "fen": fen,
         "board_ascii": str(board) if board else None,
+        "read_method": read_result.method,
         "overlay_crop_b64": overlay_crop_b64,
         "camera_crop_b64": camera_crop_b64,
     }
 
 
-def detect_moves(session_id: str, sample_fps: float = 2.0, clip_id: int | None = None) -> dict:
+def detect_moves(
+    session_id: str,
+    sample_fps: float = 2.0,
+    clip_id: int | None = None,
+    reader_backend: str = "overlay",
+) -> dict:
     """Run full move detection on the video. If clip_id is given, restrict to that clip's time range and calibration."""
-    from pipeline.overlay.grid_detector import detect_grid
-    from pipeline.overlay.overlay_move_detector import (
-        detect_moves as run_detect,
-    )
-    from pipeline.overlay.piece_classifier import read_fen_with_grid
+    from pipeline.overlay.overlay_move_detector import detect_moves as run_detect
 
     session = _sessions.get(session_id)
     if session is None:
@@ -224,6 +232,7 @@ def detect_moves(session_id: str, sample_fps: float = 2.0, clip_id: int | None =
     fens: list[str | None] = []
     frame_indices: list[int] = []
     num_readable = 0
+    config = VideoAnalysisConfig(reader_backend=reader_backend, scene_backend="none", device="cpu")
 
     lock = session["lock"]
     for idx in range(start_frame, end_frame, frame_interval):
@@ -237,11 +246,10 @@ def detect_moves(session_id: str, sample_fps: float = 2.0, clip_id: int | None =
 
         ox, oy, ow, oh = calibration.overlay
         overlay_img = frame[oy : oy + oh, ox : ox + ow]
-        grid = detect_grid(overlay_img)
-        fen = read_fen_with_grid(overlay_img, grid) if grid else None
-        fens.append(fen)
+        read_result = read_overlay_crop(overlay_img, config)
+        fens.append(read_result.fen)
         frame_indices.append(idx)
-        if fen is not None:
+        if read_result.fen is not None:
             num_readable += 1
 
     # Detect moves from FEN sequence
@@ -278,6 +286,7 @@ def detect_moves(session_id: str, sample_fps: float = 2.0, clip_id: int | None =
     return {
         "num_frames_sampled": len(fens),
         "num_readable": num_readable,
+        "reader_backend": reader_backend,
         "segments": result_segments,
     }
 

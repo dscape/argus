@@ -16,7 +16,7 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from pipeline.mlx.config import MLXPipelineConfig
+from pipeline.analysis.config import VideoAnalysisConfig
 from pipeline.mlx.prompts import BOARD_READING, SCENE_ANALYSIS
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ def _load_model(model_name: str) -> None:
 def _generate(
     prompt: str,
     images: list[Image.Image],
-    config: MLXPipelineConfig,
+    config: VideoAnalysisConfig,
 ) -> str:
     """Run VLM generation on images with a prompt."""
     from mlx_vlm import generate
@@ -132,7 +132,7 @@ def _parse_scene_json(text: str) -> dict[str, Any]:
 
 def analyze_scene(
     frames: list[np.ndarray],
-    config: MLXPipelineConfig,
+    config: VideoAnalysisConfig,
 ) -> GameContext:
     """Analyze sampled video frames to understand the chess scene.
 
@@ -180,7 +180,7 @@ def analyze_scene(
 
 def read_board_position(
     frame: np.ndarray,
-    config: MLXPipelineConfig,
+    config: VideoAnalysisConfig,
 ) -> str | None:
     """Use VLM to read the board position and return a FEN string.
 
