@@ -424,6 +424,90 @@ async def save_confirmed_overlay_extractions(body: SaveExtractionsRequest):
     return result
 
 
+# ── Overlay Detection Evaluation Sessions ─────────────────
+
+
+class SaveOverlayDetectionEvalRequest(BaseModel):
+    detection_rate: float
+    fen_success_rate: float
+    sample_size: int
+    images_per_minute: int | None = None
+    notes: str | None = None
+
+
+class CreateOverlayEvalSessionRequest(BaseModel):
+    results: list[dict]
+    detection_rate: float | None = None
+    fen_success_rate: float | None = None
+    sample_size: int = 0
+    pin_state: dict | None = None
+    evaluation_id: int | None = None
+
+
+class UpdateOverlayEvalPinsRequest(BaseModel):
+    pin_state: dict
+
+
+@router.post("/overlay-eval/save-eval")
+async def save_overlay_detection_eval(body: SaveOverlayDetectionEvalRequest):
+    """Save an overlay detection evaluation result."""
+    result = await run_in_threadpool(
+        overlay_test_service.save_overlay_detection_eval,
+        body.detection_rate,
+        body.fen_success_rate,
+        body.sample_size,
+        body.images_per_minute,
+        body.notes,
+    )
+    return result
+
+
+@router.post("/overlay-eval/sessions")
+async def create_overlay_eval_session(body: CreateOverlayEvalSessionRequest):
+    """Create a shareable overlay detection evaluation session."""
+    result = await run_in_threadpool(
+        overlay_test_service.create_overlay_eval_session,
+        body.results,
+        body.detection_rate,
+        body.fen_success_rate,
+        body.sample_size,
+        body.pin_state,
+        body.evaluation_id,
+    )
+    return result
+
+
+@router.get("/overlay-eval/sessions")
+async def list_overlay_eval_sessions(limit: int = 20):
+    """List recent overlay detection evaluation sessions."""
+    sessions = await run_in_threadpool(
+        overlay_test_service.list_overlay_eval_sessions, limit
+    )
+    return {"sessions": sessions}
+
+
+@router.get("/overlay-eval/sessions/{session_id}")
+async def get_overlay_eval_session(session_id: str):
+    """Get an overlay detection evaluation session by ID."""
+    session = await run_in_threadpool(
+        overlay_test_service.get_overlay_eval_session, session_id
+    )
+    if session is None:
+        raise HTTPException(404, f"Session {session_id} not found")
+    return session
+
+
+@router.patch("/overlay-eval/sessions/{session_id}/pins")
+async def update_overlay_eval_pins(session_id: str, body: UpdateOverlayEvalPinsRequest):
+    """Update pin state for an overlay detection evaluation session."""
+    result = await run_in_threadpool(
+        overlay_test_service.update_overlay_eval_pins, session_id, body.pin_state
+    )
+    if "error" in result:
+        raise HTTPException(404, result["error"])
+    return result
+
+
 # ── Segmentation Evaluation ────────────────────────────────
 
 

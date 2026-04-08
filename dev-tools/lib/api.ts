@@ -764,6 +764,85 @@ export function overlayBoardImageUrl(filename: string): string {
   return `/api/models/overlay-test/board-image/${encodeURIComponent(filename)}`;
 }
 
+// ── Overlay Detection Evaluation Sessions ─────────────────
+
+export interface OverlayEvalResult {
+  frame_key: string;
+  video_id: string;
+  frame_name?: string;
+  status: "ok" | "warning" | "no_overlay" | "detected";
+  warning?: string;
+  image_b64?: string;
+  predicted_fen?: string;
+  fen_loading?: boolean;
+  elapsed_ms?: number;
+  overlay_detect_ms?: number;
+  grid_detect_ms?: number;
+  piece_classify_ms?: number;
+}
+
+export interface OverlayEvalSession {
+  id: string;
+  created_at: string;
+  sample_size: number;
+  detection_rate: number | null;
+  fen_success_rate: number | null;
+  results?: OverlayEvalResult[];
+  pin_state?: Record<string, boolean>;
+  evaluation_id?: number | null;
+}
+
+export async function createOverlayEvalSession(body: {
+  results: OverlayEvalResult[];
+  detection_rate?: number | null;
+  fen_success_rate?: number | null;
+  sample_size?: number;
+  pin_state?: Record<string, boolean>;
+  evaluation_id?: number | null;
+}): Promise<{ session_id: string }> {
+  const res = await fetch("/api/models/overlay-eval/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getOverlayEvalSession(
+  sessionId: string
+): Promise<OverlayEvalSession> {
+  const res = await fetch(`/api/models/overlay-eval/sessions/${sessionId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listOverlayEvalSessions(
+  limit = 20
+): Promise<{ sessions: OverlayEvalSession[] }> {
+  const res = await fetch(
+    `/api/models/overlay-eval/sessions?limit=${limit}`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateOverlayEvalPins(
+  sessionId: string,
+  pinState: Record<string, boolean>
+): Promise<{ pin_state: Record<string, boolean> }> {
+  const res = await fetch(
+    `/api/models/overlay-eval/sessions/${sessionId}/pins`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin_state: pinState }),
+    }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export interface OverlayValidationResult {
   video_id: string;
   channel: string;

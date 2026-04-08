@@ -36,7 +36,7 @@ Consistent identifiers used across nav, code, data dirs, configs, and weights:
 | Identifier | Meaning |
 |-----------|---------|
 | `screening` | Video classification (OTB vs not) |
-| `overlay` | Overlay detection + piece classification |
+| `overlay` | Overlay detection + piece classification. An overlay is a digital chess board shown on stream — "overlay" or NULL can have one |
 | `segmentation` | Video segmentation |
 | `calibration` | Board calibration |
 | `argus` | The main VLA model |

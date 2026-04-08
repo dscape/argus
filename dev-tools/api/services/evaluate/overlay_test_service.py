@@ -970,3 +970,140 @@ def update_overlay_session_pins(session_id: str, pin_state: dict) -> dict:
             )
             conn.commit()
     return {"ok": True, "pin_state": existing}
+
+
+# ── Overlay Detection Evaluation Sessions ─────────────────
+
+
+def save_overlay_detection_eval(
+    detection_rate: float,
+    fen_success_rate: float,
+    sample_size: int,
+    images_per_minute: int | None = None,
+    notes: str | None = None,
+) -> dict:
+    """Save an overlay detection evaluation to model_evaluations."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO model_evaluations
+                   (model_name, accuracy, sample_size, per_class, notes)
+                   VALUES (%s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    "overlay_detection",
+                    detection_rate,
+                    sample_size,
+                    json.dumps({
+                        "fen_success_rate": fen_success_rate,
+                        "images_per_minute": images_per_minute,
+                    }),
+                    notes,
+                ),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return {"id": row[0]} if row else {}
+
+
+def create_overlay_eval_session(
+    results: list[dict],
+    detection_rate: float | None,
+    fen_success_rate: float | None,
+    sample_size: int,
+    pin_state: dict | None = None,
+    evaluation_id: int | None = None,
+) -> dict:
+    """Create and persist an overlay detection evaluation session."""
+    session_id = uuid.uuid4().hex[:12]
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO overlay_eval_sessions
+                   (id, sample_size, detection_rate,
+                    fen_success_rate, results,
+                    pin_state, evaluation_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    session_id,
+                    sample_size,
+                    detection_rate,
+                    fen_success_rate,
+                    json.dumps(results),
+                    json.dumps(pin_state or {}),
+                    evaluation_id,
+                ),
+            )
+            conn.commit()
+    return {"session_id": session_id}
+
+
+def get_overlay_eval_session(session_id: str) -> dict | None:
+    """Fetch an overlay detection evaluation session by ID."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT id, created_at, sample_size, detection_rate, fen_success_rate,
+                          results, pin_state, evaluation_id
+                   FROM overlay_eval_sessions WHERE id = %s""",
+                (session_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {
+                "id": row[0],
+                "created_at": str(row[1]),
+                "sample_size": row[2],
+                "detection_rate": row[3],
+                "fen_success_rate": row[4],
+                "results": row[5] if isinstance(row[5], list) else json.loads(row[5]),
+                "pin_state": row[6] if isinstance(row[6], dict) else json.loads(row[6] or "{}"),
+                "evaluation_id": row[7],
+            }
+
+
+def list_overlay_eval_sessions(limit: int = 20) -> list[dict]:
+    """List recent overlay detection evaluation sessions (lightweight, no results)."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT id, created_at, sample_size, detection_rate, fen_success_rate
+                   FROM overlay_eval_sessions
+                   ORDER BY created_at DESC LIMIT %s""",
+                (limit,),
+            )
+            return [
+                {
+                    "id": row[0],
+                    "created_at": str(row[1]),
+                    "sample_size": row[2],
+                    "detection_rate": row[3],
+                    "fen_success_rate": row[4],
+                }
+                for row in cur.fetchall()
+            ]
+
+
+def update_overlay_eval_pins(session_id: str, pin_state: dict) -> dict:
+    """Merge pin state updates into an overlay detection evaluation session."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pin_state FROM overlay_eval_sessions WHERE id = %s",
+                (session_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return {"error": f"Session {session_id} not found"}
+
+            existing = row[0] if isinstance(row[0], dict) else json.loads(row[0] or "{}")
+            existing.update(pin_state)
+
+            cur.execute(
+                "UPDATE overlay_eval_sessions SET pin_state = %s WHERE id = %s",
+                (json.dumps(existing), session_id),
+            )
+            conn.commit()
+    return {"ok": True, "pin_state": existing}

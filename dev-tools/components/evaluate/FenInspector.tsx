@@ -33,7 +33,7 @@ interface EvalPoint {
   per_class: { piece_accuracy?: number; images_per_minute?: number } | null;
 }
 
-interface OverlayInspectorProps {
+interface FenInspectorProps {
   initialSession?: {
     id: string;
     results: OverlayTestResult[];
@@ -58,9 +58,9 @@ function InfoIcon({ tip }: { tip: string }) {
   );
 }
 
-export default function OverlayInspector({
+export default function FenInspector({
   initialSession,
-}: OverlayInspectorProps) {
+}: FenInspectorProps) {
   const router = useRouter();
   const [sampleSize, setSampleSize] = useState(20);
   const [results, setResults] = useState<OverlayTestResult[]>(
@@ -247,7 +247,7 @@ export default function OverlayInspector({
             evaluation_id: evaluationId,
           });
           setSessionId(session_id);
-          router.replace(`/evaluate/overlay/${session_id}`, { scroll: false });
+          router.replace(`/evaluate/fen/${session_id}`, { scroll: false });
         } catch (e) {
           console.warn("Failed to save session:", e);
         }
@@ -347,7 +347,7 @@ export default function OverlayInspector({
                     key={s.id}
                     onClick={() => {
                       setShowSessionList(false);
-                      router.push(`/evaluate/overlay/${s.id}`);
+                      router.push(`/evaluate/fen/${s.id}`);
                     }}
                     className={`w-full text-left px-3 py-2 text-xs hover:bg-muted/50 transition-colors border-b last:border-b-0 ${
                       s.id === sessionId ? "bg-muted/30" : ""
