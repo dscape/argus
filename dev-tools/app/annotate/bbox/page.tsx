@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, X, ChevronRight, Trash2 } from "lucide-react";
+import { Check, X, Trash2 } from "lucide-react";
 
 interface FrameEntry {
   key: string;
@@ -23,12 +23,25 @@ interface RefineResult {
   original: number[];
 }
 
+interface AutoDetectResult {
+  detected: boolean;
+  bbox: number[] | null;
+  score: number;
+  grid_score?: number;
+  has_pattern?: boolean;
+}
+
+type AutoDetectStatus = "idle" | "running" | "found" | "not_found" | "error";
+
 export default function OverlayBboxPage() {
   const [frames, setFrames] = useState<FrameEntry[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [currentBbox, setCurrentBbox] = useState<number[] | null>(null);
   const [refinedScore, setRefinedScore] = useState<number | null>(null);
   const [hasPattern, setHasPattern] = useState<boolean | null>(null);
+  const [autoDetectStatus, setAutoDetectStatus] =
+    useState<AutoDetectStatus>("idle");
+  const [autoDetectScore, setAutoDetectScore] = useState<number | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(
     null
@@ -41,14 +54,16 @@ export default function OverlayBboxPage() {
   const [saving, setSaving] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
+  const autoDetectRequestRef = useRef(0);
   const [imgLoaded, setImgLoaded] = useState(false);
 
   const selected = frames.find((f) => f.key === selectedKey) ?? null;
 
-  const fetchFrames = useCallback(async () => {
+  const fetchFrames = useCallback(async (): Promise<FrameEntry[]> => {
     const res = await fetch("/api/overlay-bbox/frames");
     const data = await res.json();
     setFrames(data.frames);
+    return data.frames as FrameEntry[];
   }, []);
 
   useEffect(() => {
@@ -68,25 +83,72 @@ export default function OverlayBboxPage() {
   // Load image when selection changes
   useEffect(() => {
     if (!selectedKey) return;
+    let cancelled = false;
+    autoDetectRequestRef.current += 1;
+    const requestId = autoDetectRequestRef.current;
     setImgLoaded(false);
     setCurrentBbox(null);
     setRefinedScore(null);
     setHasPattern(null);
+    setAutoDetectStatus("idle");
+    setAutoDetectScore(null);
 
+    const frame = frames.find((entry) => entry.key === selectedKey);
     const [videoId, label] = selectedKey.split("/");
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.onload = () => {
+    img.onload = async () => {
+      if (cancelled) return;
       imgRef.current = img;
       setImgLoaded(true);
 
       // If already annotated, load the saved bbox
-      const frame = frames.find((f) => f.key === selectedKey);
       if (frame?.bbox) {
         setCurrentBbox(frame.bbox);
+        return;
+      }
+      if (frame?.annotated) return;
+
+      setAutoDetectStatus("running");
+      try {
+        const res = await fetch("/api/overlay-bbox/auto-detect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ frame_key: selectedKey }),
+        });
+        if (!res.ok) {
+          throw new Error(`Auto-detect failed with status ${res.status}`);
+        }
+
+        const data: AutoDetectResult = await res.json();
+        if (cancelled || requestId !== autoDetectRequestRef.current) return;
+
+        if (data.detected && data.bbox) {
+          setCurrentBbox(data.bbox);
+          setAutoDetectStatus("found");
+          setAutoDetectScore(data.score);
+          setRefinedScore(data.grid_score ?? null);
+          setHasPattern(data.has_pattern ?? null);
+          return;
+        }
+
+        setAutoDetectStatus("not_found");
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Auto-detect failed:", err);
+        setAutoDetectStatus("error");
       }
     };
+    img.onerror = () => {
+      if (cancelled) return;
+      setImgLoaded(false);
+    };
     img.src = `/api/overlay-bbox/frame-image/${videoId}/${label}`;
+    return () => {
+      cancelled = true;
+      img.onload = null;
+      img.onerror = null;
+    };
   }, [selectedKey, frames]);
 
   // Draw canvas
@@ -148,12 +210,15 @@ export default function OverlayBboxPage() {
   const handleMouseDown = (e: React.MouseEvent) => {
     const pt = canvasToImage(e.clientX, e.clientY);
     if (!pt) return;
+    autoDetectRequestRef.current += 1;
     setIsDrawing(true);
     setDrawStart(pt);
     setDrawCurrent(pt);
     setCurrentBbox(null);
     setRefinedScore(null);
     setHasPattern(null);
+    setAutoDetectStatus("idle");
+    setAutoDetectScore(null);
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -205,8 +270,27 @@ export default function OverlayBboxPage() {
     }
   };
 
+  const selectNextWorkItem = useCallback(
+    (updatedFrames: FrameEntry[], previousKey: string | null) => {
+      const nextUnannotated = updatedFrames.find((frame) => !frame.annotated);
+      if (nextUnannotated) {
+        setSelectedKey(nextUnannotated.key);
+        return;
+      }
+
+      if (previousKey && updatedFrames.some((frame) => frame.key === previousKey)) {
+        setSelectedKey(previousKey);
+        return;
+      }
+
+      setSelectedKey(updatedFrames[0]?.key ?? null);
+    },
+    []
+  );
+
   const handleSave = async () => {
     if (!selectedKey || !currentBbox) return;
+    const frameKey = selectedKey;
     setSaving(true);
     try {
       await fetch("/api/overlay-bbox/annotate", {
@@ -218,7 +302,8 @@ export default function OverlayBboxPage() {
           bbox: currentBbox,
         }),
       });
-      await fetchFrames();
+      const updatedFrames = await fetchFrames();
+      selectNextWorkItem(updatedFrames, frameKey);
     } finally {
       setSaving(false);
     }
@@ -226,6 +311,7 @@ export default function OverlayBboxPage() {
 
   const handleNoOverlay = async () => {
     if (!selectedKey) return;
+    const frameKey = selectedKey;
     setSaving(true);
     try {
       await fetch("/api/overlay-bbox/annotate", {
@@ -237,8 +323,8 @@ export default function OverlayBboxPage() {
           bbox: null,
         }),
       });
-      await fetchFrames();
-      advanceNext();
+      const updatedFrames = await fetchFrames();
+      selectNextWorkItem(updatedFrames, frameKey);
     } finally {
       setSaving(false);
     }
@@ -246,6 +332,7 @@ export default function OverlayBboxPage() {
 
   const handleDelete = async () => {
     if (!selectedKey) return;
+    autoDetectRequestRef.current += 1;
     await fetch(`/api/overlay-bbox/annotate/${selectedKey}`, {
       method: "DELETE",
     });
@@ -256,16 +343,12 @@ export default function OverlayBboxPage() {
   };
 
   const handleClear = () => {
+    autoDetectRequestRef.current += 1;
     setCurrentBbox(null);
     setRefinedScore(null);
     setHasPattern(null);
-  };
-
-  const advanceNext = () => {
-    const unannotated = frames.filter((f) => !f.annotated);
-    if (unannotated.length > 0) {
-      setSelectedKey(unannotated[0].key);
-    }
+    setAutoDetectStatus("idle");
+    setAutoDetectScore(null);
   };
 
   const annotatedCount = frames.filter((f) => f.annotated).length;
@@ -363,6 +446,26 @@ export default function OverlayBboxPage() {
                   )}
                 </div>
               )}
+              {autoDetectStatus === "running" && (
+                <div className="text-xs text-muted-foreground">
+                  Detecting overlay...
+                </div>
+              )}
+              {autoDetectStatus === "found" && autoDetectScore !== null && (
+                <div className="text-xs text-muted-foreground">
+                  Auto-detected candidate (YOLO score: {autoDetectScore.toFixed(4)})
+                </div>
+              )}
+              {autoDetectStatus === "not_found" && (
+                <div className="text-xs text-amber-700">
+                  Auto-detect found nothing. Draw a bbox if this frame still has an overlay.
+                </div>
+              )}
+              {autoDetectStatus === "error" && (
+                <div className="text-xs text-red-600">
+                  Auto-detect failed. Draw a bbox manually.
+                </div>
+              )}
               {refining && (
                 <div className="text-xs text-muted-foreground">Refining...</div>
               )}
@@ -397,13 +500,6 @@ export default function OverlayBboxPage() {
               >
                 <Check className="w-3 h-3 inline mr-1" />
                 Save
-              </button>
-              <button
-                onClick={advanceNext}
-                className="px-3 py-1.5 text-xs border rounded hover:bg-muted transition-colors"
-              >
-                Next
-                <ChevronRight className="w-3 h-3 inline ml-1" />
               </button>
               </div>
             </div>

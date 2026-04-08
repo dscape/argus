@@ -18,6 +18,7 @@ class OpenVideoRequest(BaseModel):
 class DetectMovesRequest(BaseModel):
     sample_fps: float = 2.0
     clip_id: int | None = None
+    reader_backend: str = "overlay"
 
 
 class GenerateClipsRequest(BaseModel):
@@ -50,11 +51,20 @@ async def get_frame(session_id: str, index: int = Query(...)):
 
 
 @router.get("/{session_id}/overlay-read")
-async def read_overlay(session_id: str, index: int = Query(...), clip_id: int | None = Query(None)):
+async def read_overlay(
+    session_id: str,
+    index: int = Query(...),
+    clip_id: int | None = Query(None),
+    reader_backend: str = Query("overlay"),
+):
     """Read overlay FEN at a specific frame."""
     try:
         return await run_in_threadpool(
-            video_service.read_overlay_at_frame, session_id, index, clip_id
+            video_service.read_overlay_at_frame,
+            session_id,
+            index,
+            clip_id,
+            reader_backend,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -65,10 +75,38 @@ async def detect_moves(session_id: str, body: DetectMovesRequest):
     """Run full move detection on the video."""
     try:
         return await run_in_threadpool(
-            video_service.detect_moves, session_id, body.sample_fps, body.clip_id
+            video_service.detect_moves,
+            session_id,
+            body.sample_fps,
+            body.clip_id,
+            body.reader_backend,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.post("/{session_id}/detect-moves/jobs")
+async def start_detect_moves_job(session_id: str, body: DetectMovesRequest):
+    """Start move detection in the background."""
+    try:
+        return await run_in_threadpool(
+            video_service.start_detect_moves_job,
+            session_id,
+            body.sample_fps,
+            body.clip_id,
+            body.reader_backend,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/{session_id}/detect-moves/jobs/{job_id}")
+async def get_detect_moves_job(session_id: str, job_id: str):
+    """Poll background move-detection status."""
+    result = await run_in_threadpool(video_service.get_detect_moves_job, job_id, session_id)
+    if result is None:
+        raise HTTPException(404, f"Job {job_id} not found")
+    return result
 
 
 @router.post("/{session_id}/generate-clips")

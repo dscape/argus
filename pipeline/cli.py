@@ -423,7 +423,8 @@ def cmd_otb_yolo_train(args):
     print("Use for runtime experiments via:")
     print(
         "  ARGUS_OTB_YOLO_WEIGHTS="
-        f"{result.best_weights} .venv/bin/python3 -m pipeline.cli auto-calibrate --video-id <video_id>"
+        f"{result.best_weights} "
+        ".venv/bin/python3 -m pipeline.cli auto-calibrate --video-id <video_id>"
     )
 
 
@@ -830,6 +831,33 @@ def cmd_fetch_frames(args):
     print(f"\nDone: {total_frames} frames from {len(videos)} videos")
 
 
+def cmd_analyze_video(args):
+    """Analyze a local chess video into PGN and an annotated video."""
+    from pathlib import Path
+
+    from pipeline.analysis.config import VideoAnalysisConfig
+    from pipeline.analysis.pipeline import VideoAnalysisPipeline
+
+    config = VideoAnalysisConfig(
+        fps=args.fps,
+        device=args.device,
+        reader_backend=args.reader,
+        scene_backend=args.scene,
+        annotate=not args.no_annotate,
+        tts=args.tts,
+        output_dir=Path(args.output),
+        vlm_model=args.vlm_model,
+    )
+
+    result = VideoAnalysisPipeline(config).run(video_path=args.video)
+
+    print(f"\nDone: {result.total_moves} moves detected in {len(result.segments)} game(s)")
+    for pgn_path in result.pgn_files:
+        print(f"  PGN: {pgn_path}")
+    if result.annotated_video:
+        print(f"  Video: {result.annotated_video}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="pipeline",
@@ -970,8 +998,8 @@ def main():
     p.add_argument(
         "--model",
         type=str,
-        default="yolo11n.pt",
-        help="Pretrained Ultralytics nano checkpoint",
+        default="weights/yolo_base/yolo11n.pt",
+        help="Bootstrap YOLO checkpoint path",
     )
     p.add_argument("--epochs", type=int, default=100, help="Training epochs")
     p.add_argument("--imgsz", type=int, default=640, help="Training image size")
@@ -1051,8 +1079,8 @@ def main():
     p.add_argument(
         "--model",
         type=str,
-        default="yolo11n.pt",
-        help="Pretrained Ultralytics nano checkpoint",
+        default="weights/yolo_base/yolo11n.pt",
+        help="Bootstrap YOLO checkpoint path",
     )
     p.add_argument("--epochs", type=int, default=100, help="Training epochs")
     p.add_argument("--imgsz", type=int, default=640, help="Training image size")
@@ -1195,6 +1223,42 @@ def main():
     p.add_argument("--random", action="store_true",
                    help="Randomize video selection (avoids sampling bias)")
 
+    # analyze-video
+    p = subparsers.add_parser(
+        "analyze-video",
+        help="Analyze a local chess video into PGN and an annotated video",
+    )
+    p.add_argument("video", type=str, help="Path to the video file")
+    p.add_argument(
+        "--reader", type=str, default="overlay",
+        choices=["overlay", "hybrid"],
+        help="Board reader backend (default: overlay)",
+    )
+    p.add_argument(
+        "--scene", type=str, default="none",
+        choices=["none", "vlm"],
+        help="Scene analysis backend (default: none)",
+    )
+    p.add_argument(
+        "--device", type=str, default="mps",
+        help="Torch device for overlay piece classification (default: mps)",
+    )
+    p.add_argument(
+        "--vlm-model", type=str,
+        default="gemma4_local",
+        help="VLM model ID or local alias used by hybrid/scene backends",
+    )
+    p.add_argument("--fps", type=float, default=2.0, help="Target FPS for frame extraction")
+    p.add_argument(
+        "--output", type=str, default="outputs/analysis",
+        help="Output directory (default: outputs/analysis)",
+    )
+    p.add_argument("--tts", action="store_true", help="Announce moves via macOS TTS")
+    p.add_argument(
+        "--no-annotate", action="store_true",
+        help="Skip video annotation (just produce PGN)",
+    )
+
     # stats
     subparsers.add_parser("stats", help="Print pipeline statistics")
 
@@ -1237,6 +1301,7 @@ def main():
         "inspect-calibration": cmd_inspect_calibration,
         "ai-extract-status": cmd_ai_extract_status,
         "fetch-frames": cmd_fetch_frames,
+        "analyze-video": cmd_analyze_video,
         "stats": cmd_stats,
     }
 

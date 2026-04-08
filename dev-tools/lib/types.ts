@@ -81,6 +81,7 @@ export interface FrameOverlayResponse {
   timestamp_seconds: number;
   fen: string | null;
   board_ascii: string | null;
+  read_method: string | null;
   overlay_crop_b64: string;
   camera_crop_b64: string;
 }
@@ -107,7 +108,22 @@ export interface GameSegmentResponse {
 export interface VideoMoveDetectionResponse {
   num_frames_sampled: number;
   num_readable: number;
+  reader_backend: string;
   segments: GameSegmentResponse[];
+}
+
+export interface VideoMoveDetectionJobStatus {
+  job_id: string;
+  status: "running" | "done" | "failed";
+  sample_fps: number;
+  clip_id: number | null;
+  reader_backend: string;
+  error: string | null;
+  result: VideoMoveDetectionResponse | null;
+  total_samples: number;
+  completed_samples: number;
+  num_readable: number;
+  current_frame_idx: number | null;
 }
 
 // Crawl

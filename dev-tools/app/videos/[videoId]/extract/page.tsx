@@ -1,13 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
-  videoFrameUrl,
   readOverlayFrame,
-  detectVideoMoves,
+  getDetectVideoMovesJobStatus,
+  startDetectVideoMovesJob,
 } from "@/lib/api";
-import type { VideoClip, FrameOverlayResponse, VideoMoveDetectionResponse, GameSegmentResponse } from "@/lib/types";
+import type {
+  VideoClip,
+  FrameOverlayResponse,
+  VideoMoveDetectionResponse,
+  GameSegmentResponse,
+  VideoMoveDetectionJobStatus,
+} from "@/lib/types";
 import { ChessBoard } from "@/components/ChessBoard";
 import { fmtTime } from "@/lib/format";
 import { useVideoWorkbench } from "../_context";
@@ -83,13 +89,54 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
   const [overlayResult, setOverlayResult] = useState<FrameOverlayResponse | null>(null);
   const [readingFrame, setReadingFrame] = useState(false);
   const [detection, setDetection] = useState<VideoMoveDetectionResponse | null>(null);
-  const [detectingMoves, setDetectingMoves] = useState(false);
+  const [detectionJob, setDetectionJob] = useState<VideoMoveDetectionJobStatus | null>(null);
   const [expandedSegment, setExpandedSegment] = useState<number | null>(null);
+  const [readerBackend, setReaderBackend] = useState<"overlay" | "hybrid">("overlay");
+  const detectingMoves = detectionJob?.status === "running";
+  const progressPct = detectionJob && detectionJob.total_samples > 0
+    ? Math.round((detectionJob.completed_samples / detectionJob.total_samples) * 100)
+    : 0;
+
+  useEffect(() => {
+    if (!detectionJob || detectionJob.status !== "running") return;
+
+    let cancelled = false;
+    const pollJob = async () => {
+      try {
+        const job = await getDetectVideoMovesJobStatus(session.session_id, detectionJob.job_id);
+        if (cancelled) return;
+
+        setDetectionJob(job);
+
+        if (job.status === "done" && job.result) {
+          setDetection(job.result);
+          if (job.result.segments.length > 0) setExpandedSegment(0);
+        } else if (job.status === "failed") {
+          toast.error(job.error ?? "Move detection failed");
+        }
+      } catch (e) {
+        if (cancelled) return;
+        const message = e instanceof Error ? e.message : "Move detection failed";
+        setDetectionJob((current) => current ? { ...current, status: "failed", error: message } : current);
+        toast.error(message);
+      }
+    };
+
+    void pollJob();
+    const intervalId = window.setInterval(() => {
+      void pollJob();
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [detectionJob, session.session_id]);
 
   const handleReadFrame = async () => {
     setReadingFrame(true);
     try {
-      const result = await readOverlayFrame(session.session_id, frameIdx, clip.id);
+      const result = await readOverlayFrame(session.session_id, frameIdx, clip.id, readerBackend);
       setOverlayResult(result);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to read overlay");
@@ -99,15 +146,20 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
   };
 
   const handleDetectMoves = async () => {
-    setDetectingMoves(true);
+    setDetection(null);
+    setDetectionJob(null);
+    setExpandedSegment(null);
     try {
-      const result = await detectVideoMoves(session.session_id, 2.0, clip.id);
-      setDetection(result);
-      if (result.segments.length > 0) setExpandedSegment(0);
+      const job = await startDetectVideoMovesJob(session.session_id, 2.0, clip.id, readerBackend);
+      setDetectionJob(job);
+      if (job.status === "done" && job.result) {
+        setDetection(job.result);
+        if (job.result.segments.length > 0) setExpandedSegment(0);
+      } else if (job.status === "failed") {
+        toast.error(job.error ?? "Move detection failed");
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Move detection failed");
-    } finally {
-      setDetectingMoves(false);
     }
   };
 
@@ -122,6 +174,17 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
 
       <div className="space-y-2">
         <div className="flex items-center gap-3">
+          <label className="text-xs text-muted-foreground flex flex-col gap-1">
+            Reader
+            <select
+              value={readerBackend}
+              onChange={(e) => setReaderBackend(e.target.value as "overlay" | "hybrid")}
+              className="h-8 rounded-md border bg-background px-2 text-xs"
+            >
+              <option value="overlay">overlay</option>
+              <option value="hybrid">hybrid (adaptive fallback)</option>
+            </select>
+          </label>
           <div className="flex-1">
             <div className="text-xs text-muted-foreground mb-1">
               Frame {frameIdx} ({fps > 0 ? (frameIdx / fps).toFixed(1) : 0}s)
@@ -163,6 +226,9 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
                 <div className="space-y-1">
                   <ChessBoard fen={overlayResult.fen} size={200} />
                   <code className="text-[10px] text-muted-foreground break-all block">{overlayResult.fen}</code>
+                  {overlayResult.read_method && (
+                    <p className="text-[10px] text-muted-foreground">method: {overlayResult.read_method}</p>
+                  )}
                 </div>
               ) : (
                 <p className="text-xs text-destructive">Could not read board</p>
@@ -182,11 +248,28 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
         >
           {detectingMoves ? "Detecting..." : "Run Detection"}
         </button>
+        {detectingMoves && (
+          <div className="pl-2 space-y-1">
+            <div className="text-xs text-muted-foreground">
+              Processed {detectionJob.completed_samples} / {detectionJob.total_samples} sampled
+              {" "}frames, {detectionJob.num_readable} readable ({progressPct}%).
+            </div>
+            <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full bg-primary transition-[width] duration-300"
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+          </div>
+        )}
+        {detectionJob?.status === "failed" && detectionJob.error && (
+          <div className="text-xs text-destructive pl-2">{detectionJob.error}</div>
+        )}
         {detection && (
           <div className="space-y-2 pl-2">
             <div className="text-xs text-muted-foreground">
               Sampled {detection.num_frames_sampled} frames, {detection.num_readable} readable.
-              Found {detection.segments.length} game(s).
+              Found {detection.segments.length} game(s) using {detection.reader_backend}.
             </div>
             {detection.segments.map((seg) => (
               <SegmentCard

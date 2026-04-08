@@ -61,6 +61,12 @@ Always use `python -m pipeline <command>` for pipeline operations. Do not write 
 
 Docker: `docker exec argus-dev-api python3 -m pipeline.cli <command>` or use `make docker-*` targets.
 
+## Progress Tracking
+
+- Always read `progress.md` before continuing active branch work or resuming an interrupted task.
+- Keep `progress.md` updated as findings, decisions, architecture changes, and validation results land.
+- Before handing work back, review `progress.md` and make sure it reflects the current state of the branch.
+
 ## Conventions
 
 - Python 3.10+, Ruff (100 char lines), mypy strict mode

@@ -1,4 +1,4 @@
-"""Tests for new CLI commands: smoke-test, inspect-calibration, ai-extract-status."""
+"""Tests for selected pipeline CLI commands."""
 
 import subprocess
 import sys
@@ -37,6 +37,21 @@ class TestSmokeTestCommand:
         )
         assert "AI Classifier" in result.stdout
         assert "Logits shape" in result.stdout
+
+
+class TestAnalyzeVideoCommand:
+    """Test the analyze-video CLI command."""
+
+    def test_help_lists_analysis_options(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "pipeline.cli", "analyze-video", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0
+        assert "--reader" in result.stdout
+        assert "--scene" in result.stdout
 
 
 class TestInspectCalibrationCommand:
