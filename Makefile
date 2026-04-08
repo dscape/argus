@@ -1,6 +1,6 @@
 .PHONY: install dev test lint typecheck format train eval datagen infer train-pieces clean \
        db-up db-down db-backup db-restore pipeline-install seed-channels crawl screen inspect download generate-clips pipeline-stats \
-       dev-tools dev-tools-down blender-server blender-server-stop \
+       dev-tools dev-tools-down blender-server blender-server-stop ensure-overlay-data \
        up down preview \
        docker-ai-extract docker-ai-train docker-ai-eval docker-ai-screen docker-ai-retrain \
        docker-ai-extract-status docker-smoke-test \
@@ -108,7 +108,10 @@ pipeline-stats:
 
 # ── Dev tools targets ────────────────────────────────────────
 
-dev-tools:
+ensure-overlay-data:
+	@$(PYTHON) -m pipeline.setup.chess_positions --prompt
+
+dev-tools: ensure-overlay-data
 	docker compose --profile dev-tools up --build
 
 dev-tools-down:
@@ -119,7 +122,7 @@ dev-tools-down:
 BLENDER_PID_FILE := .blender-server.pid
 BLENDER_LOG_FILE := .blender-server.log
 
-up: check-backup
+up: check-backup ensure-overlay-data
 	@echo "Starting Docker services (postgres, dev-tools-api, dev-tools-ui)..."
 	@docker compose --profile dev-tools up -d --build
 	@echo ""
@@ -155,7 +158,7 @@ down:
 	@lsof -ti tcp:$(BLENDER_PORT) | xargs kill 2>/dev/null || true
 	@echo "All services stopped."
 
-preview: check-backup
+preview: check-backup ensure-overlay-data
 	@$(MAKE) down 2>/dev/null || true
 	@if command -v $(BLENDER) >/dev/null 2>&1 || [ -x "$(BLENDER)" ]; then \
 		echo "Starting Blender render server on port $(BLENDER_PORT)..."; \
