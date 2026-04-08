@@ -38,15 +38,14 @@ def test_video_analysis_pipeline_detects_moves(tmp_path, monkeypatch):
 
 
 def test_read_overlay_crop_uses_vlm_fallback_when_hybrid(monkeypatch):
-    from pipeline.analysis import board_reading
-    from pipeline.mlx import vlm_analyzer
+    from pipeline.analysis import board_reading, vlm
 
     config = VideoAnalysisConfig(reader_backend="hybrid", scene_backend="none", device="cpu")
     crop = np.zeros((32, 32, 3), dtype=np.uint8)
 
     monkeypatch.setattr(board_reading, "find_board_in_crop", lambda _crop: None)
     monkeypatch.setattr(
-        vlm_analyzer,
+        vlm,
         "read_board_position",
         lambda _frame, _config: chess.STARTING_BOARD_FEN,
     )

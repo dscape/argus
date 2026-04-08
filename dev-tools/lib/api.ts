@@ -5,6 +5,7 @@ import type {
   VideoSession,
   FrameOverlayResponse,
   VideoMoveDetectionResponse,
+  VideoMoveDetectionJobStatus,
   SyntheticScanResponse,
   SyntheticStatsResponse,
   CrawlChannel,
@@ -178,6 +179,35 @@ export async function detectVideoMoves(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function startDetectVideoMovesJob(
+  sessionId: string,
+  sampleFps: number = 2.0,
+  clipId?: number,
+  readerBackend: string = "overlay"
+): Promise<VideoMoveDetectionJobStatus> {
+  const body: Record<string, unknown> = {
+    sample_fps: sampleFps,
+    reader_backend: readerBackend,
+  };
+  if (clipId !== undefined) body.clip_id = clipId;
+  const res = await fetch(`/api/video/${sessionId}/detect-moves/jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getDetectVideoMovesJobStatus(
+  sessionId: string,
+  jobId: string
+): Promise<VideoMoveDetectionJobStatus> {
+  const res = await fetch(`/api/video/${sessionId}/detect-moves/jobs/${encodeURIComponent(jobId)}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

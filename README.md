@@ -314,23 +314,24 @@ For videos with a 2D board overlay:
 
 ### How Local Video Analysis Works
 
-`analyze-video` and the dev-tools Video Annotator now share the same board-reading core. The default path stays overlay-first; MLX is an optional fallback, not a parallel pipeline.
+`analyze-video` and the dev-tools Video Annotator share the same board-reading core. The default path stays overlay-first, with optional segmentation and VLM fallbacks folded into `pipeline.analysis`.
 
 ```mermaid
 graph TD
     VID[Local video] --> PIPE[VideoAnalysisPipeline]
-    PIPE --> SCENE[scene backend: none | mlx_vlm]
+    PIPE --> SCENE[scene backend: none | vlm]
     PIPE --> READER[reader backend: overlay | hybrid]
     READER --> OVERLAY[grid_detector + piece_classifier]
-    READER --> HYBRID[board_segmenter + piece_detector + VLM fallback]
+    READER --> HYBRID[board_segmenter + piece_detector + vlm]
     OVERLAY --> MOVE[overlay_move_detector + PGNWriter]
     HYBRID --> MOVE
     MOVE --> OUT[PGN + annotated video]
 ```
 
-- **overlay** — current production path: full-frame grid search + `piece_classifier`
-- **hybrid** — overlay path first, then MLX fallback (`board_segmenter`, `piece_detector`, `vlm_analyzer`) only when overlay reading fails
-- **scene backend** — optional Gemma 4 scene summary; it does not change move detection decisions
+- **overlay** — current production path: runtime overlay detection + grid detection + `piece_classifier`
+- **hybrid** — overlay path first, then board segmentation and direct board-reading fallbacks only when overlay reading fails
+- **scene backend** — optional VLM scene summary; it does not change move detection decisions
+- **runtime note** — `hybrid` and `vlm` features require optional local vision-language dependencies
 
 ### Overlay Components
 
@@ -740,7 +741,7 @@ The FastAPI backend at `localhost:8000` exposes these endpoints. The Next.js fro
 
 **`POST /api/video/{session_id}/detect-moves`**: `{ "sample_fps": 2.0, "reader_backend": "overlay|hybrid" }`
 
-**Response**: JSON with game segments, each containing moves (UCI + SAN), frame indices, timestamps, FEN before/after, per-move confidence scores, and the selected `reader_backend`. Single-frame reads also return `read_method` so you can see whether the overlay path or the MLX fallback produced the FEN.
+**Response**: JSON with game segments, each containing moves (UCI + SAN), frame indices, timestamps, FEN before/after, per-move confidence scores, and the selected `reader_backend`. Single-frame reads also return `read_method` so you can see whether the overlay path or a fallback reader produced the FEN.
 
 ### Health Check
 
@@ -834,7 +835,7 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 | `download` | `make download` | Download approved videos | `--limit N` |
 | `calibrate` | — | Set overlay layout calibration for a channel | `--channel` (required), `--overlay x,y,w,h`, `--camera x,y,w,h`, `--resolution WxH`, `--flipped`, `--theme` |
 | `auto-calibrate` | — | Auto-propose calibration from screening data | `--channel` (required), `--video-id ID`, `--apply` |
-| `analyze-video` | — | Analyze a local video into PGN + annotated output | `VIDEO`, `--reader overlay\|hybrid`, `--scene none\|mlx_vlm`, `--fps`, `--device`, `--output` |
+| `analyze-video` | — | Analyze a local video into PGN + annotated output | `VIDEO`, `--reader overlay\|hybrid`, `--scene none\|vlm`, `--fps`, `--device`, `--output` |
 | `generate-clips` | `make generate-clips` | Generate .pt training clips (with hard cut detection) | `--channel @Handle`, `--limit N` |
 
 ### Pipeline Domain — AI Screening
@@ -1093,6 +1094,10 @@ argus/
 │   ├── analysis/                               #   Shared local video analysis
 │   │   ├── pipeline.py                         #     analyze-video orchestration
 │   │   ├── board_reading.py                    #     overlay + hybrid board readers
+│   │   ├── board_segmenter.py                  #     overlay/SAM/contour fallback board locator
+│   │   ├── piece_detector.py                   #     overlay/VLM board-state fallback
+│   │   ├── vlm.py                              #     scene summary + direct board reading
+│   │   ├── prompts.py                          #     prompt templates for analysis backends
 │   │   ├── frame_extractor.py                  #     PyAV frame sampling
 │   │   └── video_annotator.py                  #     PGN overlay renderer
 │   ├── overlay/                                #   Stage 6-7: overlay clip generation
@@ -1107,10 +1112,6 @@ argus/
 │   │   ├── calibration.py                      #     Per-channel layout config
 │   │   ├── auto_calibration.py                 #     Auto-propose calibration (theme, orientation, camera)
 │   │   └── diagnostics.py                      #     test_image, test_reader, inspect_clip
-│   └── mlx/                                    #   Optional MLX backends for analysis
-│       ├── vlm_analyzer.py                     #     Gemma 4 scene + board reading
-│       ├── board_segmenter.py                  #     overlay/SAM/contour fallback board locator
-│       └── piece_detector.py                   #     overlay/VLM board-state fallback
 ├── dev-tools/                                  # Dev Tools: inspection web UI
 │   ├── Dockerfile.api                          #   FastAPI container
 │   ├── Dockerfile.ui                           #   Next.js container

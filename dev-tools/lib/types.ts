@@ -112,6 +112,20 @@ export interface VideoMoveDetectionResponse {
   segments: GameSegmentResponse[];
 }
 
+export interface VideoMoveDetectionJobStatus {
+  job_id: string;
+  status: "running" | "done" | "failed";
+  sample_fps: number;
+  clip_id: number | null;
+  reader_backend: string;
+  error: string | null;
+  result: VideoMoveDetectionResponse | null;
+  total_samples: number;
+  completed_samples: number;
+  num_readable: number;
+  current_frame_idx: number | null;
+}
+
 // Crawl
 export interface CrawlChannel {
   channel_id: string;

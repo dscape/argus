@@ -34,6 +34,23 @@ class RefineInput(BaseModel):
     rough_bbox: list[int]
 
 
+class AutoDetectInput(BaseModel):
+    frame_key: str
+
+
+@router.post("/auto-detect")
+async def auto_detect_bbox(body: AutoDetectInput):
+    """Suggest a bbox for an unannotated frame using the committed detector."""
+    video_id, label = body.frame_key.split("/", 1)
+    path = overlay_bbox_service.get_frame_path(video_id, label)
+    if path is None:
+        raise HTTPException(404, f"Frame not found: {body.frame_key}")
+    result = await run_in_threadpool(overlay_bbox_service.auto_detect_bbox, path)
+    if "error" in result:
+        raise HTTPException(500, result["error"])
+    return result
+
+
 @router.post("/refine")
 async def refine_bbox(body: RefineInput):
     """Smart-correct a rough training bbox to align with the overlay grid."""

@@ -423,7 +423,8 @@ def cmd_otb_yolo_train(args):
     print("Use for runtime experiments via:")
     print(
         "  ARGUS_OTB_YOLO_WEIGHTS="
-        f"{result.best_weights} .venv/bin/python3 -m pipeline.cli auto-calibrate --video-id <video_id>"
+        f"{result.best_weights} "
+        ".venv/bin/python3 -m pipeline.cli auto-calibrate --video-id <video_id>"
     )
 
 
@@ -1235,7 +1236,7 @@ def main():
     )
     p.add_argument(
         "--scene", type=str, default="none",
-        choices=["none", "mlx_vlm"],
+        choices=["none", "vlm"],
         help="Scene analysis backend (default: none)",
     )
     p.add_argument(
@@ -1244,8 +1245,8 @@ def main():
     )
     p.add_argument(
         "--vlm-model", type=str,
-        default="mlx-community/gemma-4-26b-a4b-it-4bit",
-        help="VLM model ID used by hybrid/scene backends",
+        default="gemma4_local",
+        help="VLM model ID or local alias used by hybrid/scene backends",
     )
     p.add_argument("--fps", type=float, default=2.0, help="Target FPS for frame extraction")
     p.add_argument(

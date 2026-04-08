@@ -2,9 +2,11 @@
 
 import base64
 import collections
+import logging
 import os
 import threading
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import chess
@@ -15,9 +17,11 @@ from pipeline.analysis.board_reading import read_overlay_crop
 from pipeline.analysis.config import VideoAnalysisConfig
 
 _FRAME_CACHE_MAX = 64
+logger = logging.getLogger(__name__)
 
 # Session storage
 _sessions: dict[str, dict[str, Any]] = {}
+_move_detection_jobs: dict[str, dict[str, Any]] = {}
 
 
 def open_video(video_path: str, channel_handle: str | None = None) -> dict:
@@ -196,38 +200,19 @@ def detect_moves(
     sample_fps: float = 2.0,
     clip_id: int | None = None,
     reader_backend: str = "overlay",
+    progress_callback: Callable[[int, int, int, int], None] | None = None,
 ) -> dict:
     """Run full move detection on the video. If clip_id is given, restrict to that clip's time range and calibration."""
     from pipeline.overlay.overlay_move_detector import detect_moves as run_detect
 
-    session = _sessions.get(session_id)
-    if session is None:
-        raise ValueError("Session not found")
-
-    clip_data = None
-    if clip_id is not None:
-        clip_data, calibration = _get_clip_calibration(clip_id)
-    else:
-        calibration = session.get("calibration")
-    if calibration is None:
-        raise ValueError("No calibration for this session")
-
+    context = _build_detect_moves_context(session_id, sample_fps, clip_id)
+    session = context["session"]
+    calibration = context["calibration"]
     cap = session["cap"]
-    fps = session["fps"]
-    total_frames = session["total_frames"]
-
-    # Determine frame range
-    start_frame = 0
-    end_frame = total_frames
-    start_time = 0.0
-    if clip_data is not None:
-        start_frame = int(clip_data["start_time"] * fps) if fps > 0 else 0
-        if clip_data["end_time"] is not None:
-            end_frame = int(clip_data["end_time"] * fps)
-        start_time = clip_data["start_time"]
-
-    # Sample frames
-    frame_interval = max(1, int(fps / sample_fps))
+    fps = context["fps"]
+    start_time = context["start_time"]
+    sample_indices = context["sample_indices"]
+    total_samples = len(sample_indices)
 
     fens: list[str | None] = []
     frame_indices: list[int] = []
@@ -235,13 +220,15 @@ def detect_moves(
     config = VideoAnalysisConfig(reader_backend=reader_backend, scene_backend="none", device="cpu")
 
     lock = session["lock"]
-    for idx in range(start_frame, end_frame, frame_interval):
+    for completed_samples, idx in enumerate(sample_indices, start=1):
         with lock:
             cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
             ret, frame = cap.read()
         if not ret:
             fens.append(None)
             frame_indices.append(idx)
+            if progress_callback is not None:
+                progress_callback(completed_samples, total_samples, idx, num_readable)
             continue
 
         ox, oy, ow, oh = calibration.overlay
@@ -251,6 +238,8 @@ def detect_moves(
         frame_indices.append(idx)
         if read_result.fen is not None:
             num_readable += 1
+        if progress_callback is not None:
+            progress_callback(completed_samples, total_samples, idx, num_readable)
 
     # Detect moves from FEN sequence
     segments = run_detect(
@@ -288,6 +277,158 @@ def detect_moves(
         "num_readable": num_readable,
         "reader_backend": reader_backend,
         "segments": result_segments,
+    }
+
+
+def _build_detect_moves_context(
+    session_id: str,
+    sample_fps: float,
+    clip_id: int | None,
+) -> dict[str, Any]:
+    """Resolve and validate the move-detection inputs."""
+    session = _sessions.get(session_id)
+    if session is None:
+        raise ValueError("Session not found")
+
+    clip_data = None
+    if clip_id is not None:
+        clip_data, calibration = _get_clip_calibration(clip_id)
+    else:
+        calibration = session.get("calibration")
+    if calibration is None:
+        raise ValueError("No calibration for this session")
+
+    fps = session["fps"]
+    total_frames = session["total_frames"]
+    start_frame = 0
+    end_frame = total_frames
+    start_time = 0.0
+    if clip_data is not None:
+        start_frame = int(clip_data["start_time"] * fps) if fps > 0 else 0
+        if clip_data["end_time"] is not None:
+            end_frame = int(clip_data["end_time"] * fps)
+        start_time = clip_data["start_time"]
+
+    frame_interval = max(1, int(fps / sample_fps))
+    sample_indices = list(range(start_frame, end_frame, frame_interval))
+
+    return {
+        "session": session,
+        "calibration": calibration,
+        "fps": fps,
+        "start_time": start_time,
+        "sample_indices": sample_indices,
+    }
+
+
+def start_detect_moves_job(
+    session_id: str,
+    sample_fps: float = 2.0,
+    clip_id: int | None = None,
+    reader_backend: str = "overlay",
+) -> dict:
+    """Start move detection in a background thread and return the job state."""
+    context = _build_detect_moves_context(session_id, sample_fps, clip_id)
+    total_samples = len(context["sample_indices"])
+
+    job_id = uuid.uuid4().hex[:12]
+    _move_detection_jobs[job_id] = {
+        "job_id": job_id,
+        "session_id": session_id,
+        "status": "running",
+        "sample_fps": sample_fps,
+        "clip_id": clip_id,
+        "reader_backend": reader_backend,
+        "error": None,
+        "result": None,
+        "total_samples": total_samples,
+        "completed_samples": 0,
+        "num_readable": 0,
+        "current_frame_idx": None,
+    }
+
+    thread = threading.Thread(
+        target=_run_detect_moves_job,
+        args=(job_id, session_id, sample_fps, clip_id, reader_backend),
+        daemon=True,
+    )
+    thread.start()
+    return get_detect_moves_job(job_id, session_id)
+
+
+def _run_detect_moves_job(
+    job_id: str,
+    session_id: str,
+    sample_fps: float,
+    clip_id: int | None,
+    reader_backend: str,
+) -> None:
+    """Background job target for move detection."""
+    try:
+        result = detect_moves(
+            session_id,
+            sample_fps=sample_fps,
+            clip_id=clip_id,
+            reader_backend=reader_backend,
+            progress_callback=lambda completed, total, frame_idx, num_readable: _update_detect_moves_job_progress(
+                job_id,
+                completed,
+                total,
+                frame_idx,
+                num_readable,
+            ),
+        )
+        job = _move_detection_jobs.get(job_id)
+        if job is not None:
+            job["status"] = "done"
+            job["result"] = result
+            job["completed_samples"] = job["total_samples"]
+            job["num_readable"] = result["num_readable"]
+    except Exception as exc:
+        logger.exception("Move detection job %s failed", job_id)
+        job = _move_detection_jobs.get(job_id)
+        if job is not None:
+            job["status"] = "failed"
+            job["error"] = f"{type(exc).__name__}: {exc}"
+
+
+def _update_detect_moves_job_progress(
+    job_id: str,
+    completed_samples: int,
+    total_samples: int,
+    frame_idx: int,
+    num_readable: int,
+) -> None:
+    """Update progress counters for a running move-detection job."""
+    job = _move_detection_jobs.get(job_id)
+    if job is None:
+        return
+    job["completed_samples"] = completed_samples
+    job["total_samples"] = total_samples
+    job["current_frame_idx"] = frame_idx
+    job["num_readable"] = num_readable
+
+
+def get_detect_moves_job(job_id: str, session_id: str | None = None) -> dict | None:
+    """Return the current move-detection job status."""
+    job = _move_detection_jobs.get(job_id)
+    if job is None:
+        return None
+    if session_id is not None and job["session_id"] != session_id:
+        return None
+
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "sample_fps": job["sample_fps"],
+        "clip_id": job["clip_id"],
+        "reader_backend": job["reader_backend"],
+        "error": job["error"],
+        "result": job["result"],
+        "total_samples": job["total_samples"],
+        "completed_samples": job["completed_samples"],
+        "num_readable": job["num_readable"],
+        "current_frame_idx": job["current_frame_idx"],
     }
 
 

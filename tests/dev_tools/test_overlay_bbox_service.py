@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from api.services.annotate import overlay_bbox_service
+from pipeline.overlay.scanner import OverlayDetection
 
 
 def _write_image(path: Path, width: int, height: int) -> None:
@@ -113,3 +114,59 @@ def test_get_frame_path_preserves_annotated_tier_and_falls_back_to_fullres(
 
     assert overlay_bbox_service.get_frame_path("video1", "25pct") == hires_path
     assert overlay_bbox_service.get_frame_path("video2", "50pct") == fullres_only_path
+
+
+def test_auto_detect_bbox_returns_refined_detector_candidate(tmp_path, monkeypatch) -> None:
+    videos_dir, _ground_truth_path, _targets_path = _configure_paths(tmp_path, monkeypatch)
+
+    frame_path = videos_dir / "video1" / "hires" / "25pct.jpg"
+    _write_image(frame_path, 1280, 720)
+
+    monkeypatch.setattr(
+        overlay_bbox_service,
+        "runtime_overlay_check",
+        lambda _frame: OverlayDetection(
+            found=True,
+            bbox=(100, 120, 320, 320),
+            seed_bbox=(100, 120, 320, 320),
+            score=0.91,
+            frame_resolution=(1280, 720),
+        ),
+    )
+    monkeypatch.setattr(
+        overlay_bbox_service,
+        "_refine_alignment",
+        lambda _frame, bbox, max_shift=5: bbox,
+    )
+    monkeypatch.setattr(overlay_bbox_service, "compute_grid_regularity", lambda _region: 0.75)
+    monkeypatch.setattr(overlay_bbox_service, "check_alternating_pattern", lambda _region: True)
+
+    result = overlay_bbox_service.auto_detect_bbox(frame_path)
+
+    assert result == {
+        "detected": True,
+        "bbox": [100, 120, 320, 320],
+        "score": 0.91,
+        "grid_score": 0.75,
+        "has_pattern": True,
+        "detector_bbox": [100, 120, 320, 320],
+    }
+
+
+def test_auto_detect_bbox_reports_missing_overlay(tmp_path, monkeypatch) -> None:
+    videos_dir, _ground_truth_path, _targets_path = _configure_paths(tmp_path, monkeypatch)
+
+    frame_path = videos_dir / "video1" / "hires" / "25pct.jpg"
+    _write_image(frame_path, 1280, 720)
+
+    monkeypatch.setattr(
+        overlay_bbox_service,
+        "runtime_overlay_check",
+        lambda _frame: OverlayDetection(found=False, frame_resolution=(1280, 720)),
+    )
+
+    assert overlay_bbox_service.auto_detect_bbox(frame_path) == {
+        "detected": False,
+        "bbox": None,
+        "score": 0.0,
+    }

@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-SceneBackend = Literal["none", "mlx_vlm"]
+DEFAULT_VLM_MODEL = "gemma4_local"
+
+SceneBackend = Literal["none", "vlm"]
 ReaderBackend = Literal["overlay", "hybrid"]
 
 
@@ -27,7 +29,7 @@ class VideoAnalysisConfig:
 
     output_dir: Path = field(default_factory=lambda: Path("outputs/analysis"))
 
-    vlm_model: str = "mlx-community/gemma-4-26b-a4b-it-4bit"
+    vlm_model: str = DEFAULT_VLM_MODEL
     vlm_max_tokens: int = 2048
     vlm_sample_count: int = 8
 

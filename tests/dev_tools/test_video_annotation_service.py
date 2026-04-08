@@ -1,5 +1,7 @@
 """Tests for video annotation service backend selection."""
 
+import threading
+import time
 from pathlib import Path
 
 import chess
@@ -90,3 +92,71 @@ def test_detect_moves_returns_reader_backend(tmp_path, monkeypatch):
 
     assert result["reader_backend"] == "hybrid"
     assert result["segments"][0]["moves"][0]["move_uci"] == "e2e4"
+
+
+def test_detect_moves_job_polls_result(tmp_path, monkeypatch):
+    video_path = tmp_path / "sample.mp4"
+    _write_test_video(video_path, frame_count=4)
+
+    session = video_service.open_video(str(video_path))
+    session_id = session["session_id"]
+    _attach_calibration(session_id)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_detect_moves(
+        _session_id,
+        sample_fps=2.0,
+        clip_id=None,
+        reader_backend="overlay",
+        progress_callback=None,
+    ):
+        assert _session_id == session_id
+        assert sample_fps == 1.0
+        assert clip_id is None
+        assert reader_backend == "overlay"
+        started.set()
+        assert release.wait(timeout=1.0)
+        if progress_callback is not None:
+            progress_callback(1, 2, 0, 1)
+            progress_callback(2, 2, 1, 2)
+        return {
+            "num_frames_sampled": 2,
+            "num_readable": 2,
+            "reader_backend": reader_backend,
+            "segments": [],
+        }
+
+    monkeypatch.setattr(video_service, "detect_moves", fake_detect_moves)
+
+    try:
+        job = video_service.start_detect_moves_job(
+            session_id,
+            sample_fps=1.0,
+            reader_backend="overlay",
+        )
+        assert started.wait(timeout=1.0)
+
+        running = video_service.get_detect_moves_job(job["job_id"], session_id)
+        assert running is not None
+        assert running["status"] == "running"
+        assert running["total_samples"] == 2
+        assert running["completed_samples"] < 2
+
+        release.set()
+
+        done = None
+        for _ in range(50):
+            done = video_service.get_detect_moves_job(job["job_id"], session_id)
+            if done is not None and done["status"] == "done":
+                break
+            time.sleep(0.01)
+
+        assert done is not None
+        assert done["status"] == "done"
+        assert done["result"]["reader_backend"] == "overlay"
+        assert done["completed_samples"] == 2
+        assert done["num_readable"] == 2
+    finally:
+        video_service.delete_session(session_id)

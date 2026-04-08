@@ -157,7 +157,7 @@ make format     # ruff format + auto-fix (run before committing)
 
 ### Pre-merge Validation for Video Analysis Changes
 
-Use this checklist before merging any change that touches `pipeline/analysis/`, `pipeline/overlay/`, `pipeline/mlx/`, or the dev-tools video flows.
+Use this checklist before merging any change that touches `pipeline/analysis/`, `pipeline/overlay/`, or the dev-tools video flows.
 
 ```bash
 # Automated gates
@@ -169,7 +169,7 @@ make test
 python -m pipeline.cli analyze-video data/videos/<VIDEO_ID>/<VIDEO_ID>.mp4 \
   --reader overlay --scene none --no-annotate
 python -m pipeline.cli analyze-video data/videos/<VIDEO_ID>/<VIDEO_ID>.mp4 \
-  --reader hybrid --scene mlx_vlm --no-annotate
+  --reader hybrid --scene vlm --no-annotate
 ```
 
 Manual checks to record in the PR description or merge notes:

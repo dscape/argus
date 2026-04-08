@@ -85,6 +85,30 @@ async def detect_moves(session_id: str, body: DetectMovesRequest):
         raise HTTPException(400, str(e))
 
 
+@router.post("/{session_id}/detect-moves/jobs")
+async def start_detect_moves_job(session_id: str, body: DetectMovesRequest):
+    """Start move detection in the background."""
+    try:
+        return await run_in_threadpool(
+            video_service.start_detect_moves_job,
+            session_id,
+            body.sample_fps,
+            body.clip_id,
+            body.reader_backend,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/{session_id}/detect-moves/jobs/{job_id}")
+async def get_detect_moves_job(session_id: str, job_id: str):
+    """Poll background move-detection status."""
+    result = await run_in_threadpool(video_service.get_detect_moves_job, job_id, session_id)
+    if result is None:
+        raise HTTPException(404, f"Job {job_id} not found")
+    return result
+
+
 @router.post("/{session_id}/generate-clips")
 async def generate_clips(session_id: str, body: GenerateClipsRequest = GenerateClipsRequest()):
     """Generate training clips from this video session."""

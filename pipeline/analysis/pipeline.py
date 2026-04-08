@@ -69,16 +69,20 @@ class VideoAnalysisPipeline:
         if self.config.annotate and result.total_moves > 0:
             result.annotated_video = self._annotate(video_path, result.segments, out_dir)
 
-        logger.info("Analysis complete: %d moves across %d game(s)", result.total_moves, len(result.segments))
+        logger.info(
+            "Analysis complete: %d moves across %d game(s)",
+            result.total_moves,
+            len(result.segments),
+        )
         return result
 
     def _run_scene_analysis(self, video_path: Path) -> Any | None:
         if self.config.scene_backend == "none":
             return None
-        if self.config.scene_backend != "mlx_vlm":
+        if self.config.scene_backend != "vlm":
             raise ValueError(f"Unsupported scene backend: {self.config.scene_backend}")
 
-        from pipeline.mlx.vlm_analyzer import analyze_scene
+        from pipeline.analysis.vlm import analyze_scene
 
         logger.info("=== Scene Analysis ===")
         frames = sample_frames(video_path, count=self.config.vlm_sample_count)

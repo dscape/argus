@@ -17,10 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
+import numpy as np
 from pipeline.overlay.scanner import (
     _refine_alignment,
     check_alternating_pattern,
     compute_grid_regularity,
+    runtime_overlay_check,
 )
 from pipeline.paths import GROUND_TRUTH_PATH, VIDEOS_DIR
 from pipeline.paths import frame_path as _frame_path
@@ -246,23 +248,9 @@ def get_frame_path(video_id: str, label: str) -> Path | None:
     return None
 
 
-def refine_bbox(
-    frame_path: Path, rough_bbox: list[int]
-) -> dict:
-    """Lightly refine a rough training bbox before saving it.
-
-    This is annotation assistance only. Runtime overlay detection uses the
-    default YOLO model and does not call this refinement path.
-
-    The user's drawing is trusted — we only make minimal adjustments:
-    - Enforce square aspect ratio (use max of w/h, re-center)
-    - Nudge up to 5px to maximize grid alignment
-    """
-    frame = cv2.imread(str(frame_path))
-    if frame is None:
-        return {"error": "Could not read frame"}
+def _refine_bbox_on_frame(frame: np.ndarray, rough_bbox: list[int]) -> dict:
+    """Lightly refine a rough training bbox on an already-loaded frame."""
     fh, fw = frame.shape[:2]
-
     x, y, w, h = rough_bbox
 
     # Enforce square: use max dimension, re-center
@@ -296,6 +284,52 @@ def refine_bbox(
         "score": round(best_score, 4),
         "has_pattern": has_pattern,
         "original": rough_bbox,
+    }
+
+
+def refine_bbox(
+    frame_path: Path, rough_bbox: list[int]
+) -> dict:
+    """Lightly refine a rough training bbox before saving it.
+
+    This is annotation assistance only. Runtime overlay detection uses the
+    default YOLO model and does not call this refinement path.
+
+    The user's drawing is trusted — we only make minimal adjustments:
+    - Enforce square aspect ratio (use max of w/h, re-center)
+    - Nudge up to 5px to maximize grid alignment
+    """
+    frame = cv2.imread(str(frame_path))
+    if frame is None:
+        return {"error": "Could not read frame"}
+    return _refine_bbox_on_frame(frame, rough_bbox)
+
+
+def auto_detect_bbox(frame_path: Path) -> dict:
+    """Suggest a training bbox using the committed YOLO overlay detector."""
+    frame = cv2.imread(str(frame_path))
+    if frame is None:
+        return {"error": "Could not read frame"}
+
+    detection = runtime_overlay_check(frame)
+    if not detection.found or detection.bbox is None:
+        return {
+            "detected": False,
+            "bbox": None,
+            "score": round(detection.score, 4),
+        }
+
+    refined = _refine_bbox_on_frame(frame, list(detection.bbox))
+    if "error" in refined:
+        return refined
+
+    return {
+        "detected": True,
+        "bbox": refined["bbox"],
+        "score": round(detection.score, 4),
+        "grid_score": refined["score"],
+        "has_pattern": refined["has_pattern"],
+        "detector_bbox": list(detection.bbox),
     }
 
 

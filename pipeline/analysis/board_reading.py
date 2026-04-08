@@ -80,15 +80,15 @@ class OverlayFrameReader:
 
 
 class HybridFrameReader(OverlayFrameReader):
-    """Overlay-first reader with MLX fallback for missed frames."""
+    """Overlay-first reader with segmentation and VLM fallbacks."""
 
     def read(self, frame_rgb: np.ndarray) -> FrameReadResult:
         result = super().read(frame_rgb)
         if result.fen is not None:
             return result
 
-        from pipeline.mlx.board_segmenter import segment_board
-        from pipeline.mlx.piece_detector import detect_pieces
+        from pipeline.analysis.board_segmenter import segment_board
+        from pipeline.analysis.piece_detector import detect_pieces
 
         segment = segment_board(frame_rgb, self.config)
         if segment is None:
@@ -130,7 +130,7 @@ def read_overlay_crop(
     if config.reader_backend != "hybrid":
         raise ValueError(f"Unsupported reader backend: {config.reader_backend}")
 
-    from pipeline.mlx.vlm_analyzer import read_board_position
+    from pipeline.analysis.vlm import read_board_position
 
     overlay_rgb = cv2.cvtColor(overlay_crop, cv2.COLOR_BGR2RGB)
     fen = read_board_position(overlay_rgb, config)

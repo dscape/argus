@@ -1,6 +1,13 @@
-"""Shared local-video analysis pipeline."""
+"""Shared local-video analysis helpers."""
 
 from pipeline.analysis.config import VideoAnalysisConfig
-from pipeline.analysis.pipeline import VideoAnalysisPipeline
 
 __all__ = ["VideoAnalysisConfig", "VideoAnalysisPipeline"]
+
+
+def __getattr__(name: str):
+    if name == "VideoAnalysisPipeline":
+        from pipeline.analysis.pipeline import VideoAnalysisPipeline
+
+        return VideoAnalysisPipeline
+    raise AttributeError(name)

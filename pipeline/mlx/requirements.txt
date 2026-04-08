@@ -1,8 +1,0 @@
-# MLX-specific dependencies for the optional analysis backends.
-# Install separately: pip install -r pipeline/mlx/requirements.txt
-mlx>=0.22
-mlx-vlm>=0.4.3
-
-# SAM 3 (MLX native) — install from source:
-#   git clone https://github.com/Deekshith-Dade/mlx_sam3.git
-#   cd mlx_sam3 && pip install -e .
