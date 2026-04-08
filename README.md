@@ -151,6 +151,11 @@ If Blender is not installed, `make up` skips it with a warning — the other ser
 
 `make up`, `make test`, and the runtime pipeline targets now fail fast if the committed model weights are missing or still Git LFS pointer files.
 
+If you want the full chess-positions dataset locally for piece-classifier work,
+run `make ensure-overlay-data` (Kaggle CLI) or install it manually under
+`data/overlay/{train,val}`. The dev-tools FEN/overlay inspectors fall back to
+committed fixtures when that dataset is absent.
+
 ---
 
 ## Quick Start: Training
@@ -508,12 +513,15 @@ Feature caching pre-computes DINOv2 embeddings once, then trains only the MLP he
 
 ### Data Setup
 
-The chess-positions dataset is not included in the repo. Extract from the downloaded zip:
+The chess-positions dataset is not included in the repo.
 
-```bash
-mkdir -p data/overlay
-cd data/overlay && unzip ~/Downloads/ChessPositions.zip "train/*" "test/*"
-```
+If `data/overlay/train/` or `data/overlay/val/` is missing, `make up` prompts to
+download it with the Kaggle CLI.
+
+For manual setup, put the dataset splits here:
+
+- `train/` → `data/overlay/train/`
+- `test/` → `data/overlay/val/`
 
 ---
 

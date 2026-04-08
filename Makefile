@@ -1,6 +1,6 @@
 .PHONY: install dev test lint typecheck format train eval datagen infer train-pieces clean \
        db-up db-down db-backup db-restore pipeline-install seed-channels crawl screen inspect download generate-clips pipeline-stats \
-       dev-tools dev-tools-down blender-server blender-server-stop \
+       dev-tools dev-tools-down blender-server blender-server-stop ensure-overlay-data \
        up down preview \
        docker-ai-extract docker-ai-train docker-ai-eval docker-ai-screen docker-ai-retrain \
        docker-ai-extract-status docker-smoke-test \
@@ -110,6 +110,9 @@ pipeline-stats:
 	$(PYTHON) -m pipeline.cli stats
 
 # ── Dev tools targets ────────────────────────────────────────
+
+ensure-overlay-data:
+	@$(PYTHON) -m pipeline.setup.chess_positions --prompt
 
 dev-tools: check-runtime-assets
 	docker compose --profile dev-tools up --build
