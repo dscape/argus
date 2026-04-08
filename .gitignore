@@ -59,6 +59,7 @@ next-env.d.ts
 
 # Local cache (Blender tarball, etc.)
 .cache/
+.pi/
 
 # Misc
 *.log
