@@ -54,8 +54,8 @@ class ProposeInput(BaseModel):
 def propose_calibration(channel_handle: str, body: ProposeInput | None = None):
     """Auto-propose calibration from screening data.
 
-    Analyzes YouTube thumbnails to detect overlay region, theme,
-    and board orientation. Returns a proposal for human review.
+    Analyzes sampled video frames to detect the overlay, OTB board,
+    theme, and board orientation. Returns a proposal for human review.
     """
     video_id = body.video_id if body else None
     result = calibration_service.propose(channel_handle, video_id=video_id)

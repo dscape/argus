@@ -1,12 +1,13 @@
 """Screen crawled videos for 2D chess board overlay presence.
 
-Rendered 2D boards (from lichess, chess.com, etc.) have distinctive properties:
-- Perfect 8x8 grid of alternating-color squares
-- Near-zero intra-square pixel variance (solid fills)
-- Sharp boundaries between squares
+This module keeps two overlay-detection tracks:
+- runtime YOLO localization via ``runtime_overlay_check`` /
+  ``detect_overlay_runtime``
+- legacy heuristic detectors via ``fast_overlay_check`` /
+  ``detect_overlay_fast`` for training-data workflows, bbox refinement,
+  detector bootstrapping, and historical debugging
 
-This module samples 2-3 frames from each video and checks for these properties,
-allowing cheap bulk screening of all crawled videos.
+Do not wire new product or app flows to the heuristic entry points.
 """
 
 import logging
@@ -21,6 +22,12 @@ import numpy as np
 from pipeline.db.connection import get_conn
 
 logger = logging.getLogger(__name__)
+
+# Environment overrides for the default YOLO detector.
+_YOLO_WEIGHTS_OVERRIDE_ENV = "ARGUS_OVERLAY_YOLO_WEIGHTS"
+_YOLO_CONF_ENV = "ARGUS_OVERLAY_YOLO_CONF"
+_YOLO_IMGSZ_ENV = "ARGUS_OVERLAY_YOLO_IMGSZ"
+_YOLO_DEVICE_ENV = "ARGUS_OVERLAY_YOLO_DEVICE"
 
 # Rendered board squares have very low pixel variance (solid color fills).
 # OTB boards have much higher variance from lighting, wood grain, reflections.
@@ -680,6 +687,14 @@ def _refine_alignment(
     return best
 
 
+# ---------------------------------------------------------------------------
+# Legacy heuristic detector internals (training-label tooling only)
+# ---------------------------------------------------------------------------
+#
+# The constants and helpers below support the old grid/regularity scanner.
+# Keep them only for annotation refinement, detector-training workflows, and
+# historical debugging. Runtime overlay localization no longer uses them.
+#
 # Lightweight scan parameters for fast_overlay_check().
 # Include small scales (0.20-0.30) for low-resolution video where
 # compression artifacts prevent detection at board-sized windows.
@@ -905,7 +920,10 @@ def _fast_grid_rescue(
 
 
 def _fast_overlay_check_impl(frame: np.ndarray) -> OverlayDetection:
-    """Fast overlay presence check — under 100ms on 1080p.
+    """Legacy heuristic fast overlay check retained for training/debugging.
+
+    Runtime detection no longer uses this path. It remains available only for
+    training-data workflows that still benefit from the old grid heuristics.
 
     Two-phase approach:
     1. Scan at downscaled resolution (810p) for speed using alternation check
@@ -1259,27 +1277,96 @@ def _fast_overlay_check_impl(frame: np.ndarray) -> OverlayDetection:
     return OverlayDetection(found=False, frame_resolution=resolution)
 
 
+def _run_yolo_overlay_detector(frame: np.ndarray) -> OverlayDetection:
+    """Run the default YOLO detector, with optional env overrides for experiments."""
+    from pipeline.overlay.yolo_detector import DEFAULT_WEIGHTS_PATH, detect_overlay_yolo
+
+    weights_override = os.getenv(_YOLO_WEIGHTS_OVERRIDE_ENV, "").strip()
+    weights_path = weights_override or str(DEFAULT_WEIGHTS_PATH)
+    conf = float(os.getenv(_YOLO_CONF_ENV, "0.25"))
+    imgsz = int(os.getenv(_YOLO_IMGSZ_ENV, "640"))
+    device = os.getenv(_YOLO_DEVICE_ENV, "auto")
+
+    return detect_overlay_yolo(
+        frame,
+        weights_path=weights_path,
+        conf=conf,
+        imgsz=imgsz,
+        device=device,
+    )
+
+
+
+def _pad_detection_bbox(
+    detection: OverlayDetection,
+    frame_shape: tuple[int, ...],
+    padding_px: int,
+) -> OverlayDetection:
+    """Expand a detection bbox by a fixed pixel margin, clamped to the frame."""
+    if not detection.found or detection.bbox is None:
+        return detection
+
+    h, w = frame_shape[:2]
+    x, y, bw, bh = detection.bbox
+    x1 = max(0, x - padding_px)
+    y1 = max(0, y - padding_px)
+    x2 = min(w, x + bw + padding_px)
+    y2 = min(h, y + bh + padding_px)
+    bbox = (x1, y1, x2 - x1, y2 - y1)
+
+    return OverlayDetection(
+        found=True,
+        bbox=bbox,
+        seed_bbox=detection.seed_bbox,
+        score=detection.score,
+        frame_resolution=detection.frame_resolution,
+    )
+
+
+
+def runtime_overlay_check(frame: np.ndarray) -> OverlayDetection:
+    """Fast runtime overlay check backed by the default YOLO detector."""
+    return _run_yolo_overlay_detector(frame)
+
+
+# ---------------------------------------------------------------------------
+# Heuristic overlay detectors (training / bootstrapping only)
+# ---------------------------------------------------------------------------
+
+
 def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
-    """Fast overlay presence check — under 100ms on 1080p."""
+    """Legacy heuristic fast overlay check for training-data workflows only."""
     return _fast_overlay_check_impl(frame)
 
 
 # ---------------------------------------------------------------------------
-# Fast overlay detection with accurate coordinates
+# Runtime overlay detection with accurate coordinates
+# ---------------------------------------------------------------------------
+
+
+def detect_overlay_runtime(frame: np.ndarray) -> OverlayDetection:
+    """Runtime overlay detection with a padded YOLO bbox.
+
+    The default YOLO detector is accurate but can land a few pixels inside the
+    annotated training box. Pad by a small fixed margin so downstream board
+    crops do not clip the outer ranks/files.
+    """
+    return _pad_detection_bbox(_run_yolo_overlay_detector(frame), frame.shape, padding_px=8)
+
+
+# ---------------------------------------------------------------------------
+# Heuristic overlay detection with accurate coordinates
 # ---------------------------------------------------------------------------
 
 
 def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
-    """Fast overlay detection with accurate coordinates.
+    """Legacy heuristic precise detector for training-data workflows only."""
+    return _detect_overlay_fast_legacy(frame)
 
-    Uses ``fast_overlay_check`` as a seed, then expands the bbox via
-    ``detect_grid`` to find pixel-perfect board boundaries.  Much faster
-    than ``detect_overlay_in_frame`` because it skips the multi-scale
-    sliding window expansion loop.
 
-    Returns ``OverlayDetection`` with precise bbox when found, or
-    ``found=False`` when no overlay is present.
-    """
+
+def _detect_overlay_fast_legacy(frame: np.ndarray) -> OverlayDetection:
+    """Legacy heuristic detector retained for training/debugging only."""
     from pipeline.overlay.grid_detector import (
         detect_grid,
         find_board_in_frame,
@@ -1291,12 +1378,10 @@ def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
     gray_full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
     gray_full = cv2.GaussianBlur(gray_full, (3, 3), 0)
 
-    # Phase 1: fast_overlay_check for seed detection.
-    seed = fast_overlay_check(frame)
+    # Phase 1: legacy fast checker for seed detection.
+    seed = _fast_overlay_check_impl(frame)
     if not seed.found or seed.bbox is None:
         # Retry the local implementation directly before giving up on a seed.
-        # This keeps the precise detector robust even if callers replace the
-        # public fast path or if the first seed attempt is bypassed.
         seed = _fast_overlay_check_impl(frame)
     if not seed.found or seed.bbox is None:
         grid_fallback = find_board_in_frame(frame)
@@ -1764,18 +1849,12 @@ def _correct_one_cell_offset(
 
 
 def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
-    """Detect a 2D chess board overlay in a video frame.
+    """Legacy heuristic overlay detector kept for training-data tooling only.
 
-    Slides a square window across the frame at multiple scales,
-    scoring each candidate region for rendered-board properties.
-    Then expands the best detections outward to cover the full board
-    (the initial scan may find a sub-region if the board has labels
-    or coordinates around the edges).
-
-    To handle frames with competing grid-like regions (e.g. camera views
-    of physical boards alongside a rendered overlay), expansion is tried
-    from the top candidates sorted by area.  The candidate whose expansion
-    produces the largest valid board wins.
+    This pre-YOLO scanner exists so annotation workflows can still reuse the
+    old grid/regularity heuristics while producing detector-training labels.
+    Runtime and app code must use ``runtime_overlay_check`` or
+    ``detect_overlay_runtime`` instead.
     """
     h, w = frame.shape[:2]
     resolution = (w, h)
@@ -1985,7 +2064,7 @@ def extract_frames_from_video(
 
 
 def scan_video(video_url_or_path: str) -> OverlayDetection:
-    """Scan a single video for overlay presence.
+    """Scan a single video for overlay presence with the default detector.
 
     Extracts 2-3 frames and checks each for a 2D board overlay.
     Returns the best detection result.
@@ -2003,7 +2082,7 @@ def scan_video(video_url_or_path: str) -> OverlayDetection:
         if frame is None:
             continue
 
-        detection = detect_overlay_in_frame(frame)
+        detection = runtime_overlay_check(frame)
         if detection.found and detection.score > best_detection.score:
             best_detection = detection
 

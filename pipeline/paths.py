@@ -29,7 +29,8 @@ VIDEOS_DIR = PROJECT_ROOT / "data" / "videos"
 Tier = Literal["lores", "hires", "fullres"]
 FRAME_LABELS = ("25pct", "50pct", "75pct")
 
-# Ground-truth overlay bbox annotations (migrated from overlay/dataset/frames/)
+# Ground-truth overlay bbox annotations used to train/evaluate the default
+# YOLO overlay detector (migrated from overlay/dataset/frames/).
 GROUND_TRUTH_PATH = VIDEOS_DIR / "ground_truth.json"
 
 # ── Legacy paths (used by find_* fallbacks during migration) ──────────

@@ -15,9 +15,10 @@ import numpy as np
 from pipeline.overlay.calibration import BOARD_THEMES, hex_to_bgr
 from pipeline.overlay.scanner import (
     OverlayDetection,
-    detect_overlay_fast,
     _overlay_alignment_score,
+    detect_overlay_runtime,
 )
+from pipeline.screen.dual_region_detector import detect_otb_region
 from pipeline.screen.frame_fetcher import fetch_youtube_frames
 
 logger = logging.getLogger(__name__)
@@ -189,8 +190,8 @@ def _grid_scan_frames(
 ) -> tuple[OverlayDetection | None, np.ndarray | None]:
     """Find overlay by sliding detect_grid across each frame.
 
-    Handles overlays where per-cell variance is too high for
-    ``fast_overlay_check`` (textured themes, piece-heavy positions).
+    Handles overlays where the default YOLO detector is unavailable or
+    where a legacy grid-only fallback is still useful for debugging.
     The grid detector uses Sobel edge projection which works regardless
     of cell fill variance.
 
@@ -271,110 +272,24 @@ def _grid_scan_frames(
 def compute_camera_bbox(
     frames: list[np.ndarray],
     overlay_bbox: tuple[int, int, int, int],
-) -> tuple[int, int, int, int]:
-    """Find the OTB board region, handling two layout types.
+) -> tuple[int, int, int, int] | None:
+    """Detect the OTB board region from sampled frames."""
+    detections: list[tuple[float, tuple[int, int, int, int]]] = []
 
-    **Discrete layout** (overlay >30% of frame area): overlay and camera
-    are in separate screen regions (e.g. side-by-side).  Uses frame
-    differencing to find the camera region.
+    for frame in frames:
+        detection = detect_otb_region(frame, overlay_bbox)
+        if detection.found and detection.bbox is not None:
+            detections.append((detection.confidence, detection.bbox))
 
-    **Overlaid layout** (overlay ≤30%): a small digital overlay sits on
-    top of the full-frame camera view.  The physical OTB board is
-    typically below the overlay.  Returns the region below the overlay
-    spanning its width, trimming the bottom 10 % for tickers/graphics.
+    if not detections:
+        return None
 
-    The returned bbox never overlaps the overlay.
-    """
-    frame_h, frame_w = frames[0].shape[:2]
-    ox, oy, ow, oh = overlay_bbox
-    frame_area = frame_h * frame_w
-    overlay_area = ow * oh
-
-    # ── Overlaid layout ──────────────────────────────────────────
-    if overlay_area <= 0.30 * frame_area:
-        # OTB board is below the overlay.  Span the overlay width,
-        # start just below the overlay, stop above bottom graphics.
-        board_top = oy + oh
-        bottom_margin = int(frame_h * 0.10)
-        board_bottom = frame_h - bottom_margin
-
-        # Centre the bbox horizontally on the overlay, with 5% padding
-        pad_x = int(ow * 0.05)
-        board_x = max(0, ox - pad_x)
-        board_w = min(frame_w - board_x, ow + 2 * pad_x)
-
-        board_h = board_bottom - board_top
-        if board_h < 50:
-            board_h = frame_h - board_top
-        return (board_x, board_top, board_w, board_h)
-
-    # ── Discrete layout ──────────────────────────────────────────
-    if len(frames) < 2:
-        sides = [
-            (0, 0, ox, frame_h),
-            (ox + ow, 0, frame_w - ox - ow, frame_h),
-            (0, 0, frame_w, oy),
-            (0, oy + oh, frame_w, frame_h - oy - oh),
-        ]
-        return max(
-            sides, key=lambda s: s[2] * s[3] if s[2] > 0 and s[3] > 0 else 0,
-        )
-
-    gray_a = cv2.cvtColor(frames[0], cv2.COLOR_BGR2GRAY).astype(np.float32)
-    gray_b = cv2.cvtColor(frames[1], cv2.COLOR_BGR2GRAY).astype(np.float32)
-    if gray_b.shape != gray_a.shape:
-        gray_b = cv2.resize(gray_b, (frame_w, frame_h)).astype(np.float32)
-    diff = np.abs(gray_a - gray_b)
-    diff[oy: oy + oh, ox: ox + ow] = 0
-
-    sides = [
-        (0, 0, ox, frame_h),
-        (ox + ow, 0, frame_w - ox - ow, frame_h),
-        (0, 0, frame_w, oy),
-        (0, oy + oh, frame_w, frame_h - oy - oh),
-    ]
-    sides.sort(
-        key=lambda s: s[2] * s[3] if s[2] > 0 and s[3] > 0 else 0,
-        reverse=True,
+    detections.sort(key=lambda item: item[0], reverse=True)
+    top_bboxes = [bbox for _, bbox in detections[: max(1, min(3, len(detections)))]]
+    return tuple(
+        int(round(np.median([bbox[index] for bbox in top_bboxes])))
+        for index in range(4)
     )
-
-    for rx, ry, rw, rh in sides:
-        if rw <= 0 or rh <= 0:
-            continue
-        block_size = max(60, min(rw, rh) // 8)
-        cols = max(1, rw // block_size)
-        rows = max(1, rh // block_size)
-        bw = rw // cols
-        bh = rh // rows
-
-        cam_min_x, cam_min_y = frame_w, frame_h
-        cam_max_x, cam_max_y = 0, 0
-        motion_blocks = 0
-
-        for row in range(rows):
-            for col in range(cols):
-                bx = rx + col * bw
-                by = ry + row * bh
-                block_diff = diff[by: by + bh, bx: bx + bw]
-                if float(np.mean(block_diff)) > 3.0:
-                    cam_min_x = min(cam_min_x, bx)
-                    cam_min_y = min(cam_min_y, by)
-                    cam_max_x = max(cam_max_x, bx + bw)
-                    cam_max_y = max(cam_max_y, by + bh)
-                    motion_blocks += 1
-
-        if motion_blocks > 0 and motion_blocks / max(rows * cols, 1) > 0.15:
-            # Add 5% horizontal padding for board edges with little motion
-            cam_w = cam_max_x - cam_min_x
-            pad_x = int(cam_w * 0.05)
-            cam_min_x = max(rx, cam_min_x - pad_x)
-            cam_max_x = min(rx + rw, cam_max_x + pad_x)
-            return (
-                cam_min_x, cam_min_y,
-                cam_max_x - cam_min_x, cam_max_y - cam_min_y,
-            )
-
-    return sides[0]
 
 
 def _scale_bbox(
@@ -452,7 +367,7 @@ def propose_calibration(
     best_frame = None
 
     for frame, label in frames:
-        detection = detect_overlay_fast(frame)
+        detection = detect_overlay_runtime(frame)
         if detection.found:
             bbox_area = detection.bbox[2] * detection.bbox[3] if detection.bbox else 0
             best_area = best_detection.bbox[2] * best_detection.bbox[3] if best_detection and best_detection.bbox else 0
@@ -487,10 +402,11 @@ def propose_calibration(
     flipped, orient_conf = detect_board_orientation(overlay_crop, theme)
     logger.info(f"Detected orientation: flipped={flipped} (confidence={orient_conf:.2f})")
 
-    # Compute camera region using frame differencing (distinguishes
-    # moving camera footage from static banners/graphics).
     all_frames = [f for f, _ in frames]
     camera_bbox = compute_camera_bbox(all_frames, overlay_bbox)
+    if camera_bbox is None:
+        logger.info(f"No OTB board detected for {video_id}")
+        return None
 
     # If frames came from the video at native resolution, no scaling needed
     # if the video matches the reference resolution. Otherwise scale.
@@ -657,9 +573,8 @@ def propose_calibration_for_clip(
         return None
 
     # Find the best overlay detection across sampled frames.
-    # Try detect_overlay_fast first (grid-line based, more precise).
-    # Fall back to detect_overlay_in_frame (multi-scale scan) if the
-    # fast method finds nothing on any frame.
+    # Try detect_overlay_runtime first (default YOLO detector).
+    # Fall back to the legacy grid scan only if YOLO finds nothing on any frame.
     #
     # Score by overlay alignment (regularity × alternation × periodicity)
     # rather than bbox area.  Max-area selection is fooled by oversized
@@ -670,7 +585,7 @@ def propose_calibration_for_clip(
     best_score = -1.0
 
     for frame, label in frames:
-        detection = detect_overlay_fast(frame)
+        detection = detect_overlay_runtime(frame)
         if detection.found and detection.bbox is not None:
             x, y, w, h = detection.bbox
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -683,8 +598,7 @@ def propose_calibration_for_clip(
                 best_frame = frame
 
     # Fallback: scan each frame with detect_grid directly.
-    # This handles overlays where cell variance is too high for
-    # fast_overlay_check (e.g. textured themes or piece-heavy positions).
+    # This legacy path remains only as a safety net for calibration/debugging.
     if best_detection is None:
         best_detection, best_frame = _grid_scan_frames(frames)
 
@@ -702,6 +616,9 @@ def propose_calibration_for_clip(
 
     all_frames = [f for f, _ in frames]
     camera_bbox = compute_camera_bbox(all_frames, overlay_bbox)
+    if camera_bbox is None:
+        logger.info(f"No OTB board detected in clip [{start_time:.0f}-{clip_end:.0f}]")
+        return None
 
     ref_w, ref_h = ref_resolution
     if frame_w == ref_w and frame_h == ref_h:

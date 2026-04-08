@@ -1,6 +1,5 @@
 """Service layer for monitoring synthetic data generation progress."""
 
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any

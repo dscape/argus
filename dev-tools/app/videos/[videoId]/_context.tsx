@@ -4,7 +4,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useMemo } 
 import {
   getVideo,
   getDownloadStatus,
-  downloadVideo,
+  downloadVideo as requestVideoDownload,
   openVideo,
   listVideoClips,
   updateVideoStatus,
@@ -13,6 +13,8 @@ import {
 } from "@/lib/api";
 import type { AssetStatus } from "@/lib/api";
 import type { CrawlVideo, DownloadStatus, VideoSession, VideoClip } from "@/lib/types";
+
+const activeVideoDownloads = new Map<string, Promise<void>>();
 
 interface VideoWorkbenchContextValue {
   videoId: string;
@@ -23,9 +25,12 @@ interface VideoWorkbenchContextValue {
   assets: AssetStatus | null;
   assetsLoading: boolean;
   downloadReady: boolean;
+  downloadBusy: boolean;
   downloadStatus: DownloadStatus | null;
   error: string | null;
   refreshClips: () => Promise<void>;
+  refreshDownloadStatus: () => Promise<DownloadStatus>;
+  startDownload: () => Promise<void>;
   setClips: React.Dispatch<React.SetStateAction<VideoClip[]>>;
   handleStatusChange: (vid: string, status: string | null, layoutType?: string) => Promise<void>;
 }
@@ -43,9 +48,59 @@ export function VideoWorkbenchProvider({ videoId, children }: { videoId: string;
   const [error, setError] = useState<string | null>(null);
   const [assets, setAssets] = useState<AssetStatus | null>(null);
   const [assetsLoading, setAssetsLoading] = useState(false);
+  const [downloadBusy, setDownloadBusy] = useState(activeVideoDownloads.has(videoId));
   const [downloadStatus, setDownloadStatus] = useState<DownloadStatus | null>(null);
   const [session, setSession] = useState<VideoSession | null>(null);
   const [clips, setClips] = useState<VideoClip[]>([]);
+
+  const refreshAssets = useCallback(async (): Promise<AssetStatus> => {
+    const status = await getAssetStatus(videoId);
+    setAssets(status);
+    return status;
+  }, [videoId]);
+
+  const refreshDownloadStatus = useCallback(async (): Promise<DownloadStatus> => {
+    const status = await getDownloadStatus(videoId);
+    setDownloadStatus(status);
+    return status;
+  }, [videoId]);
+
+  const startDownload = useCallback(async () => {
+    const existing = activeVideoDownloads.get(videoId);
+    if (existing) {
+      setDownloadBusy(true);
+      try {
+        await existing;
+        await Promise.allSettled([refreshAssets(), refreshDownloadStatus()]);
+      } finally {
+        setDownloadBusy(false);
+      }
+      return;
+    }
+
+    const request = (async () => {
+      const result = await requestVideoDownload(videoId);
+      setDownloadStatus({
+        downloaded: true,
+        path: result.path,
+        file_size_mb: result.file_size_mb,
+        duration_seconds: null,
+      });
+      await Promise.allSettled([refreshAssets(), refreshDownloadStatus()]);
+    })();
+
+    activeVideoDownloads.set(videoId, request);
+    setDownloadBusy(true);
+
+    try {
+      await request;
+    } finally {
+      if (activeVideoDownloads.get(videoId) === request) {
+        activeVideoDownloads.delete(videoId);
+      }
+      setDownloadBusy(false);
+    }
+  }, [videoId, refreshAssets, refreshDownloadStatus]);
 
   // Fetch video metadata
   useEffect(() => {
@@ -61,35 +116,37 @@ export function VideoWorkbenchProvider({ videoId, children }: { videoId: string;
     (async () => {
       setAssetsLoading(true);
       try {
-        let status = await getAssetStatus(videoId);
+        let status = await refreshAssets();
         if (cancelled) return;
-        setAssets(status);
         if (status.lores.length < 3 || status.hires.length < 3) {
           await fetchAssets(videoId);
           if (cancelled) return;
-          status = await getAssetStatus(videoId);
+          status = await refreshAssets();
           if (cancelled) return;
-          setAssets(status);
         }
         if (!status.video) {
           try {
-            await downloadVideo(videoId);
+            await startDownload();
             if (cancelled) return;
-            status = await getAssetStatus(videoId);
+            status = await refreshAssets();
             if (cancelled) return;
-            setAssets(status);
-          } catch { /* video download may fail, that's ok */ }
+          } catch {
+            // video download may fail, that's ok
+          }
         }
-      } catch { /* ignore asset fetch errors */ }
+        await refreshDownloadStatus();
+      } catch {
+        // ignore asset fetch errors
+      }
       if (!cancelled) setAssetsLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [video, videoId]);
+  }, [video, videoId, refreshAssets, refreshDownloadStatus, startDownload]);
 
   // Fetch download status
   useEffect(() => {
-    getDownloadStatus(videoId).then(setDownloadStatus);
-  }, [videoId]);
+    refreshDownloadStatus().catch(() => undefined);
+  }, [refreshDownloadStatus]);
 
   // Open video session when download is ready
   useEffect(() => {
@@ -115,7 +172,11 @@ export function VideoWorkbenchProvider({ videoId, children }: { videoId: string;
     setVideo((prev) => prev ? { ...prev, screening_status: status, layout_type: layoutType ?? null } : prev);
   }, []);
 
-  const downloadReady = assets != null && assets.video && assets.lores.length >= 3 && assets.hires.length >= 3;
+  const downloadReady = Boolean(
+    (assets?.video || downloadStatus?.downloaded) &&
+    assets?.lores.length === 3 &&
+    assets?.hires.length === 3
+  );
   const activeClips = useMemo(() => clips.filter((c) => !c.is_gap), [clips]);
 
   return (
@@ -128,9 +189,12 @@ export function VideoWorkbenchProvider({ videoId, children }: { videoId: string;
       assets,
       assetsLoading,
       downloadReady,
+      downloadBusy,
       downloadStatus,
       error,
       refreshClips,
+      refreshDownloadStatus,
+      startDownload,
       setClips,
       handleStatusChange,
     }}>

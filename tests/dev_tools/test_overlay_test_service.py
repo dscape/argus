@@ -1,5 +1,6 @@
-"""Tests for overlay_test_service candidate selection."""
+"""Tests for overlay_test_service sampling and candidate selection."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 from api.services.evaluate import overlay_test_service
@@ -66,3 +67,78 @@ class TestGetExtractionCandidates:
             call("vid-null-layout", {"vid-null-layout:25pct"}),
             call("vid-overlay", {"vid-null-layout:25pct"}),
         ]
+
+    @patch.object(
+        overlay_test_service,
+        "_fixture_candidate_video_ids",
+        return_value=["fixture-video"],
+    )
+    @patch.object(
+        overlay_test_service,
+        "_get_saved_frame_keys",
+        return_value=set(),
+    )
+    @patch.object(overlay_test_service, "get_conn")
+    def test_falls_back_to_fixture_videos_when_db_candidates_are_empty(
+        self,
+        mock_get_conn,
+        _mock_saved_keys,
+        _mock_fixture_candidates,
+    ) -> None:
+        mock_conn_ctx, _mock_cursor = _mock_db_conn([])
+        mock_get_conn.return_value = mock_conn_ctx
+
+        result = overlay_test_service.get_extraction_candidates(limit=2)
+
+        assert result == ["fixture-video"]
+
+
+class TestFixtureFallbacks:
+    def test_sample_board_filenames_falls_back_to_committed_fixture_boards(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
+        synthetic_dir = tmp_path / "synthetic"
+        fixture_dir = tmp_path / "fixtures"
+        real_dir = tmp_path / "real"
+        synthetic_dir.mkdir()
+        fixture_dir.mkdir()
+        (fixture_dir / "fixture-board.jpeg").write_bytes(b"fixture")
+
+        monkeypatch.setattr(overlay_test_service, "CHESS_POSITIONS_TEST_DIR", synthetic_dir)
+        monkeypatch.setattr(overlay_test_service, "BOARD_FIXTURES_DIR", fixture_dir)
+        monkeypatch.setattr(overlay_test_service, "REAL_OVERLAY_TEST_DIR", real_dir)
+
+        assert overlay_test_service.sample_board_filenames(limit=1) == ["fixture-board.jpeg"]
+
+    def test_resolve_board_image_path_falls_back_to_fixture_boards(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
+        synthetic_dir = tmp_path / "synthetic"
+        fixture_dir = tmp_path / "fixtures"
+        synthetic_dir.mkdir()
+        fixture_dir.mkdir()
+        expected = fixture_dir / "fixture-board.jpeg"
+        expected.write_bytes(b"fixture")
+
+        monkeypatch.setattr(overlay_test_service, "CHESS_POSITIONS_TEST_DIR", synthetic_dir)
+        monkeypatch.setattr(overlay_test_service, "BOARD_FIXTURES_DIR", fixture_dir)
+
+        assert overlay_test_service.resolve_board_image_path("fixture-board.jpeg") == expected
+
+    def test_resolve_frame_path_falls_back_to_fixture_frames(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
+        frame_path = tmp_path / "fixture-video" / "25pct.jpg"
+        frame_path.parent.mkdir(parents=True)
+        frame_path.write_bytes(b"fixture")
+
+        monkeypatch.setattr(overlay_test_service, "FIXTURE_FRAMES_DIR", tmp_path)
+        monkeypatch.setattr(overlay_test_service, "find_frame", lambda *_args, **_kwargs: None)
+
+        assert overlay_test_service._resolve_frame_path("fixture-video", "25pct") == frame_path

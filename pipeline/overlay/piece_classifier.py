@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 
 import chess
@@ -215,7 +214,7 @@ def _detect_orientation(class_grid: list[list[int]]) -> bool:
 
 def read_fen_with_grid(
     frame: np.ndarray,
-    grid: "GridResult",
+    grid: GridResult,
     device: str = "cpu",
     detect_orientation: bool = True,
 ) -> str:

@@ -1,9 +1,9 @@
 """Service layer for overlay (piece classifier) accuracy testing.
 
-Uses the overlay/positions dataset (400x400 board images with FEN in filenames)
-to evaluate the DINOv2 piece classifier. Also supports real overlay crops
-extracted from screening frames. Mirrors the screening inspector pattern:
-sample → inspect → save session.
+Uses local overlay board datasets when available and falls back to committed
+test fixtures so the evaluation UIs remain usable in fresh clones. Also
+supports real overlay crops extracted from screening frames. Mirrors the
+screening inspector pattern: sample → inspect → save session.
 """
 
 import base64
@@ -26,19 +26,23 @@ from pipeline.overlay.chess_positions_data import (
 )
 from pipeline.overlay.grid_detector import GridResult, detect_grid
 from pipeline.overlay.piece_classifier import classify_squares, read_fen_with_grid
-from pipeline.overlay.scanner import detect_overlay_fast, fast_overlay_check
+from pipeline.overlay.scanner import detect_overlay_runtime, runtime_overlay_check
 from pipeline.paths import find_frame
 
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 CHESS_POSITIONS_TEST_DIR = _PROJECT_ROOT / "data" / "overlay" / "val"
+BOARD_FIXTURES_DIR = _PROJECT_ROOT / "tests" / "fixtures" / "boards"
+FIXTURE_FRAMES_DIR = _PROJECT_ROOT / "tests" / "fixtures" / "frames"
+FIXTURE_FRAME_GROUND_TRUTH_PATH = FIXTURE_FRAMES_DIR / "ground_truth.json"
 # Real overlay crops extracted from video_clips
 REAL_OVERLAY_TEST_DIR = _PROJECT_ROOT / "data" / "overlay" / "val_real"
 # Prefix prepended to real sample filenames in the sample list so inspect_board
 # can route to the right directory without path separators (which the board-image
 # endpoint rejects for security).
 _REAL_PREFIX = "real__"
+_IMAGE_EXTS = (".jpeg", ".jpg", ".png")
 
 _KNOWN_FRAME_NAMES = ("thumb_hires", "thumb_sd", "thumb", "25pct", "50pct", "75pct")
 # For overlay extraction, only use auto-generated gameplay frames (25/50/75% of video).
@@ -59,14 +63,15 @@ _GRID = GridResult(
 
 
 def _resolve_frame_path(video_id: str, frame_name: str) -> Path | None:
-    """Return overlay frame path, preferring fullres then hires.
-
-    Screening frames (480x360) are too low-res for reliable overlay detection.
-    """
+    """Return overlay frame path from the video store or committed fixtures."""
     for tier in ("fullres", "hires"):
         path = find_frame(video_id, tier, frame_name)  # type: ignore[arg-type]
         if path is not None:
             return path
+
+    fixture_path = FIXTURE_FRAMES_DIR / video_id / f"{frame_name}.jpg"
+    if fixture_path.exists():
+        return fixture_path
     return None
 
 
@@ -95,6 +100,63 @@ def _frame_to_base64(frame: np.ndarray, max_width: int = 400) -> str:
         frame = cv2.resize(frame, (max_width, int(h * scale)))
     _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+def _list_image_filenames(directory: Path, *, exclude: set[str]) -> list[str]:
+    if not directory.exists():
+        return []
+    return [
+        path.name
+        for path in directory.iterdir()
+        if path.is_file() and path.suffix.lower() in _IMAGE_EXTS and path.name not in exclude
+    ]
+
+
+def _resolve_synthetic_board_path(filename: str) -> Path | None:
+    for root in (CHESS_POSITIONS_TEST_DIR, BOARD_FIXTURES_DIR):
+        candidate = root / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def resolve_board_image_path(filename: str) -> Path:
+    if filename.startswith(_REAL_PREFIX):
+        actual_name = filename[len(_REAL_PREFIX):]
+        image_path = REAL_OVERLAY_TEST_DIR / actual_name
+    else:
+        image_path = _resolve_synthetic_board_path(filename)
+
+    if image_path is None or not image_path.exists():
+        raise FileNotFoundError(f"Board image not found: {filename}")
+    return image_path
+
+
+def _load_fixture_frame_ground_truth() -> dict[str, dict[str, object]]:
+    if not FIXTURE_FRAME_GROUND_TRUTH_PATH.exists():
+        return {}
+    data = json.loads(FIXTURE_FRAME_GROUND_TRUTH_PATH.read_text())
+    return data if isinstance(data, dict) else {}
+
+
+def _fixture_candidate_video_ids(saved_keys: set[str], limit: int) -> list[str]:
+    ground_truth = _load_fixture_frame_ground_truth()
+    video_ids = list(
+        {
+            key.split("/", 1)[0]
+            for key, annotation in ground_truth.items()
+            if bool(annotation.get("has_overlay"))
+        }
+    )
+    random.shuffle(video_ids)
+
+    result: list[str] = []
+    for video_id in video_ids:
+        if _video_has_unsaved_frames(video_id, saved_keys):
+            result.append(video_id)
+            if len(result) >= limit:
+                break
+    return result
 
 
 def _fen_to_board(fen: str) -> chess.Board:
@@ -137,22 +199,17 @@ def sample_board_filenames(
         )
 
     exclude_set = set(exclude or [])
-    _IMG_EXTS = (".jpeg", ".jpg", ".png")
 
-    synthetic = [
-        f
-        for f in os.listdir(CHESS_POSITIONS_TEST_DIR)
-        if f.endswith(_IMG_EXTS) and f not in exclude_set
-    ]
+    synthetic = _list_image_filenames(CHESS_POSITIONS_TEST_DIR, exclude=exclude_set)
+    if not synthetic:
+        synthetic = _list_image_filenames(BOARD_FIXTURES_DIR, exclude=exclude_set)
 
     # Gather real samples from pre-extracted overlay crops
-    real: list[str] = []
-    if REAL_OVERLAY_TEST_DIR.exists():
-        real = [
-            _REAL_PREFIX + f
-            for f in os.listdir(REAL_OVERLAY_TEST_DIR)
-            if f.endswith(_IMG_EXTS) and (_REAL_PREFIX + f) not in exclude_set
-        ]
+    real = [
+        _REAL_PREFIX + name
+        for name in _list_image_filenames(REAL_OVERLAY_TEST_DIR, exclude=exclude_set)
+        if (_REAL_PREFIX + name) not in exclude_set
+    ]
 
     real_quota = min(len(real), max(1, limit // 5))
     synth_quota = limit - real_quota
@@ -180,7 +237,7 @@ def inspect_board(filename: str) -> dict:
 
     if is_real:
         actual_name = filename[len(_REAL_PREFIX):]
-        image_path = REAL_OVERLAY_TEST_DIR / actual_name
+        image_path = resolve_board_image_path(filename)
         source = "real"
         stem = Path(actual_name).stem
         if stem.startswith("f_"):
@@ -190,15 +247,11 @@ def inspect_board(filename: str) -> dict:
             # Legacy clip-based: r{clip_id}_{fen_hyphenated}
             fen_hyphenated = stem.split("_", 1)[1] if "_" in stem else stem
             expected_fen = fen_hyphenated.replace("-", "/")
-        if not image_path.exists():
-            raise FileNotFoundError(f"Board image not found: {image_path}")
         image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     else:
-        image_path = CHESS_POSITIONS_TEST_DIR / filename
+        image_path = resolve_board_image_path(filename)
         source = "synthetic"
         expected_fen = parse_fen_from_filename(filename)
-        if not image_path.exists():
-            raise FileNotFoundError(f"Board image not found: {image_path}")
         image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
 
     if image is None:
@@ -206,7 +259,7 @@ def inspect_board(filename: str) -> dict:
 
     # Step 1: overlay detection timing
     t_overlay = time.monotonic()
-    det = fast_overlay_check(image)
+    det = runtime_overlay_check(image)
     overlay_detect_ms = round((time.monotonic() - t_overlay) * 1000, 1)
 
     # Step 2: grid detection timing
@@ -420,11 +473,25 @@ def get_extraction_candidates(
                 raw = [row[0] for row in cur.fetchall()]
 
     result: list[str] = []
+    seen: set[str] = set()
     for vid in raw:
         if len(result) >= limit:
             break
+        if vid in seen:
+            continue
         if _video_has_unsaved_frames(vid, saved_keys):
             result.append(vid)
+            seen.add(vid)
+
+    if len(result) < limit and not video_ids:
+        for vid in _fixture_candidate_video_ids(saved_keys, limit - len(result)):
+            if vid in seen:
+                continue
+            result.append(vid)
+            seen.add(vid)
+            if len(result) >= limit:
+                break
+
     return result
 
 
@@ -434,8 +501,9 @@ def extract_overlay_from_frames(video_id: str) -> dict:
     Tries frames (25pct, 50pct, 75pct), preferring hi-res overlay frames
     from fullres/hires tiers over low-res screening frames.
 
-    Pipeline per frame: ``detect_overlay_fast`` (seed + expansion) →
-    crop to bbox → ``detect_grid`` → ``classify_squares`` → FEN.
+    Pipeline per frame: ``detect_overlay_runtime`` (default YOLO detector,
+    padded to avoid clipping) → crop to bbox → ``detect_grid`` →
+    ``classify_squares`` → FEN.
 
     Returns a dict with ``status`` of ``ok``, ``warning``, or ``no_overlay``.
     """
@@ -454,7 +522,7 @@ def extract_overlay_from_frames(video_id: str) -> dict:
         if frame is None:
             continue
 
-        det = detect_overlay_fast(frame)
+        det = detect_overlay_runtime(frame)
         if not det.found or det.bbox is None:
             continue
 
@@ -507,10 +575,9 @@ def extract_overlay_from_frames(video_id: str) -> dict:
 def detect_overlay_from_frames(video_id: str) -> dict:
     """Fast phase: detect overlay + grid, return crop image without FEN.
 
-    Uses ``detect_overlay_fast`` which expands the initial seed bbox via
-    grid detection to find pixel-perfect board boundaries.  Returns
-    immediately so the UI can show the overlay crop while FEN
-    classification happens asynchronously.
+    Uses ``detect_overlay_runtime`` which runs the default YOLO detector and
+    applies a small safety padding to the bbox. Returns immediately so the UI
+    can show the overlay crop while FEN classification happens asynchronously.
     """
     saved_keys = _get_saved_frame_keys()
 
@@ -528,7 +595,7 @@ def detect_overlay_from_frames(video_id: str) -> dict:
         if frame is None:
             continue
 
-        det = detect_overlay_fast(frame)
+        det = detect_overlay_runtime(frame)
         if not det.found or det.bbox is None:
             continue
 
@@ -574,7 +641,7 @@ def classify_overlay_fen(video_id: str, frame_name: str) -> dict:
     if frame is None:
         return {"status": "error", "warning": "Could not read frame"}
 
-    det = detect_overlay_fast(frame)
+    det = detect_overlay_runtime(frame)
     if not det.found or det.bbox is None:
         return {"status": "error", "warning": "Overlay not detected"}
 
@@ -638,7 +705,7 @@ def save_confirmed_frame_extractions(confirmations: list[dict]) -> dict:
             errors.append(f"{label}: could not read frame")
             continue
 
-        det = detect_overlay_fast(frame)
+        det = detect_overlay_runtime(frame)
         if not det.found or det.bbox is None:
             errors.append(f"{label}: overlay not detected")
             continue
@@ -680,10 +747,10 @@ def save_confirmed_frame_extractions(confirmations: list[dict]) -> dict:
 
 
 def validate_overlay_detection(limit: int = 100) -> dict:
-    """Validate fast_overlay_check accuracy on real video frames.
+    """Validate runtime_overlay_check accuracy on real video frames.
 
     Samples frames from downloaded overlay videos across diverse channels.
-    For each frame, runs fast_overlay_check and records whether the overlay
+    For each frame, runs runtime_overlay_check and records whether the overlay
     was detected, the score, and the time taken.
 
     Args:
@@ -761,7 +828,7 @@ def validate_overlay_detection(limit: int = 100) -> dict:
             fh, fw = frame.shape[:2]
 
             t_start = time.monotonic()
-            det = fast_overlay_check(frame)
+            det = runtime_overlay_check(frame)
             elapsed_ms = round((time.monotonic() - t_start) * 1000, 1)
 
             result = {

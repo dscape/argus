@@ -7,9 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
-
 from pipeline.db.connection import get_conn
-from pipeline.overlay.scanner import detect_overlay_in_frame
+from pipeline.screen.ai_classifier import screening_overlay_check
 from pipeline.screen.dual_region_detector import detect_otb_region
 from pipeline.screen.frame_fetcher import fetch_youtube_frames, is_vertical_video
 
@@ -75,7 +74,7 @@ def inspect_ai_screening(video_id: str) -> dict | None:
     # Scan all frames in parallel (numpy/OpenCV release the GIL)
     def _scan_frame(frame_bgr: np.ndarray, label: str) -> dict:
         h, w = frame_bgr.shape[:2]
-        det = detect_overlay_in_frame(frame_bgr)
+        det = screening_overlay_check(frame_bgr)
         overlay_score = det.score if det.found else 0.0
         otb_score = 0.0
         if det.found and det.bbox:
@@ -494,11 +493,11 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
                 })
                 continue
 
-            # Compute per-frame heuristic scores (only needs opencv/numpy)
+            # Compute per-frame detector scores (only needs opencv/numpy)
             ovl_scores = []
             otb_scores = []
             for frame_bgr, _ in frames:
-                det = detect_overlay_in_frame(frame_bgr)
+                det = screening_overlay_check(frame_bgr)
                 ovl_scores.append(det.score if det.found else 0.0)
                 otb_score = 0.0
                 if det.found and det.bbox:
@@ -648,11 +647,13 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
     """Inspect auto-calibration for a video — overlay detection at multiple timestamps."""
     from pipeline.overlay.auto_calibration import (
         _get_video_path,
+        _grid_scan_frames,
         compute_camera_bbox,
         detect_board_orientation,
         detect_board_theme,
     )
     from pipeline.overlay.calibration import get_calibration
+    from pipeline.overlay.scanner import detect_overlay_runtime
 
     video_path = _get_video_path(video_id)
     source = "local_video" if video_path else "thumbnails"
@@ -686,7 +687,7 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
     best_frame = None
 
     for frame, ts in all_frames:
-        det = detect_overlay_in_frame(frame)
+        det = detect_overlay_runtime(frame)
         fh, fw = frame.shape[:2]
 
         # Draw bboxes on frame
@@ -716,10 +717,12 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
                 best_detection = det
                 best_frame = frame
 
+    if best_detection is None:
+        best_detection, best_frame = _grid_scan_frames(all_frames)
+
     # Compute proposal from best detection
     proposal = None
     proposal_frame_b64 = None
-    camera_heatmap_b64 = None
     if best_detection and best_frame is not None:
         fh, fw = best_frame.shape[:2]
         overlay_crop = best_frame[
@@ -729,47 +732,27 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
 
         theme, theme_conf = detect_board_theme(overlay_crop)
         flipped, orient_conf = detect_board_orientation(overlay_crop, theme)
-        camera = compute_camera_bbox(
-            [f for f, _ in all_frames], best_detection.bbox
-        )
+        camera = compute_camera_bbox([f for f, _ in all_frames], best_detection.bbox)
+        if camera is not None:
+            proposal = {
+                "overlay": list(best_detection.bbox),
+                "camera": list(camera),
+                "theme": theme,
+                "theme_confidence": round(theme_conf, 3),
+                "board_flipped": flipped,
+                "orientation_confidence": round(orient_conf, 3),
+            }
 
-        proposal = {
-            "overlay": list(best_detection.bbox),
-            "camera": list(camera),
-            "theme": theme,
-            "theme_confidence": round(theme_conf, 3),
-            "board_flipped": flipped,
-            "orientation_confidence": round(orient_conf, 3),
-        }
-
-        # Draw proposal overlay + camera bboxes on best frame for visual verification
-        proposal_annotated = best_frame.copy()
-        ox, oy, ow, oh = best_detection.bbox
-        cv2.rectangle(proposal_annotated, (ox, oy), (ox + ow, oy + oh), (0, 255, 0), 3)
-        cv2.putText(proposal_annotated, "Overlay", (ox + 6, oy + 28),
-                     cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-        cx, cy, cw, ch = camera
-        cv2.rectangle(proposal_annotated, (cx, cy), (cx + cw, cy + ch), (0, 0, 255), 3)
-        cv2.putText(proposal_annotated, "Camera", (cx + 6, cy + 28),
-                     cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-        proposal_frame_b64 = _frame_to_base64(proposal_annotated)
-
-        # Generate camera motion heatmap
-        if len(all_frames) >= 2:
-            target_h, target_w = all_frames[0][0].shape[:2]
-            f1 = cv2.cvtColor(all_frames[0][0], cv2.COLOR_BGR2GRAY).astype(np.float32)
-            f2_raw = cv2.cvtColor(all_frames[-1][0], cv2.COLOR_BGR2GRAY).astype(np.float32)
-            # Resize f2 to match f1 if resolutions differ (e.g. mixed-res thumbnails)
-            if f2_raw.shape != f1.shape:
-                f2_raw = cv2.resize(f2_raw, (target_w, target_h)).astype(np.float32)
-            diff = np.abs(f1 - f2_raw)
-            # Zero out overlay
+            proposal_annotated = best_frame.copy()
             ox, oy, ow, oh = best_detection.bbox
-            diff[oy : oy + oh, ox : ox + ow] = 0
-            # Normalize and colorize
-            diff_norm = np.clip(diff / 30.0 * 255, 0, 255).astype(np.uint8)
-            heatmap = cv2.applyColorMap(diff_norm, cv2.COLORMAP_JET)
-            camera_heatmap_b64 = _frame_to_base64(heatmap)
+            cv2.rectangle(proposal_annotated, (ox, oy), (ox + ow, oy + oh), (0, 255, 0), 3)
+            cv2.putText(proposal_annotated, "Overlay", (ox + 6, oy + 28),
+                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+            cx, cy, cw, ch = camera
+            cv2.rectangle(proposal_annotated, (cx, cy), (cx + cw, cy + ch), (0, 0, 255), 3)
+            cv2.putText(proposal_annotated, "OTB board", (cx + 6, cy + 28),
+                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+            proposal_frame_b64 = _frame_to_base64(proposal_annotated)
 
     # Mark which frame was used for the proposal
     best_bbox_list = list(best_detection.bbox) if best_detection and best_detection.bbox else None
@@ -807,7 +790,6 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
         "proposal": proposal,
         "proposal_frame_base64": proposal_frame_b64,
         "saved_calibration": saved_cal,
-        "camera_motion_heatmap_base64": camera_heatmap_b64,
     }
 
 
@@ -818,11 +800,11 @@ def inspect_hard_cuts(video_id: str, sample_fps: float = 2.0) -> dict | None:
     """Inspect hard cut detection on a video with calibration."""
     from pipeline.overlay.auto_calibration import _get_video_path
     from pipeline.overlay.calibration import get_calibration
+    from pipeline.overlay.grid_detector import detect_grid
     from pipeline.overlay.overlay_move_detector import (
         count_fen_differences,
         detect_moves,
     )
-    from pipeline.overlay.grid_detector import detect_grid
     from pipeline.overlay.piece_classifier import read_fen_with_grid
 
     # Get channel for calibration
@@ -944,7 +926,6 @@ def _eval_ai_screening(sample_size: int, notes: str | None = None) -> dict:
     """Evaluate AI screening classifier on a channel-stratified sample."""
     import torch
     import torch.nn.functional as F
-
     from pipeline.screen.ai_classifier import (
         CLASS_NAMES,
         NUM_CLASSES,

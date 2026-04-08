@@ -4,7 +4,7 @@
        up down preview \
        docker-ai-extract docker-ai-train docker-ai-eval docker-ai-screen docker-ai-retrain \
        docker-ai-extract-status docker-smoke-test \
-       backup check-backup \
+       backup check-backup check-runtime-assets \
        download-models
 
 # ── Use venv Python/pip so targets work without activation ──
@@ -18,7 +18,7 @@ install:
 dev: check-backup download-models
 	$(PIP) install -e ".[dev]"
 
-test:
+test: check-runtime-assets
 	$(PYTHON) -m pytest tests/ -v
 
 lint:
@@ -50,6 +50,9 @@ train-pieces: check-backup
 clean:
 	rm -rf build/ dist/ *.egg-info .pytest_cache .mypy_cache __pycache__
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+
+check-runtime-assets:
+	@python3 -m pipeline.runtime_assets
 
 # ── Pipeline targets ─────────────────────────────────────────
 
@@ -88,10 +91,10 @@ seed-channels:
 crawl:
 	$(PYTHON) -m pipeline.cli crawl $(ARGS)
 
-screen: check-backup
+screen: check-backup check-runtime-assets
 	$(PYTHON) -m pipeline.cli screen $(ARGS)
 
-inspect:
+inspect: check-runtime-assets
 	$(PYTHON) -m pipeline.cli inspect $(ARGS)
 
 download:
@@ -100,7 +103,7 @@ download:
 download-models:
 	$(PYTHON) scripts/download_model.py
 
-generate-clips:
+generate-clips: check-runtime-assets
 	$(PYTHON) -m pipeline.cli generate-clips $(ARGS)
 
 pipeline-stats:
@@ -111,7 +114,7 @@ pipeline-stats:
 ensure-overlay-data:
 	@$(PYTHON) -m pipeline.setup.chess_positions --prompt
 
-dev-tools: ensure-overlay-data
+dev-tools: check-runtime-assets
 	docker compose --profile dev-tools up --build
 
 dev-tools-down:
@@ -122,7 +125,7 @@ dev-tools-down:
 BLENDER_PID_FILE := .blender-server.pid
 BLENDER_LOG_FILE := .blender-server.log
 
-up: check-backup ensure-overlay-data
+up: check-backup check-runtime-assets
 	@echo "Starting Docker services (postgres, dev-tools-api, dev-tools-ui)..."
 	@docker compose --profile dev-tools up -d --build
 	@echo ""
@@ -158,7 +161,7 @@ down:
 	@lsof -ti tcp:$(BLENDER_PORT) | xargs kill 2>/dev/null || true
 	@echo "All services stopped."
 
-preview: check-backup ensure-overlay-data
+preview: check-backup check-runtime-assets
 	@$(MAKE) down 2>/dev/null || true
 	@if command -v $(BLENDER) >/dev/null 2>&1 || [ -x "$(BLENDER)" ]; then \
 		echo "Starting Blender render server on port $(BLENDER_PORT)..."; \

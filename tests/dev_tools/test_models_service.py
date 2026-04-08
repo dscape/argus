@@ -24,7 +24,7 @@ class TestDbWriteFailureHandling:
     @patch("api.services.evaluate.models_service.get_conn")
     @patch("api.services.evaluate.models_service.is_vertical_video")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")
-    @patch("api.services.evaluate.models_service.detect_overlay_in_frame")
+    @patch("api.services.evaluate.models_service.screening_overlay_check")
     @patch("api.services.evaluate.models_service.detect_otb_region")
     def test_db_failure_flags_results(
         self, mock_otb, mock_overlay, mock_frames, mock_vertical, mock_conn
@@ -32,7 +32,6 @@ class TestDbWriteFailureHandling:
         """When DB update fails, results should contain db_write_failed flag."""
         from api.services.evaluate.models_service import ai_screen_batch
 
-        # First call returns video metadata, second call (for DB write) raises
         mock_conn_ok = _mock_db_conn(
             [
                 ("vid1", "Chess game", "overlay", 0.95, True),
@@ -40,12 +39,10 @@ class TestDbWriteFailureHandling:
         )
         mock_conn.return_value = mock_conn_ok
 
-        # Return some frames so processing continues
         fake_frame = np.zeros((360, 480, 3), dtype=np.uint8)
         mock_frames.return_value = [(fake_frame, "thumb")]
         mock_vertical.return_value = False
 
-        # Mock overlay detection
         mock_det = MagicMock()
         mock_det.found = False
         mock_det.score = 0.0
@@ -55,7 +52,6 @@ class TestDbWriteFailureHandling:
         results = ai_screen_batch(["vid1"], threshold=0.90)
 
         assert len(results) == 1
-        # Should have all required keys regardless
         assert "video_id" in results[0]
         assert "error" in results[0]
 
@@ -118,7 +114,7 @@ class TestThresholdBehavior:
     @patch("api.services.evaluate.models_service.get_conn")
     @patch("api.services.evaluate.models_service.is_vertical_video")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")
-    @patch("api.services.evaluate.models_service.detect_overlay_in_frame")
+    @patch("api.services.evaluate.models_service.screening_overlay_check")
     @patch("api.services.evaluate.models_service.detect_otb_region")
     def test_high_threshold_prevents_auto_decide(
         self, mock_otb, mock_overlay, mock_frames, mock_vertical, mock_conn
@@ -126,7 +122,6 @@ class TestThresholdBehavior:
         """With threshold=1.0, nothing should be auto-decided."""
         from api.services.evaluate.models_service import ai_screen_batch
 
-        # Use DB fallback with existing AI prediction
         mock_conn.return_value = _mock_db_conn(
             [
                 ("vid1", "Chess game", "overlay", 0.95, False),
@@ -145,6 +140,5 @@ class TestThresholdBehavior:
         results = ai_screen_batch(["vid1"], threshold=1.0)
 
         assert len(results) == 1
-        # Even with 0.95 confidence, threshold=1.0 means no auto-decide
         if results[0].get("predicted_class") is not None:
             assert results[0]["auto_decided"] is False

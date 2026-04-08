@@ -32,7 +32,6 @@ interface CalibrationResult {
   proposal: Proposal | null;
   proposal_frame_base64: string | null;
   saved_calibration: Record<string, any> | null;
-  camera_motion_heatmap_base64: string | null;
   error?: string;
 }
 
@@ -151,7 +150,7 @@ export default function AutoCalibrationInspector() {
                 Proposed Calibration (visual)
               </h3>
               <p className="text-xs text-muted-foreground mb-1">
-                Green = Overlay region, Red = Camera region
+                Green = Overlay region, Red = OTB board region
               </p>
               <img
                 src={`data:image/jpeg;base64,${result.proposal_frame_base64}`}
@@ -168,7 +167,7 @@ export default function AutoCalibrationInspector() {
                 <h3 className="text-sm font-medium">Proposed Calibration</h3>
                 <div className="text-xs space-y-1">
                   <p>Overlay: ({result.proposal.overlay.join(", ")})</p>
-                  <p>Camera: ({result.proposal.camera.join(", ")})</p>
+                  <p>OTB Board: ({result.proposal.camera.join(", ")})</p>
                   <p>
                     Theme: <b>{result.proposal.theme}</b>{" "}
                     <span className="text-muted-foreground">
@@ -189,7 +188,7 @@ export default function AutoCalibrationInspector() {
                 <h3 className="text-sm font-medium">Saved Calibration</h3>
                 <div className="text-xs space-y-1">
                   <p>Overlay: ({result.saved_calibration.overlay.join(", ")})</p>
-                  <p>Camera: ({result.saved_calibration.camera.join(", ")})</p>
+                  <p>OTB Board: ({result.saved_calibration.camera.join(", ")})</p>
                   <p>Theme: <b>{result.saved_calibration.board_theme}</b></p>
                   <p>Flipped: <b>{result.saved_calibration.board_flipped ? "Yes" : "No"}</b></p>
                 </div>
@@ -201,22 +200,6 @@ export default function AutoCalibrationInspector() {
             )}
           </div>
 
-          {/* Camera motion heatmap */}
-          {result.camera_motion_heatmap_base64 && (
-            <div>
-              <h3 className="text-sm font-medium mb-2">
-                Camera Motion Heatmap (frame differencing)
-              </h3>
-              <p className="text-xs text-muted-foreground mb-1">
-                Red = high motion (camera footage), Blue = static (banners, graphics)
-              </p>
-              <img
-                src={`data:image/jpeg;base64,${result.camera_motion_heatmap_base64}`}
-                alt="Motion heatmap"
-                className="w-full max-w-xl rounded border"
-              />
-            </div>
-          )}
         </div>
       )}
     </div>

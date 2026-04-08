@@ -56,7 +56,6 @@ def test_install_downloaded_dataset_accepts_nested_val_split(tmp_path: Path) -> 
     assert (overlay_dir / "val" / "val-board.jpg").exists()
 
 
-
 def test_install_downloaded_dataset_prefers_val_over_test(tmp_path: Path) -> None:
     download_dir = tmp_path / "download"
     overlay_dir = tmp_path / "overlay"

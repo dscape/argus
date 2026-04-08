@@ -13,9 +13,8 @@ from uuid import uuid4
 
 import cv2
 import numpy as np
-
 from pipeline.db.connection import get_conn
-from pipeline.overlay.scanner import detect_overlay_in_frame
+from pipeline.overlay.scanner import runtime_overlay_check
 from pipeline.screen.dual_region_detector import (
     detect_otb_region,
     overlay_bbox_to_json,
@@ -59,7 +58,7 @@ def _analyze_frame(
     frame: np.ndarray, label: str
 ) -> dict:
     """Run overlay + OTB + person detection on a single frame."""
-    overlay_det = detect_overlay_in_frame(frame)
+    overlay_det = runtime_overlay_check(frame)
 
     otb_found = False
     otb_confidence = 0.0

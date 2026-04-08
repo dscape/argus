@@ -1,6 +1,8 @@
 # Overlay Detection Test Fixtures
 
-Ground truth frames for testing `fast_overlay_check()` and grid detection.
+Ground truth frames for testing the default YOLO overlay detector.
+These bbox annotations are detector training/evaluation labels, not runtime
+configuration. Runtime overlay localization uses committed YOLO weights.
 
 ## Resolution Requirement
 
@@ -41,5 +43,7 @@ tests/fixtures/frames/
 1. Use `python -m pipeline fetch-frames` to download extracted video frames
 2. Copy frames to `tests/fixtures/frames/{video_id}/`
 3. Annotate bounding boxes via the dev-tools UI at `/annotate/overlay-bbox`
+   (training labels only; runtime does not read them directly)
 4. Copy the annotation from `data/videos/ground_truth.json`
    into `tests/fixtures/frames/ground_truth.json`
+5. Re-run `scripts/visualize_overlay_tests.py` after every detector change

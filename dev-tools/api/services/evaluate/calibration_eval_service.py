@@ -24,7 +24,7 @@ from pipeline.overlay.auto_calibration import (
 )
 from pipeline.overlay.grid_detector import detect_grid
 from pipeline.overlay.piece_classifier import CLASS_TO_PIECE, classify_squares
-from pipeline.overlay.scanner import OverlayDetection, detect_overlay_fast
+from pipeline.overlay.scanner import OverlayDetection, detect_overlay_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -104,11 +104,10 @@ def _detect_overlay_for_eval(frame: np.ndarray) -> OverlayDetection:
     """Use the same overlay-localization strategy as auto-calibration.
 
     Calibration evaluation is meant to validate the auto-calibration stack, so
-    it should not rely on the older generic frame scanner. Prefer the precise
-    detector used by auto-calibration, then fall back to the grid scan used
-    when the fast seed is unavailable.
+    it should use the default YOLO detector used by runtime overlay
+    localization, then fall back to the legacy grid scan if YOLO misses.
     """
-    detection = detect_overlay_fast(frame)
+    detection = detect_overlay_runtime(frame)
     if detection.found and detection.bbox is not None:
         return detection
 
@@ -382,7 +381,11 @@ def inspect_calibration(clip_id: int) -> dict:
     first_frame = frames[0][0]
     last_frame = frames[-1][0]
     fresh_camera_bbox = compute_camera_bbox([first_frame, last_frame], scaled_overlay_bbox)
-    camera_iou = _bbox_iou(fresh_camera_bbox, scaled_camera_bbox)
+    camera_iou = (
+        _bbox_iou(fresh_camera_bbox, scaled_camera_bbox)
+        if fresh_camera_bbox is not None
+        else 0.0
+    )
 
     # 7. Compute per-clip aggregate metrics
     total = len(frames)
@@ -409,7 +412,7 @@ def inspect_calibration(clip_id: int) -> dict:
         },
         "validation": {
             "frames": per_frame,
-            "fresh_camera_bbox": list(fresh_camera_bbox),
+            "fresh_camera_bbox": list(fresh_camera_bbox) if fresh_camera_bbox is not None else None,
             "camera_iou": round(camera_iou, 4),
         },
         "metrics": {

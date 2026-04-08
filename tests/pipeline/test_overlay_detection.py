@@ -1,11 +1,11 @@
 """Overlay detection tests driven by manually annotated ground truth.
 
 Ground truth is stored at tests/fixtures/frames/ground_truth.json,
-created via the dev-tools Overlay BBox annotation UI.
+created via the dev-tools overlay-bbox training-label UI.
 
-Tests target two detector contracts:
-- fast_overlay_check is a fast presence screener
-- detect_overlay_fast is the coordinate-producing detector
+Tests target the default YOLO detector contracts:
+- runtime_overlay_check is the runtime presence/bbox screener
+- detect_overlay_runtime is the padded runtime bbox detector
 """
 
 import json
@@ -13,9 +13,8 @@ import time
 from pathlib import Path
 
 import cv2
-import pipeline.overlay.scanner as scanner
 import pytest
-from pipeline.overlay.scanner import OverlayDetection, detect_overlay_fast, fast_overlay_check
+from pipeline.overlay.scanner import detect_overlay_runtime, runtime_overlay_check
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "frames"
 GROUND_TRUTH_PATH = FIXTURES_DIR / "ground_truth.json"
@@ -95,39 +94,39 @@ def _skip_without_ground_truth():
         pytest.skip("No ground truth annotations found")
 
 
-class TestFastOverlayCheck:
-    """fast_overlay_check must screen accurately under 100ms."""
+class TestRuntimeOverlayCheck:
+    """runtime_overlay_check must screen accurately under 100ms."""
 
     @pytest.mark.parametrize("key", _positive_ids(), ids=_positive_ids())
     def test_detects_overlay(self, key: str):
         frame = _load_frame(key)
-        det = fast_overlay_check(frame)
-        assert det.found, f"fast_overlay_check missed overlay in {key}"
+        det = runtime_overlay_check(frame)
+        assert det.found, f"runtime_overlay_check missed overlay in {key}"
 
     @pytest.mark.parametrize("key", _positive_ids(), ids=_positive_ids())
     def test_under_100ms(self, key: str):
         frame = _load_frame(key)
         t0 = time.perf_counter()
-        fast_overlay_check(frame)
+        runtime_overlay_check(frame)
         elapsed_ms = (time.perf_counter() - t0) * 1000
         assert elapsed_ms < MAX_MS, (
-            f"fast_overlay_check took {elapsed_ms:.1f}ms on {key} (max {MAX_MS}ms)"
+            f"runtime_overlay_check took {elapsed_ms:.1f}ms on {key} (max {MAX_MS}ms)"
         )
 
     @pytest.mark.parametrize("key", _negative_ids(), ids=_negative_ids())
     def test_no_false_positive(self, key: str):
         frame = _load_frame(key)
-        det = fast_overlay_check(frame)
-        assert not det.found, f"fast_overlay_check false positive on {key}"
+        det = runtime_overlay_check(frame)
+        assert not det.found, f"runtime_overlay_check false positive on {key}"
 
     @pytest.mark.parametrize("key", _negative_ids(), ids=_negative_ids())
     def test_negative_under_100ms(self, key: str):
         frame = _load_frame(key)
         t0 = time.perf_counter()
-        fast_overlay_check(frame)
+        runtime_overlay_check(frame)
         elapsed_ms = (time.perf_counter() - t0) * 1000
         assert elapsed_ms < MAX_MS, (
-            f"fast_overlay_check took {elapsed_ms:.1f}ms on {key} (max {MAX_MS}ms)"
+            f"runtime_overlay_check took {elapsed_ms:.1f}ms on {key} (max {MAX_MS}ms)"
         )
 
     @pytest.mark.parametrize("key", _positive_ids(), ids=_positive_ids())
@@ -136,7 +135,7 @@ class TestFastOverlayCheck:
         fw = gt[key]["frame_width"]
         fh = gt[key]["frame_height"]
         frame = _load_frame(key)
-        det = fast_overlay_check(frame)
+        det = runtime_overlay_check(frame)
         if det.found and det.bbox:
             x, y, w, h = det.bbox
             assert x >= 0, f"x={x} < 0"
@@ -145,63 +144,26 @@ class TestFastOverlayCheck:
             assert y + h <= fh, f"y+h={y + h} > {fh}"
 
 
-class TestFastOverlayCheckBboxAccuracy:
-    """fast_overlay_check bbox must at least overlap the correct overlay."""
+class TestRuntimeOverlayCheckBboxAccuracy:
+    """runtime_overlay_check bbox must at least overlap the correct overlay."""
 
     @pytest.mark.parametrize("key", _positive_ids(), ids=_positive_ids())
     def test_fast_bbox_overlaps_overlay(self, key: str):
         gt = _load_ground_truth()
         gt_bbox = gt[key]["bbox"]
         frame = _load_frame(key)
-        det = fast_overlay_check(frame)
-        assert det.found and det.bbox is not None, f"fast_overlay_check missed overlay in {key}"
+        det = runtime_overlay_check(frame)
+        assert det.found and det.bbox is not None, f"runtime_overlay_check missed overlay in {key}"
         iou = _compute_iou(list(det.bbox), gt_bbox)
         assert iou > 0, (
-            f"fast_overlay_check bbox has zero overlap with ground truth in {key}: "
+            f"runtime_overlay_check bbox has zero overlap with ground truth in {key}: "
             f"detected={list(det.bbox)}, expected={gt_bbox} — "
             f"detector locked onto wrong region"
         )
 
 
-class TestDetectOverlayFastGeometryFallback:
-    """detect_overlay_fast should recover precise coords without a seed."""
-
-    @pytest.mark.parametrize("key", _positive_ids(), ids=_positive_ids())
-    def test_recovers_overlay_when_fast_seed_misses(self, key: str, monkeypatch):
-        gt = _load_ground_truth()
-        gt_bbox = gt[key]["bbox"]
-        frame = _load_frame(key)
-
-        monkeypatch.setattr(
-            scanner,
-            "fast_overlay_check",
-            lambda f: OverlayDetection(found=False, frame_resolution=(f.shape[1], f.shape[0])),
-        )
-
-        det = detect_overlay_fast(frame)
-        assert det.found and det.bbox is not None
-        iou = _compute_iou(list(det.bbox), gt_bbox)
-        assert iou >= 0.75, (
-            f"Seedless geometry fallback IoU {iou:.3f} < 0.75 for {key}: "
-            f"detected={list(det.bbox)}, expected={gt_bbox}"
-        )
-
-    @pytest.mark.parametrize("key", _negative_ids(), ids=_negative_ids())
-    def test_geometry_fallback_rejects_negative_frames(self, key: str, monkeypatch):
-        frame = _load_frame(key)
-
-        monkeypatch.setattr(
-            scanner,
-            "fast_overlay_check",
-            lambda f: OverlayDetection(found=False, frame_resolution=(f.shape[1], f.shape[0])),
-        )
-
-        det = detect_overlay_fast(frame)
-        assert not det.found, f"Seedless geometry fallback false positive on {key}"
-
-
-class TestDetectOverlayFastPrecision:
-    """Precise coords must not clip annotated overlay edges."""
+class TestDetectOverlayRuntime:
+    """Padded runtime coords must not clip annotated overlay edges."""
 
     @pytest.mark.parametrize("key", _positive_ids(), ids=_positive_ids())
     def test_precise_bbox_iou(self, key: str):
@@ -209,11 +171,11 @@ class TestDetectOverlayFastPrecision:
         gt_bbox = gt[key]["bbox"]
         frame = _load_frame(key)
 
-        det = detect_overlay_fast(frame)
-        assert det.found and det.bbox is not None, f"detect_overlay_fast missed overlay in {key}"
+        det = detect_overlay_runtime(frame)
+        assert det.found and det.bbox is not None, f"detect_overlay_runtime missed overlay in {key}"
         iou = _compute_iou(list(det.bbox), gt_bbox)
         assert iou >= 0.75, (
-            f"detect_overlay_fast IoU {iou:.3f} < 0.75 for {key}: "
+            f"detect_overlay_runtime IoU {iou:.3f} < 0.75 for {key}: "
             f"detected={list(det.bbox)}, expected={gt_bbox}"
         )
 
@@ -223,12 +185,12 @@ class TestDetectOverlayFastPrecision:
         gt_bbox = gt[key]["bbox"]
         frame = _load_frame(key)
 
-        det = detect_overlay_fast(frame)
-        assert det.found and det.bbox is not None, f"detect_overlay_fast missed overlay in {key}"
+        det = detect_overlay_runtime(frame)
+        assert det.found and det.bbox is not None, f"detect_overlay_runtime missed overlay in {key}"
 
         under = _bbox_undercoverage(list(det.bbox), gt_bbox)
         assert max(under) <= PRECISE_UNDERCOVERAGE_TOLERANCE_PX, (
-            f"detect_overlay_fast clips overlay in {key}: "
+            f"detect_overlay_runtime clips overlay in {key}: "
             f"undercoverage(left,top,right,bottom)={under}, "
             f"detected={list(det.bbox)}, expected={gt_bbox}"
         )
