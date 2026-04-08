@@ -85,7 +85,7 @@ export default function CalibratePage() {
         setSuccess("Auto-calibrated");
         setTimeout(() => setSuccess(null), 3000);
       } else {
-        setError("No overlay detected in this clip's time range");
+        setError("Auto-calibration could not detect both the overlay and OTB board in this clip");
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Auto-calibration failed");
@@ -263,23 +263,13 @@ export default function CalibratePage() {
               <div className="space-y-3 border rounded-lg p-3">
                 <h4 className="text-xs font-medium text-muted-foreground">Auto-Calibration Preview</h4>
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1">Green = Overlay, Red = Camera</p>
+                  <p className="text-xs text-muted-foreground mb-1">Green = Overlay, Red = OTB board</p>
                   <img
                     src={`data:image/jpeg;base64,${autoCalPreview.preview_frame_b64}`}
                     alt="Proposal"
                     className="w-full max-w-lg rounded border"
                   />
                 </div>
-                {autoCalPreview.camera_heatmap_b64 && (
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Camera Motion Heatmap</p>
-                    <img
-                      src={`data:image/jpeg;base64,${autoCalPreview.camera_heatmap_b64}`}
-                      alt="Heatmap"
-                      className="w-full max-w-lg rounded border"
-                    />
-                  </div>
-                )}
               </div>
             )}
 

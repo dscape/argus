@@ -429,7 +429,7 @@ export interface CalibrationEvalResult {
   };
   validation: {
     frames: CalibrationFrameValidation[];
-    fresh_camera_bbox: number[];
+    fresh_camera_bbox: number[] | null;
     camera_iou: number;
   };
   metrics: {
@@ -473,5 +473,4 @@ export interface AutoCalibrateResponse {
   proposal: AutoCalibrateProposal | null;
   applied: boolean;
   preview_frame_b64: string | null;
-  camera_heatmap_b64: string | null;
 }

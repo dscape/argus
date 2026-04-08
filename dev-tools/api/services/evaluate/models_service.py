@@ -723,7 +723,6 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
     # Compute proposal from best detection
     proposal = None
     proposal_frame_b64 = None
-    camera_heatmap_b64 = None
     if best_detection and best_frame is not None:
         fh, fw = best_frame.shape[:2]
         overlay_crop = best_frame[
@@ -733,47 +732,27 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
 
         theme, theme_conf = detect_board_theme(overlay_crop)
         flipped, orient_conf = detect_board_orientation(overlay_crop, theme)
-        camera = compute_camera_bbox(
-            [f for f, _ in all_frames], best_detection.bbox
-        )
+        camera = compute_camera_bbox([f for f, _ in all_frames], best_detection.bbox)
+        if camera is not None:
+            proposal = {
+                "overlay": list(best_detection.bbox),
+                "camera": list(camera),
+                "theme": theme,
+                "theme_confidence": round(theme_conf, 3),
+                "board_flipped": flipped,
+                "orientation_confidence": round(orient_conf, 3),
+            }
 
-        proposal = {
-            "overlay": list(best_detection.bbox),
-            "camera": list(camera),
-            "theme": theme,
-            "theme_confidence": round(theme_conf, 3),
-            "board_flipped": flipped,
-            "orientation_confidence": round(orient_conf, 3),
-        }
-
-        # Draw proposal overlay + camera bboxes on best frame for visual verification
-        proposal_annotated = best_frame.copy()
-        ox, oy, ow, oh = best_detection.bbox
-        cv2.rectangle(proposal_annotated, (ox, oy), (ox + ow, oy + oh), (0, 255, 0), 3)
-        cv2.putText(proposal_annotated, "Overlay", (ox + 6, oy + 28),
-                     cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-        cx, cy, cw, ch = camera
-        cv2.rectangle(proposal_annotated, (cx, cy), (cx + cw, cy + ch), (0, 0, 255), 3)
-        cv2.putText(proposal_annotated, "Camera", (cx + 6, cy + 28),
-                     cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-        proposal_frame_b64 = _frame_to_base64(proposal_annotated)
-
-        # Generate camera motion heatmap
-        if len(all_frames) >= 2:
-            target_h, target_w = all_frames[0][0].shape[:2]
-            f1 = cv2.cvtColor(all_frames[0][0], cv2.COLOR_BGR2GRAY).astype(np.float32)
-            f2_raw = cv2.cvtColor(all_frames[-1][0], cv2.COLOR_BGR2GRAY).astype(np.float32)
-            # Resize f2 to match f1 if resolutions differ (e.g. mixed-res thumbnails)
-            if f2_raw.shape != f1.shape:
-                f2_raw = cv2.resize(f2_raw, (target_w, target_h)).astype(np.float32)
-            diff = np.abs(f1 - f2_raw)
-            # Zero out overlay
+            proposal_annotated = best_frame.copy()
             ox, oy, ow, oh = best_detection.bbox
-            diff[oy : oy + oh, ox : ox + ow] = 0
-            # Normalize and colorize
-            diff_norm = np.clip(diff / 30.0 * 255, 0, 255).astype(np.uint8)
-            heatmap = cv2.applyColorMap(diff_norm, cv2.COLORMAP_JET)
-            camera_heatmap_b64 = _frame_to_base64(heatmap)
+            cv2.rectangle(proposal_annotated, (ox, oy), (ox + ow, oy + oh), (0, 255, 0), 3)
+            cv2.putText(proposal_annotated, "Overlay", (ox + 6, oy + 28),
+                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+            cx, cy, cw, ch = camera
+            cv2.rectangle(proposal_annotated, (cx, cy), (cx + cw, cy + ch), (0, 0, 255), 3)
+            cv2.putText(proposal_annotated, "OTB board", (cx + 6, cy + 28),
+                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+            proposal_frame_b64 = _frame_to_base64(proposal_annotated)
 
     # Mark which frame was used for the proposal
     best_bbox_list = list(best_detection.bbox) if best_detection and best_detection.bbox else None
@@ -811,7 +790,6 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
         "proposal": proposal,
         "proposal_frame_base64": proposal_frame_b64,
         "saved_calibration": saved_cal,
-        "camera_motion_heatmap_base64": camera_heatmap_b64,
     }
 
 

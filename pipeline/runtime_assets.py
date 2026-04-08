@@ -31,10 +31,15 @@ OVERLAY_YOLO_WEIGHTS = RuntimeAsset(
     name="overlay YOLO detector weights",
     path=PROJECT_ROOT / "weights" / "overlay_yolo" / "best.pt",
 )
+OTB_YOLO_WEIGHTS = RuntimeAsset(
+    name="OTB YOLO detector weights",
+    path=PROJECT_ROOT / "weights" / "otb_yolo" / "best.pt",
+)
 RUNTIME_WEIGHT_ASSETS = (
     SCREENING_WEIGHTS,
     OVERLAY_PIECE_CLASSIFIER_WEIGHTS,
     OVERLAY_YOLO_WEIGHTS,
+    OTB_YOLO_WEIGHTS,
 )
 
 

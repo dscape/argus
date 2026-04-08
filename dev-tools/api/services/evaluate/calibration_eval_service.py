@@ -381,7 +381,11 @@ def inspect_calibration(clip_id: int) -> dict:
     first_frame = frames[0][0]
     last_frame = frames[-1][0]
     fresh_camera_bbox = compute_camera_bbox([first_frame, last_frame], scaled_overlay_bbox)
-    camera_iou = _bbox_iou(fresh_camera_bbox, scaled_camera_bbox)
+    camera_iou = (
+        _bbox_iou(fresh_camera_bbox, scaled_camera_bbox)
+        if fresh_camera_bbox is not None
+        else 0.0
+    )
 
     # 7. Compute per-clip aggregate metrics
     total = len(frames)
@@ -408,7 +412,7 @@ def inspect_calibration(clip_id: int) -> dict:
         },
         "validation": {
             "frames": per_frame,
-            "fresh_camera_bbox": list(fresh_camera_bbox),
+            "fresh_camera_bbox": list(fresh_camera_bbox) if fresh_camera_bbox is not None else None,
             "camera_iou": round(camera_iou, 4),
         },
         "metrics": {
