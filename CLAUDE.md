@@ -13,6 +13,8 @@ make lint        # ruff check
 make format      # ruff format + auto-fix
 ```
 
+`make up`, `make test`, and runtime pipeline targets preflight committed model weights under `weights/`. After cloning, install Git LFS and run `git lfs pull`.
+
 UI: http://localhost:3000 | API: http://localhost:8000. Frontend proxies `/api/*` to backend.
 
 ## Key Paths
@@ -24,7 +26,7 @@ UI: http://localhost:3000 | API: http://localhost:8000. Frontend proxies `/api/*
 | `dev-tools/` | Next.js frontend + FastAPI backend (co-located) |
 | `configs/` | Hydra configs: model, training, data, evaluate, datagen |
 | `data/` | Training data, cached features, board images |
-| `weights/` | Committed model weights (screening, overlay, dinov2-base) |
+| `weights/` | Committed model weights (screening, overlay_yolo, overlay piece-classifier, dinov2-base) |
 | `pipeline/db/` | PostgreSQL schema and migrations |
 | `outputs/` | For any sort of non-transient outputs, for human inspection |
 | `scripts/` | Scripts that can be re-used to assist development of argus |
@@ -36,12 +38,12 @@ Consistent identifiers used across nav, code, data dirs, configs, and weights:
 | Identifier | Meaning |
 |-----------|---------|
 | `screening` | Video classification (OTB vs not) |
-| `overlay` | Overlay detection + piece classification. An overlay is a digital chess board shown on stream — "overlay" or NULL can have one |
+| `overlay` | Overlay pipeline in general: runtime localization, bbox training labels, piece classification |
 | `segmentation` | Video segmentation |
 | `calibration` | Board calibration |
 | `argus` | The main VLA model |
 
-Data splits: `train/`, `val/`, `val_real/`. Model weights: `weights/{screening,overlay}/`. Cached features: `dataset/torch/`. Raw frames: `dataset/frames/`.
+Data splits: `train/`, `val/`, `val_real/`. Model weights: `weights/screening/`, `weights/overlay/` (piece classifier), `weights/overlay_yolo/` (default runtime overlay detector). Cached features: `dataset/torch/`. Raw frames: `dataset/frames/`.
 
 ## Dev Tools Architecture
 
@@ -66,4 +68,7 @@ Docker: `docker exec argus-dev-api python3 -m pipeline.cli <command>` or use `ma
 - PostgreSQL for persistence, in-memory dicts for ephemeral job state
 - Background jobs: thread + job dict, poll-based status, cancel via `threading.Event`
 - Model versioning: `v{code}r{revision}` (e.g. `v2r3`). Bump code version on architecture changes
+- Default runtime overlay localization uses the committed YOLO detector in `weights/overlay_yolo/`
+- `data/videos/ground_truth.json`, `tests/fixtures/frames/ground_truth.json`, and `/annotate/bbox` are detector training/eval labels only — runtime does not read those bboxes directly
+- If you change the overlay detector, run `scripts/visualize_overlay_tests.py` on every iteration and treat that visual output as mandatory validation
 - Before completing tasks: run `make typecheck`, `make lint`, `make test` — all must pass

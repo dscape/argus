@@ -1,4 +1,8 @@
-"""Overlay bbox annotation endpoints."""
+"""Overlay bbox training-annotation endpoints.
+
+These endpoints maintain YOLO detector ground truth. Runtime overlay
+localization uses committed detector weights, not these saved bboxes.
+"""
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -32,7 +36,7 @@ class RefineInput(BaseModel):
 
 @router.post("/refine")
 async def refine_bbox(body: RefineInput):
-    """Smart-correct a rough bbox to align with overlay grid."""
+    """Smart-correct a rough training bbox to align with the overlay grid."""
     if len(body.rough_bbox) != 4:
         raise HTTPException(400, "rough_bbox must have 4 elements [x, y, w, h]")
     video_id, label = body.frame_key.split("/", 1)
@@ -56,7 +60,7 @@ class AnnotateInput(BaseModel):
 
 @router.post("/annotate")
 def save_annotation(body: AnnotateInput):
-    """Save an overlay bbox annotation."""
+    """Save a YOLO-training overlay bbox annotation."""
     if body.has_overlay and body.bbox is None:
         raise HTTPException(400, "bbox required when has_overlay is true")
     if body.bbox is not None and len(body.bbox) != 4:

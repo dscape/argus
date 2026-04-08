@@ -18,10 +18,7 @@ import numpy as np
 from pipeline.db.connection import get_conn
 from pipeline.overlay.grid_detector import detect_grid
 from pipeline.overlay.piece_classifier import CLASS_TO_PIECE, classify_squares
-from pipeline.overlay.scanner import (
-    detect_overlay_in_frame,
-    fast_overlay_check,
-)
+from pipeline.overlay.scanner import detect_overlay_fast, fast_overlay_check
 from pipeline.overlay.segmenter import segment_video_layouts
 
 logger = logging.getLogger(__name__)
@@ -71,10 +68,10 @@ def _validate_segment_frame(
 
     Strategy:
     - When a *stored_bbox* is available and detect_grid succeeds on that crop:
-      skip the expensive full-frame sliding-window (detect_overlay_in_frame).
+      skip a full-frame detector call.
       The stored bbox already tells us where the board should be; we just
       verify it with the grid detector (fast, ~20ms) rather than re-scanning.
-    - Otherwise, fall back to detect_overlay_in_frame (accurate but slower).
+    - Otherwise, fall back to detect_overlay_fast (the default YOLO detector).
     - DINOv2 piece classification only runs when *run_piece_classify=True*
       (disabled for non-middle frames to avoid running it on all 5 per segment).
     """
@@ -101,9 +98,9 @@ def _validate_segment_frame(
                 overlay_found = True
                 grid_found = True
                 crop = candidate_crop
-        # If detect_grid failed on stored bbox, fall back to full frame scan
+        # If detect_grid failed on stored bbox, fall back to the runtime detector.
         if not overlay_found:
-            det = detect_overlay_in_frame(frame)
+            det = detect_overlay_fast(frame)
             overlay_found = det.found
             if det.found and det.bbox is not None:
                 bx, by, bw, bh = det.bbox
@@ -115,8 +112,8 @@ def _validate_segment_frame(
                     if grid is not None:
                         grid_found = True
     else:
-        # No stored bbox: full sliding-window detection.
-        det = detect_overlay_in_frame(frame)
+        # No stored bbox: use the runtime detector.
+        det = detect_overlay_fast(frame)
         overlay_found = det.found
         if det.found and det.bbox is not None:
             bx, by, bw, bh = det.bbox
@@ -249,9 +246,8 @@ def inspect_segmentation(video_id: str) -> dict:
     Performance strategy:
     - All frame timestamps are sorted ascending so video seeking is
       monotonically forward — no expensive backward H264 seeks.
-    - Segment frames use fast_overlay_check (not detect_overlay_in_frame)
-      plus the stored bbox from video_clips for grid/piece cropping,
-      avoiding the expensive 10-scale sliding window + expansion entirely.
+    - Segment frames use fast_overlay_check plus the stored bbox from
+      video_clips for grid/piece cropping, avoiding unnecessary detector work.
     - Gap frames use fast_overlay_check (only need yes/no, not bbox).
     """
     t0 = time.monotonic()

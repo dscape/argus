@@ -189,8 +189,8 @@ def _grid_scan_frames(
 ) -> tuple[OverlayDetection | None, np.ndarray | None]:
     """Find overlay by sliding detect_grid across each frame.
 
-    Handles overlays where per-cell variance is too high for
-    ``fast_overlay_check`` (textured themes, piece-heavy positions).
+    Handles overlays where the default YOLO detector is unavailable or
+    where a legacy grid-only fallback is still useful for debugging.
     The grid detector uses Sobel edge projection which works regardless
     of cell fill variance.
 
@@ -657,9 +657,8 @@ def propose_calibration_for_clip(
         return None
 
     # Find the best overlay detection across sampled frames.
-    # Try detect_overlay_fast first (grid-line based, more precise).
-    # Fall back to detect_overlay_in_frame (multi-scale scan) if the
-    # fast method finds nothing on any frame.
+    # Try detect_overlay_fast first (default YOLO detector).
+    # Fall back to the legacy grid scan only if YOLO finds nothing on any frame.
     #
     # Score by overlay alignment (regularity × alternation × periodicity)
     # rather than bbox area.  Max-area selection is fooled by oversized
@@ -683,8 +682,7 @@ def propose_calibration_for_clip(
                 best_frame = frame
 
     # Fallback: scan each frame with detect_grid directly.
-    # This handles overlays where cell variance is too high for
-    # fast_overlay_check (e.g. textured themes or piece-heavy positions).
+    # This legacy path remains only as a safety net for calibration/debugging.
     if best_detection is None:
         best_detection, best_frame = _grid_scan_frames(frames)
 

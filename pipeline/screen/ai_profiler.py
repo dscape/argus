@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn.functional as F
 
-from pipeline.overlay.scanner import detect_overlay_in_frame
+from pipeline.overlay.scanner import fast_overlay_check
 from pipeline.paths import find_frame
 from pipeline.screen.ai_classifier import (
     CLASS_NAMES,
@@ -154,7 +154,7 @@ def profile_video(
         with timer.phase("overlay_scan"):
             for i, frame_bgr, _ in preprocessed:
                 with timer.sub_phase(f"frame_{i}"):
-                    detection = detect_overlay_in_frame(frame_bgr)
+                    detection = fast_overlay_check(frame_bgr)
                     scanner_scores[i] = detection.score if detection.found else 0.0
                     detections.append(detection)
 

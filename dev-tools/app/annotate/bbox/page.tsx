@@ -313,6 +313,11 @@ export default function OverlayBboxPage() {
 
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0">
+        <div className="mb-3 text-xs px-3 py-2 rounded border border-blue-200 bg-blue-50 text-blue-900">
+          Training labels only. Runtime overlay localization uses the committed
+          YOLO detector; this page exists to create and fix detector ground
+          truth.
+        </div>
         {selectedKey && imgLoaded ? (
           <>
             {/* Canvas */}

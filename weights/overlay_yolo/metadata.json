@@ -1,0 +1,22 @@
+{
+  "code_version": "v1",
+  "revision": 1,
+  "version": "v1r1",
+  "trained_at": "2026-04-07T00:00:00+00:00",
+  "model": "yolo11n.pt",
+  "epochs": 40,
+  "imgsz": 640,
+  "batch": 8,
+  "device": "mps",
+  "train_images": 52,
+  "val_images": 13,
+  "test_images": 44,
+  "val_mAP50": 0.995,
+  "val_mAP50_95": 0.995,
+  "runtime_bbox_padding_px": 8,
+  "ground_truth_sources": [
+    "data/videos/ground_truth.json",
+    "tests/fixtures/frames/ground_truth.json"
+  ],
+  "notes": "Default runtime overlay detector. Ground-truth bboxes are training/eval labels only; runtime localization uses YOLO weights from this directory."
+}

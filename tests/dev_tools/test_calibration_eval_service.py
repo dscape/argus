@@ -3,7 +3,6 @@
 from unittest.mock import patch
 
 import numpy as np
-
 from api.services.evaluate import calibration_eval_service
 from pipeline.overlay.scanner import OverlayDetection
 
@@ -19,7 +18,11 @@ class TestDetectOverlayForEval:
         mock_grid_scan,
     ) -> None:
         frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
-        detection = OverlayDetection(found=True, bbox=(100, 50, 600, 600), frame_resolution=(1920, 1080))
+        detection = OverlayDetection(
+            found=True,
+            bbox=(100, 50, 600, 600),
+            frame_resolution=(1920, 1080),
+        )
         mock_detect_fast.return_value = detection
 
         result = calibration_eval_service._detect_overlay_for_eval(frame)
@@ -35,8 +38,15 @@ class TestDetectOverlayForEval:
         mock_grid_scan,
     ) -> None:
         frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
-        mock_detect_fast.return_value = OverlayDetection(found=False, frame_resolution=(1920, 1080))
-        fallback = OverlayDetection(found=True, bbox=(120, 80, 620, 620), frame_resolution=(1920, 1080))
+        mock_detect_fast.return_value = OverlayDetection(
+            found=False,
+            frame_resolution=(1920, 1080),
+        )
+        fallback = OverlayDetection(
+            found=True,
+            bbox=(120, 80, 620, 620),
+            frame_resolution=(1920, 1080),
+        )
         mock_grid_scan.return_value = (fallback, frame)
 
         result = calibration_eval_service._detect_overlay_for_eval(frame)
@@ -52,7 +62,10 @@ class TestDetectOverlayForEval:
         mock_grid_scan,
     ) -> None:
         frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-        mock_detect_fast.return_value = OverlayDetection(found=False, frame_resolution=(1280, 720))
+        mock_detect_fast.return_value = OverlayDetection(
+            found=False,
+            frame_resolution=(1280, 720),
+        )
         mock_grid_scan.return_value = (None, None)
 
         result = calibration_eval_service._detect_overlay_for_eval(frame)

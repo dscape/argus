@@ -1,11 +1,11 @@
 """Overlay detection tests driven by manually annotated ground truth.
 
 Ground truth is stored at tests/fixtures/frames/ground_truth.json,
-created via the dev-tools Overlay BBox annotation UI.
+created via the dev-tools overlay-bbox training-label UI.
 
-Tests target two detector contracts:
-- fast_overlay_check is a fast presence screener
-- detect_overlay_fast is the coordinate-producing detector
+Tests target the default YOLO detector contracts:
+- fast_overlay_check is the runtime presence/bbox screener
+- detect_overlay_fast is the padded runtime bbox detector
 """
 
 import json
@@ -13,9 +13,8 @@ import time
 from pathlib import Path
 
 import cv2
-import pipeline.overlay.scanner as scanner
 import pytest
-from pipeline.overlay.scanner import OverlayDetection, detect_overlay_fast, fast_overlay_check
+from pipeline.overlay.scanner import detect_overlay_fast, fast_overlay_check
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "frames"
 GROUND_TRUTH_PATH = FIXTURES_DIR / "ground_truth.json"
@@ -161,43 +160,6 @@ class TestFastOverlayCheckBboxAccuracy:
             f"detected={list(det.bbox)}, expected={gt_bbox} — "
             f"detector locked onto wrong region"
         )
-
-
-class TestDetectOverlayFastGeometryFallback:
-    """detect_overlay_fast should recover precise coords without a seed."""
-
-    @pytest.mark.parametrize("key", _positive_ids(), ids=_positive_ids())
-    def test_recovers_overlay_when_fast_seed_misses(self, key: str, monkeypatch):
-        gt = _load_ground_truth()
-        gt_bbox = gt[key]["bbox"]
-        frame = _load_frame(key)
-
-        monkeypatch.setattr(
-            scanner,
-            "fast_overlay_check",
-            lambda f: OverlayDetection(found=False, frame_resolution=(f.shape[1], f.shape[0])),
-        )
-
-        det = detect_overlay_fast(frame)
-        assert det.found and det.bbox is not None
-        iou = _compute_iou(list(det.bbox), gt_bbox)
-        assert iou >= 0.75, (
-            f"Seedless geometry fallback IoU {iou:.3f} < 0.75 for {key}: "
-            f"detected={list(det.bbox)}, expected={gt_bbox}"
-        )
-
-    @pytest.mark.parametrize("key", _negative_ids(), ids=_negative_ids())
-    def test_geometry_fallback_rejects_negative_frames(self, key: str, monkeypatch):
-        frame = _load_frame(key)
-
-        monkeypatch.setattr(
-            scanner,
-            "fast_overlay_check",
-            lambda f: OverlayDetection(found=False, frame_resolution=(f.shape[1], f.shape[0])),
-        )
-
-        det = detect_overlay_fast(frame)
-        assert not det.found, f"Seedless geometry fallback false positive on {key}"
 
 
 class TestDetectOverlayFastPrecision:

@@ -104,9 +104,8 @@ def _detect_overlay_for_eval(frame: np.ndarray) -> OverlayDetection:
     """Use the same overlay-localization strategy as auto-calibration.
 
     Calibration evaluation is meant to validate the auto-calibration stack, so
-    it should not rely on the older generic frame scanner. Prefer the precise
-    detector used by auto-calibration, then fall back to the grid scan used
-    when the fast seed is unavailable.
+    it should use the default YOLO detector used by runtime overlay
+    localization, then fall back to the legacy grid scan if YOLO misses.
     """
     detection = detect_overlay_fast(frame)
     if detection.found and detection.bbox is not None:

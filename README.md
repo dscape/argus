@@ -97,7 +97,17 @@ Shared across domains: `src/argus/chess/` (move vocabulary, state machine, const
 
 ## Development Setup
 
-Requires Python 3.10+, Node.js 18+, Docker, Cairo, Blender 4.0+, and ffmpeg. See [CONTRIBUTING.md](CONTRIBUTING.md) for install commands and per-domain details.
+Requires Python 3.10+, Node.js 18+, Docker, Git LFS, Cairo, Blender 4.0+, and ffmpeg. See [CONTRIBUTING.md](CONTRIBUTING.md) for install commands and per-domain details.
+
+### Git LFS
+
+Committed runtime model weights live under `weights/` and are stored with Git LFS.
+
+```bash
+brew install git-lfs   # macOS
+git lfs install
+git lfs pull --include="weights/screening/*,weights/overlay/*,weights/overlay_yolo/*"
+```
 
 ### direnv (recommended)
 
@@ -119,6 +129,8 @@ make dev                # install Python package + dev dependencies
 make pipeline-install   # install pipeline dependencies (if working on pipeline)
 ```
 
+`make dev` installs the host-side YOLO dependency (`ultralytics`). `make up` installs the same runtime dependency in the API container from `pipeline/requirements.txt`.
+
 ### Start all services
 
 Bring up PostgreSQL, the dev-tools API, and the dev-tools UI via Docker, plus the native Blender render server:
@@ -136,6 +148,8 @@ make down     # stop everything
 | Blender     | `localhost:9876`        |
 
 If Blender is not installed, `make up` skips it with a warning — the other services still start.
+
+`make up`, `make test`, and the runtime pipeline targets now fail fast if the committed model weights are missing or still Git LFS pointer files.
 
 ---
 
@@ -177,8 +191,12 @@ python -m pipeline ai-train                  # Train classifier (saves to weight
 python -m pipeline ai-eval                   # Evaluate accuracy + calibrate threshold
 python -m pipeline ai-screen --threshold 0.90  # Auto-screen new videos
 
-# Pre-trained weights are committed in weights/screening/ with versioned
-# filenames (e.g. v2r1.pt). See weights/screening/metadata.json for details.
+# Overlay detector maintenance (default runtime detector)
+python -m pipeline overlay-yolo-export       # Export bbox training labels to YOLO format
+python -m pipeline overlay-yolo-train        # Train detector; validate every change with scripts/visualize_overlay_tests.py
+
+# Pre-trained weights are committed in weights/screening/ and
+# weights/overlay_yolo/ with versioned filenames. See each metadata.json.
 
 # Auto-calibrate new channels (instead of manual bbox drawing)
 python -m pipeline auto-calibrate --channel @NewChannel --apply
@@ -263,18 +281,21 @@ Videos are screened in up to three passes:
 
 1. **Title filter** — keyword matching against the video title to identify chess commentary content
 2. **Dual-region detection** — frame sampling to detect both:
-   - **2D overlay** — rendered board overlay (lichess, chess.com streams) via pixel regularity analysis
-   - **OTB footage** — over-the-board camera footage
+   - **2D overlay** — rendered board overlay (lichess, chess.com streams) via the default YOLO detector
+   - **OTB footage** — over-the-board camera footage outside the detected overlay
 3. **AI classifier** (optional) — a frozen DINOv2 encoder extracts features from 4 YouTube thumbnails (480x360 hq variants) per video, concatenated with overlay scanner and OTB detector scores, then a small MLP head classifies into overlay / otb_only / reject with a confidence score. Vertical videos are auto-rejected. High-confidence predictions are auto-decided; low-confidence videos are queued for manual review. Model weights are committed in `weights/screening/` with versioned filenames (e.g. `v2r1.pt`).
 
 Screening results are stored on `youtube_videos` as `screening_status`, `screening_confidence`, `overlay_bbox`, `has_otb_footage`, plus AI metadata in `ai_screening_class`, `ai_screening_confidence`, and `ai_screening_auto_decided`.
+
+`data/videos/ground_truth.json` and `tests/fixtures/frames/ground_truth.json` are detector training/evaluation labels for the YOLO overlay detector. Runtime overlay localization does not read those files directly.
 
 ### How Overlay Clip Generation Works
 
 For videos with a 2D board overlay:
 
 1. **Calibration** — per-channel layout config defines overlay crop, camera crop, reference resolution, board flip, and board theme. Can be auto-proposed via `auto-calibrate` or set manually.
-2. **FEN reading** — `PieceClassifier` (DINOv2-based) classifies each of the 64 squares using a trained CNN to produce a FEN string. `GridDetector` handles automatic board boundary detection.
+2. **Overlay localization** — `detect_overlay_fast()` runs the default YOLO detector and applies a small padding margin so the board crop does not clip outer squares.
+3. **FEN reading** — `PieceClassifier` (DINOv2-based) classifies each of the 64 squares using a trained CNN to produce a FEN string. `GridDetector` handles automatic board boundary detection inside the YOLO crop.
 3. **Move detection with hard cut detection** — `OverlayMoveDetector` compares FENs across frames with a stability window, using python-chess to find the legal move transforming old FEN to new FEN. Detects game resets AND hard cuts (when >4 squares change simultaneously, indicating a board switch rather than a legal move).
 4. **Per-move confidence scoring** — each detected move receives a confidence score based on how many consecutive frames agreed on the FEN before and after the transition. Higher stability = higher confidence. Moves found via resync (no legal move path) get confidence 0.0.
 5. **Move synchronization** — broadcast delay compensation aligns overlay moves to camera footage timestamps
@@ -284,9 +305,12 @@ For videos with a 2D board overlay:
 
 | Module | What it does |
 |--------|-------------|
-| `scanner.py` | Detects rendered 2D boards via pixel regularity (low intra-square variance, alternating light/dark). Sliding window at multiple scales. |
+| `scanner.py` | Runtime entry points `fast_overlay_check()` and `detect_overlay_fast()` now call the committed YOLO detector. Legacy heuristic bbox code remains in the file for training-label tooling only. |
 | `piece_classifier.py` | DINOv2-based per-square piece classifier (99.83% accuracy). Classifies 64 squares in a single batch. |
 | `grid_detector.py` | Detects the 8x8 board grid using Sobel edge projection with HoughLinesP fallback. Handles borders and coordinate labels. |
+| `yolo_detector.py` | Loads the committed default YOLO overlay detector weights from `weights/overlay_yolo/`. |
+| `yolo_dataset.py` | Exports bbox training labels from `data/videos/ground_truth.json` and fixture labels into a YOLO dataset. |
+| `yolo_train.py` | Trains the YOLO overlay detector. Validate every change with `scripts/visualize_overlay_tests.py`. |
 | `overlay_move_detector.py` | Compares FENs across frames with a stability window. Uses python-chess to find the legal move transforming old FEN to new FEN. Detects game resets and hard cuts (>4 squares changed = board switch). Assigns per-move confidence scores. |
 | `calibration.py` | Stores per-channel layout configs: overlay crop, camera crop, reference resolution, board flip, board theme. Persisted in `configs/annotate/overlay_layouts.yaml`. |
 | `auto_calibration.py` | Auto-proposes calibration from YouTube thumbnails: detects board theme (color sampling), orientation (piece distribution), and camera region (largest non-overlay area). |
@@ -794,6 +818,8 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 |---------|-------------|-------------|
 | `overlay-test` | Test overlay detection on a screenshot | `--image PATH` (required), `--overlay x,y,w,h`, `--flipped`, `--theme`, `--output PATH` |
 | `overlay-test-reader` | Test reader on a specific region | `--image PATH`, `--overlay x,y,w,h` (both required), `--flipped`, `--theme` |
+| `overlay-yolo-export` | Export bbox training labels as a YOLO dataset | `--out-dir DIR`, `--val-fraction FLOAT`, `--seed N` |
+| `overlay-yolo-train` | Train the default YOLO overlay detector | `--data PATH`, `--model yolo11n.pt`, `--epochs N`, `--imgsz N`, `--batch N`, `--device`, `--project`, `--name` |
 | `inspect-clip` | Inspect a `.pt` training clip | `--file PATH` (required), `--save-frames`, `--output-dir DIR` |
 | `inspect-calibration` | Inspect saved calibration for a channel | `--channel @Handle` (required) |
 | `smoke-test` | Run quick smoke tests (no DB required) | |
@@ -945,10 +971,14 @@ erDiagram
 ```
 argus/
 ├── weights/                                    # Committed model weights (versioned)
-│   └── screening/                              #   AI screening classifier
-│       ├── best.pt                             #     Current best checkpoint
-│       ├── v2r1.pt                             #     Versioned: code v2, training revision 1
-│       └── metadata.json                       #     Version, accuracy, training details
+│   ├── screening/                              #   AI screening classifier
+│   │   ├── best.pt                             #     Current best checkpoint
+│   │   ├── v2r1.pt                             #     Versioned: code v2, training revision 1
+│   │   └── metadata.json                       #     Version, accuracy, training details
+│   ├── overlay_yolo/                           #   Default runtime overlay detector
+│   │   ├── best.pt                             #     Current best checkpoint
+│   │   ├── v1r1.pt                             #     Versioned detector checkpoint
+│   │   └── metadata.json                       #     Detector version + training details
 ├── configs/                                    # Configuration
 │   ├── config.yaml                             # Hydra root (Training only)
 │   ├── model/                                  # Training: model architecture configs
@@ -1023,7 +1053,10 @@ argus/
 │   ├── download/                               #   Stage 4: video download
 │   │   └── video_downloader.py                 #     yt-dlp with rate limiting
 │   └── overlay/                                #   Stage 5-6: overlay clip generation
-│       ├── scanner.py                          #     Detect 2D board overlays
+│       ├── scanner.py                          #     Runtime YOLO entry points + legacy heuristic training helpers
+│       ├── yolo_detector.py                    #     Default runtime YOLO overlay detector
+│       ├── yolo_dataset.py                     #     Export bbox training labels to YOLO format
+│       ├── yolo_train.py                       #     Train the overlay detector
 │       ├── piece_classifier.py                  #     DINOv2-based piece classification to FEN
 │       ├── grid_detector.py                    #     Board grid detection (Sobel + Hough)
 │       ├── overlay_move_detector.py            #     FEN diffs to legal moves + hard cut detection

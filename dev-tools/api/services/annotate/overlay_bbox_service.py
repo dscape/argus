@@ -1,4 +1,12 @@
-"""Service for overlay bbox annotation ground truth."""
+"""Service for overlay bbox training labels.
+
+These annotations exist to create and maintain ground truth for the default
+YOLO overlay detector. Runtime overlay localization does not read these bboxes
+at inference time; it uses the committed YOLO model instead.
+
+The legacy grid helpers imported here are only for lightly refining a human
+training label before it is saved.
+"""
 
 import json
 import logging
@@ -140,7 +148,7 @@ def _invalidate_frame_cache() -> None:
 
 
 def list_frames() -> list[dict]:
-    """List all annotation frames with target fixtures prioritized first."""
+    """List training-label frames with target fixtures prioritized first."""
     gt = _load_ground_truth()
     paths = _discover_frame_paths()
     target_keys, target_issues = _load_annotation_targets()
@@ -241,7 +249,10 @@ def get_frame_path(video_id: str, label: str) -> Path | None:
 def refine_bbox(
     frame_path: Path, rough_bbox: list[int]
 ) -> dict:
-    """Lightly refine a rough bbox: enforce square and nudge a few pixels.
+    """Lightly refine a rough training bbox before saving it.
+
+    This is annotation assistance only. Runtime overlay detection uses the
+    default YOLO model and does not call this refinement path.
 
     The user's drawing is trusted — we only make minimal adjustments:
     - Enforce square aspect ratio (use max of w/h, re-center)
@@ -294,7 +305,7 @@ def save_annotation(
     bbox: list[int] | None,
     notes: str = "",
 ) -> dict:
-    """Save or update an annotation."""
+    """Save or update a YOLO-training annotation."""
     gt = _load_ground_truth()
 
     video_id, label = frame_key.split("/", 1)

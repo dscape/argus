@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from pipeline.db.connection import get_conn
-from pipeline.overlay.scanner import detect_overlay_in_frame
+from pipeline.overlay.scanner import fast_overlay_check
 from pipeline.screen.dual_region_detector import detect_otb_region
 from pipeline.screen.frame_fetcher import fetch_youtube_frames, is_vertical_video
 
@@ -75,7 +75,7 @@ def inspect_ai_screening(video_id: str) -> dict | None:
     # Scan all frames in parallel (numpy/OpenCV release the GIL)
     def _scan_frame(frame_bgr: np.ndarray, label: str) -> dict:
         h, w = frame_bgr.shape[:2]
-        det = detect_overlay_in_frame(frame_bgr)
+        det = fast_overlay_check(frame_bgr)
         overlay_score = det.score if det.found else 0.0
         otb_score = 0.0
         if det.found and det.bbox:
@@ -494,11 +494,11 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
                 })
                 continue
 
-            # Compute per-frame heuristic scores (only needs opencv/numpy)
+            # Compute per-frame detector scores (only needs opencv/numpy)
             ovl_scores = []
             otb_scores = []
             for frame_bgr, _ in frames:
-                det = detect_overlay_in_frame(frame_bgr)
+                det = fast_overlay_check(frame_bgr)
                 ovl_scores.append(det.score if det.found else 0.0)
                 otb_score = 0.0
                 if det.found and det.bbox:
@@ -686,7 +686,7 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
     best_frame = None
 
     for frame, ts in all_frames:
-        det = detect_overlay_in_frame(frame)
+        det = fast_overlay_check(frame)
         fh, fw = frame.shape[:2]
 
         # Draw bboxes on frame

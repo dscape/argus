@@ -24,7 +24,7 @@ class TestDbWriteFailureHandling:
     @patch("api.services.evaluate.models_service.get_conn")
     @patch("api.services.evaluate.models_service.is_vertical_video")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")
-    @patch("api.services.evaluate.models_service.detect_overlay_in_frame")
+    @patch("api.services.evaluate.models_service.fast_overlay_check")
     @patch("api.services.evaluate.models_service.detect_otb_region")
     def test_db_failure_flags_results(
         self, mock_otb, mock_overlay, mock_frames, mock_vertical, mock_conn
@@ -118,7 +118,7 @@ class TestThresholdBehavior:
     @patch("api.services.evaluate.models_service.get_conn")
     @patch("api.services.evaluate.models_service.is_vertical_video")
     @patch("api.services.evaluate.models_service.fetch_youtube_frames")
-    @patch("api.services.evaluate.models_service.detect_overlay_in_frame")
+    @patch("api.services.evaluate.models_service.fast_overlay_check")
     @patch("api.services.evaluate.models_service.detect_otb_region")
     def test_high_threshold_prevents_auto_decide(
         self, mock_otb, mock_overlay, mock_frames, mock_vertical, mock_conn

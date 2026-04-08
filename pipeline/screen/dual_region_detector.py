@@ -12,11 +12,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from pipeline.overlay.scanner import (
-    OverlayDetection,
-    detect_overlay_in_frame,
-    extract_frames_from_video,
-)
+from pipeline.overlay.scanner import OverlayDetection, extract_frames_from_video, fast_overlay_check
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +116,7 @@ def screen_video(video_url_or_path: str) -> ScreeningResult:
     """Screen a video for both overlay and OTB camera footage.
 
     Extracts 2-3 frames and checks each for:
-    1. A 2D chess board overlay (via existing scanner)
+    1. A 2D chess board overlay (via the default YOLO detector)
     2. Real OTB camera footage outside the overlay
 
     Args:
@@ -145,8 +141,8 @@ def screen_video(video_url_or_path: str) -> ScreeningResult:
         if frame is None:
             continue
 
-        # Check for overlay
-        overlay_det = detect_overlay_in_frame(frame)
+        # Runtime overlay detection uses the default YOLO screener.
+        overlay_det = fast_overlay_check(frame)
         if overlay_det.found and overlay_det.score > best_overlay.score:
             best_overlay = overlay_det
 

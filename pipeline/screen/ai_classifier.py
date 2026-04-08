@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from pipeline.overlay.scanner import detect_overlay_in_frame
+from pipeline.overlay.scanner import fast_overlay_check
 from pipeline.screen.dual_region_detector import detect_otb_region
 from pipeline.screen.frame_fetcher import fetch_youtube_frames
 
@@ -155,8 +155,8 @@ class ScreeningFeatureExtractor:
                     scanner_scores[i] = precomputed_scores[i][0]
                     otb_scores[i] = precomputed_scores[i][1]
                 else:
-                    # Overlay scanner score
-                    detection = detect_overlay_in_frame(frame_bgr)
+                    # Runtime overlay score from the default YOLO detector.
+                    detection = fast_overlay_check(frame_bgr)
                     scanner_scores[i] = detection.score if detection.found else 0.0
 
                     # OTB detection score

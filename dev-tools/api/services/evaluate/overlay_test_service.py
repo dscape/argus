@@ -434,8 +434,9 @@ def extract_overlay_from_frames(video_id: str) -> dict:
     Tries frames (25pct, 50pct, 75pct), preferring hi-res overlay frames
     from fullres/hires tiers over low-res screening frames.
 
-    Pipeline per frame: ``detect_overlay_fast`` (seed + expansion) →
-    crop to bbox → ``detect_grid`` → ``classify_squares`` → FEN.
+    Pipeline per frame: ``detect_overlay_fast`` (default YOLO detector,
+    padded to avoid clipping) → crop to bbox → ``detect_grid`` →
+    ``classify_squares`` → FEN.
 
     Returns a dict with ``status`` of ``ok``, ``warning``, or ``no_overlay``.
     """
@@ -507,10 +508,9 @@ def extract_overlay_from_frames(video_id: str) -> dict:
 def detect_overlay_from_frames(video_id: str) -> dict:
     """Fast phase: detect overlay + grid, return crop image without FEN.
 
-    Uses ``detect_overlay_fast`` which expands the initial seed bbox via
-    grid detection to find pixel-perfect board boundaries.  Returns
-    immediately so the UI can show the overlay crop while FEN
-    classification happens asynchronously.
+    Uses ``detect_overlay_fast`` which runs the default YOLO detector and
+    applies a small safety padding to the bbox. Returns immediately so the UI
+    can show the overlay crop while FEN classification happens asynchronously.
     """
     saved_keys = _get_saved_frame_keys()
 

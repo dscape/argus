@@ -137,9 +137,9 @@ def segment_video_layouts(
 ) -> tuple[list[LayoutSegment], list[tuple[float, float]]]:
     """Segment a video into overlay and gap regions.
 
-    Uses dense uniform sampling with ``fast_overlay_check`` (which
-    internally downscales to 540p for speed).  Then refines segment
-    boundaries with a binary search to get ~1-second precision.
+    Uses dense uniform sampling with ``fast_overlay_check`` (the default
+    YOLO overlay detector). Then refines segment boundaries with a binary
+    search to get ~1-second precision.
 
     Args:
         video_path: Path to the local video file.
@@ -174,8 +174,7 @@ def segment_video_layouts(
     )
 
     # ── Phase 1: Uniform sampling ────────────────────────────
-    # Sample at regular intervals.  fast_overlay_check downscales
-    # internally so each call is ~5-10ms even on 1080p+ input.
+    # Sample at regular intervals with the runtime YOLO detector.
     samples: list[dict] = []
     ts = 0.0
 
@@ -302,9 +301,8 @@ def segment_video_layouts(
     )
 
     # ── Phase 4: Build output ─────────────────────────────────
-    # fast_overlay_check skips bbox expansion, so its bboxes are scan
-    # windows (sub-regions of the actual overlay).  Use a lower size
-    # threshold — any grid-regularity-passing detection is real.
+    # fast_overlay_check returns the runtime YOLO bbox directly, so segment
+    # filtering can use the detected size without any heuristic expansion.
     min_overlay_px = int(height * min_overlay_fraction * 0.5)
     segments: list[LayoutSegment] = []
     gaps: list[tuple[float, float]] = []
