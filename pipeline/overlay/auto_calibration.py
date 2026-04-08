@@ -15,8 +15,8 @@ import numpy as np
 from pipeline.overlay.calibration import BOARD_THEMES, hex_to_bgr
 from pipeline.overlay.scanner import (
     OverlayDetection,
-    detect_overlay_fast,
     _overlay_alignment_score,
+    detect_overlay_runtime,
 )
 from pipeline.screen.frame_fetcher import fetch_youtube_frames
 
@@ -452,7 +452,7 @@ def propose_calibration(
     best_frame = None
 
     for frame, label in frames:
-        detection = detect_overlay_fast(frame)
+        detection = detect_overlay_runtime(frame)
         if detection.found:
             bbox_area = detection.bbox[2] * detection.bbox[3] if detection.bbox else 0
             best_area = best_detection.bbox[2] * best_detection.bbox[3] if best_detection and best_detection.bbox else 0
@@ -657,7 +657,7 @@ def propose_calibration_for_clip(
         return None
 
     # Find the best overlay detection across sampled frames.
-    # Try detect_overlay_fast first (default YOLO detector).
+    # Try detect_overlay_runtime first (default YOLO detector).
     # Fall back to the legacy grid scan only if YOLO finds nothing on any frame.
     #
     # Score by overlay alignment (regularity × alternation × periodicity)
@@ -669,7 +669,7 @@ def propose_calibration_for_clip(
     best_score = -1.0
 
     for frame, label in frames:
-        detection = detect_overlay_fast(frame)
+        detection = detect_overlay_runtime(frame)
         if detection.found and detection.bbox is not None:
             x, y, w, h = detection.bbox
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)

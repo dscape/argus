@@ -338,7 +338,7 @@ async def get_board_image(filename: str):
 
 @router.post("/overlay-test/validate-real")
 async def validate_overlay_detection(limit: int = 100):
-    """Validate fast_overlay_check accuracy on real video frames.
+    """Validate runtime_overlay_check accuracy on real video frames.
 
     Samples frames from downloaded overlay videos across diverse channels
     and tests whether the overlay detector correctly identifies them.

@@ -3,11 +3,10 @@
 from pipeline.overlay.calibration import (
     LayoutCalibration,
     get_calibration,
-    set_calibration,
     list_calibrations,
     load_config,
     save_config,
-    CONFIG_PATH,
+    set_calibration,
 )
 
 

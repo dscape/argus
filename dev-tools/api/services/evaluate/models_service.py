@@ -7,9 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
-
 from pipeline.db.connection import get_conn
-from pipeline.overlay.scanner import fast_overlay_check
+from pipeline.screen.ai_classifier import screening_overlay_check
 from pipeline.screen.dual_region_detector import detect_otb_region
 from pipeline.screen.frame_fetcher import fetch_youtube_frames, is_vertical_video
 
@@ -75,7 +74,7 @@ def inspect_ai_screening(video_id: str) -> dict | None:
     # Scan all frames in parallel (numpy/OpenCV release the GIL)
     def _scan_frame(frame_bgr: np.ndarray, label: str) -> dict:
         h, w = frame_bgr.shape[:2]
-        det = fast_overlay_check(frame_bgr)
+        det = screening_overlay_check(frame_bgr)
         overlay_score = det.score if det.found else 0.0
         otb_score = 0.0
         if det.found and det.bbox:
@@ -498,7 +497,7 @@ def ai_screen_batch(video_ids: list[str], threshold: float = 0.90) -> list[dict]
             ovl_scores = []
             otb_scores = []
             for frame_bgr, _ in frames:
-                det = fast_overlay_check(frame_bgr)
+                det = screening_overlay_check(frame_bgr)
                 ovl_scores.append(det.score if det.found else 0.0)
                 otb_score = 0.0
                 if det.found and det.bbox:
@@ -648,11 +647,13 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
     """Inspect auto-calibration for a video — overlay detection at multiple timestamps."""
     from pipeline.overlay.auto_calibration import (
         _get_video_path,
+        _grid_scan_frames,
         compute_camera_bbox,
         detect_board_orientation,
         detect_board_theme,
     )
     from pipeline.overlay.calibration import get_calibration
+    from pipeline.overlay.scanner import detect_overlay_runtime
 
     video_path = _get_video_path(video_id)
     source = "local_video" if video_path else "thumbnails"
@@ -686,7 +687,7 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
     best_frame = None
 
     for frame, ts in all_frames:
-        det = fast_overlay_check(frame)
+        det = detect_overlay_runtime(frame)
         fh, fw = frame.shape[:2]
 
         # Draw bboxes on frame
@@ -715,6 +716,9 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
             if area > best_area:
                 best_detection = det
                 best_frame = frame
+
+    if best_detection is None:
+        best_detection, best_frame = _grid_scan_frames(all_frames)
 
     # Compute proposal from best detection
     proposal = None
@@ -818,11 +822,11 @@ def inspect_hard_cuts(video_id: str, sample_fps: float = 2.0) -> dict | None:
     """Inspect hard cut detection on a video with calibration."""
     from pipeline.overlay.auto_calibration import _get_video_path
     from pipeline.overlay.calibration import get_calibration
+    from pipeline.overlay.grid_detector import detect_grid
     from pipeline.overlay.overlay_move_detector import (
         count_fen_differences,
         detect_moves,
     )
-    from pipeline.overlay.grid_detector import detect_grid
     from pipeline.overlay.piece_classifier import read_fen_with_grid
 
     # Get channel for calibration
@@ -944,7 +948,6 @@ def _eval_ai_screening(sample_size: int, notes: str | None = None) -> dict:
     """Evaluate AI screening classifier on a channel-stratified sample."""
     import torch
     import torch.nn.functional as F
-
     from pipeline.screen.ai_classifier import (
         CLASS_NAMES,
         NUM_CLASSES,

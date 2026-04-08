@@ -26,7 +26,7 @@ from pipeline.overlay.chess_positions_data import (
 )
 from pipeline.overlay.grid_detector import GridResult, detect_grid
 from pipeline.overlay.piece_classifier import classify_squares, read_fen_with_grid
-from pipeline.overlay.scanner import detect_overlay_fast, fast_overlay_check
+from pipeline.overlay.scanner import detect_overlay_runtime, runtime_overlay_check
 from pipeline.paths import find_frame
 
 logger = logging.getLogger(__name__)
@@ -206,7 +206,7 @@ def inspect_board(filename: str) -> dict:
 
     # Step 1: overlay detection timing
     t_overlay = time.monotonic()
-    det = fast_overlay_check(image)
+    det = runtime_overlay_check(image)
     overlay_detect_ms = round((time.monotonic() - t_overlay) * 1000, 1)
 
     # Step 2: grid detection timing
@@ -434,7 +434,7 @@ def extract_overlay_from_frames(video_id: str) -> dict:
     Tries frames (25pct, 50pct, 75pct), preferring hi-res overlay frames
     from fullres/hires tiers over low-res screening frames.
 
-    Pipeline per frame: ``detect_overlay_fast`` (default YOLO detector,
+    Pipeline per frame: ``detect_overlay_runtime`` (default YOLO detector,
     padded to avoid clipping) → crop to bbox → ``detect_grid`` →
     ``classify_squares`` → FEN.
 
@@ -455,7 +455,7 @@ def extract_overlay_from_frames(video_id: str) -> dict:
         if frame is None:
             continue
 
-        det = detect_overlay_fast(frame)
+        det = detect_overlay_runtime(frame)
         if not det.found or det.bbox is None:
             continue
 
@@ -508,7 +508,7 @@ def extract_overlay_from_frames(video_id: str) -> dict:
 def detect_overlay_from_frames(video_id: str) -> dict:
     """Fast phase: detect overlay + grid, return crop image without FEN.
 
-    Uses ``detect_overlay_fast`` which runs the default YOLO detector and
+    Uses ``detect_overlay_runtime`` which runs the default YOLO detector and
     applies a small safety padding to the bbox. Returns immediately so the UI
     can show the overlay crop while FEN classification happens asynchronously.
     """
@@ -528,7 +528,7 @@ def detect_overlay_from_frames(video_id: str) -> dict:
         if frame is None:
             continue
 
-        det = detect_overlay_fast(frame)
+        det = detect_overlay_runtime(frame)
         if not det.found or det.bbox is None:
             continue
 
@@ -574,7 +574,7 @@ def classify_overlay_fen(video_id: str, frame_name: str) -> dict:
     if frame is None:
         return {"status": "error", "warning": "Could not read frame"}
 
-    det = detect_overlay_fast(frame)
+    det = detect_overlay_runtime(frame)
     if not det.found or det.bbox is None:
         return {"status": "error", "warning": "Overlay not detected"}
 
@@ -638,7 +638,7 @@ def save_confirmed_frame_extractions(confirmations: list[dict]) -> dict:
             errors.append(f"{label}: could not read frame")
             continue
 
-        det = detect_overlay_fast(frame)
+        det = detect_overlay_runtime(frame)
         if not det.found or det.bbox is None:
             errors.append(f"{label}: overlay not detected")
             continue
@@ -680,10 +680,10 @@ def save_confirmed_frame_extractions(confirmations: list[dict]) -> dict:
 
 
 def validate_overlay_detection(limit: int = 100) -> dict:
-    """Validate fast_overlay_check accuracy on real video frames.
+    """Validate runtime_overlay_check accuracy on real video frames.
 
     Samples frames from downloaded overlay videos across diverse channels.
-    For each frame, runs fast_overlay_check and records whether the overlay
+    For each frame, runs runtime_overlay_check and records whether the overlay
     was detected, the score, and the time taken.
 
     Args:
@@ -761,7 +761,7 @@ def validate_overlay_detection(limit: int = 100) -> dict:
             fh, fw = frame.shape[:2]
 
             t_start = time.monotonic()
-            det = fast_overlay_check(frame)
+            det = runtime_overlay_check(frame)
             elapsed_ms = round((time.monotonic() - t_start) * 1000, 1)
 
             result = {

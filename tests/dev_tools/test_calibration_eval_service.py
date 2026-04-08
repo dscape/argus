@@ -11,10 +11,10 @@ class TestDetectOverlayForEval:
     """Calibration eval should mirror the auto-calibration detection stack."""
 
     @patch("api.services.evaluate.calibration_eval_service._grid_scan_frames")
-    @patch("api.services.evaluate.calibration_eval_service.detect_overlay_fast")
-    def test_prefers_fast_detector_when_it_finds_overlay(
+    @patch("api.services.evaluate.calibration_eval_service.detect_overlay_runtime")
+    def test_prefers_runtime_detector_when_it_finds_overlay(
         self,
-        mock_detect_fast,
+        mock_detect_runtime,
         mock_grid_scan,
     ) -> None:
         frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
@@ -23,7 +23,7 @@ class TestDetectOverlayForEval:
             bbox=(100, 50, 600, 600),
             frame_resolution=(1920, 1080),
         )
-        mock_detect_fast.return_value = detection
+        mock_detect_runtime.return_value = detection
 
         result = calibration_eval_service._detect_overlay_for_eval(frame)
 
@@ -31,14 +31,14 @@ class TestDetectOverlayForEval:
         mock_grid_scan.assert_not_called()
 
     @patch("api.services.evaluate.calibration_eval_service._grid_scan_frames")
-    @patch("api.services.evaluate.calibration_eval_service.detect_overlay_fast")
-    def test_falls_back_to_grid_scan_when_fast_detector_misses(
+    @patch("api.services.evaluate.calibration_eval_service.detect_overlay_runtime")
+    def test_falls_back_to_grid_scan_when_runtime_detector_misses(
         self,
-        mock_detect_fast,
+        mock_detect_runtime,
         mock_grid_scan,
     ) -> None:
         frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
-        mock_detect_fast.return_value = OverlayDetection(
+        mock_detect_runtime.return_value = OverlayDetection(
             found=False,
             frame_resolution=(1920, 1080),
         )
@@ -55,14 +55,14 @@ class TestDetectOverlayForEval:
         mock_grid_scan.assert_called_once_with([(frame, "eval")])
 
     @patch("api.services.evaluate.calibration_eval_service._grid_scan_frames")
-    @patch("api.services.evaluate.calibration_eval_service.detect_overlay_fast")
+    @patch("api.services.evaluate.calibration_eval_service.detect_overlay_runtime")
     def test_returns_not_found_when_both_strategies_miss(
         self,
-        mock_detect_fast,
+        mock_detect_runtime,
         mock_grid_scan,
     ) -> None:
         frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-        mock_detect_fast.return_value = OverlayDetection(
+        mock_detect_runtime.return_value = OverlayDetection(
             found=False,
             frame_resolution=(1280, 720),
         )

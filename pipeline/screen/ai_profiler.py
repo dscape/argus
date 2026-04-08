@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn.functional as F
 
-from pipeline.overlay.scanner import fast_overlay_check
 from pipeline.paths import find_frame
 from pipeline.screen.ai_classifier import (
     CLASS_NAMES,
@@ -21,6 +20,7 @@ from pipeline.screen.ai_classifier import (
     NUM_FRAMES,
     ScreeningClassifier,
     ScreeningFeatureExtractor,
+    screening_overlay_check,
 )
 from pipeline.screen.ai_train import CACHE_DIR, CHECKPOINT_DIR
 from pipeline.screen.dual_region_detector import detect_otb_region
@@ -154,7 +154,7 @@ def profile_video(
         with timer.phase("overlay_scan"):
             for i, frame_bgr, _ in preprocessed:
                 with timer.sub_phase(f"frame_{i}"):
-                    detection = fast_overlay_check(frame_bgr)
+                    detection = screening_overlay_check(frame_bgr)
                     scanner_scores[i] = detection.score if detection.found else 0.0
                     detections.append(detection)
 

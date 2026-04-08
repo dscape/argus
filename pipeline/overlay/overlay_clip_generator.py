@@ -4,7 +4,6 @@ Combines OTB camera crops (training frames) with overlay-extracted ground truth
 (moves) to produce .pt training clips compatible with ArgusDataset.
 """
 
-import io
 import logging
 import os
 import subprocess
@@ -16,8 +15,8 @@ import numpy as np
 import torch
 
 from pipeline.overlay.calibration import LayoutCalibration, get_calibration
-from pipeline.overlay.overlay_move_detector import GameSegment, detect_moves
 from pipeline.overlay.grid_detector import detect_grid
+from pipeline.overlay.overlay_move_detector import GameSegment, detect_moves
 from pipeline.overlay.piece_classifier import read_fen_with_grid
 
 logger = logging.getLogger(__name__)

@@ -6,17 +6,13 @@ import time
 
 import cv2
 import numpy as np
-
-from api.services.videos import crawl_service
 from pipeline.overlay.auto_calibration import (
     _get_video_path,
-    _scale_bbox,
-    compute_camera_bbox,
-    detect_board_orientation,
-    detect_board_theme,
     propose_calibration_for_clip,
 )
 from pipeline.overlay.segmenter import segment_video_layouts
+
+from api.services.videos import crawl_service
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +35,6 @@ def auto_segment_video(
 
     Returns a dict with ``segments``, ``gaps``, ``video_resolution``, etc.
     """
-    from pipeline.db.connection import get_conn
 
     video_path = _get_video_path(video_id)
     if not video_path:

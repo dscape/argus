@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
-from pipeline.overlay.scanner import OverlayDetection, fast_overlay_check
+from pipeline.overlay.scanner import OverlayDetection, runtime_overlay_check
 from pipeline.overlay.segmenter import (
     _bbox_relative_shift,
     _median_bbox,
@@ -52,7 +52,7 @@ class TestMedianBbox:
         assert result == (15, 25, 105, 105)
 
 
-class TestFastOverlayCheck:
+class TestRuntimeOverlayCheck:
     def test_detects_synthetic_rendered_board(self):
         """A synthetic 8x8 alternating-color grid should be detected."""
         size = 400
@@ -65,7 +65,7 @@ class TestFastOverlayCheck:
                 x0 = 200 + c * cell
                 frame[y0 : y0 + cell, x0 : x0 + cell] = color
 
-        det = fast_overlay_check(frame)
+        det = runtime_overlay_check(frame)
         assert det.found is True
         assert det.bbox is not None
         assert det.score > 0.5
@@ -74,16 +74,11 @@ class TestFastOverlayCheck:
         """Random noise should not be detected as an overlay."""
         rng = np.random.RandomState(42)
         frame = rng.randint(0, 256, (600, 800, 3), dtype=np.uint8)
-        det = fast_overlay_check(frame)
+        det = runtime_overlay_check(frame)
         assert det.found is False
 
     def test_downscaling_preserves_detection(self):
         """Overlay detection works on large frames via internal downscaling."""
-        # Use a board size that aligns with the scan scales after downscaling.
-        # At 1920x1080 the algorithm downscales to 810px max dim.
-        # Scale factor = 810/1920 ≈ 0.42.  min(h,w) at 810p = 455.
-        # Scale 0.90 → win=409 ≈ 970px at full res.
-        # So a 960px board fills the window well at one of the scales.
         size = 960
         frame = np.full((1080, 1920, 3), 128, dtype=np.uint8)
         cell = size // 8
@@ -94,11 +89,10 @@ class TestFastOverlayCheck:
                 x0 = 480 + c * cell
                 frame[y0 : y0 + cell, x0 : x0 + cell] = color
 
-        det = fast_overlay_check(frame)
+        det = runtime_overlay_check(frame)
         assert det.found is True
         assert det.bbox is not None
-        # Bbox should be scaled back to original 1920x1080 coordinates
-        assert det.bbox[2] > 400  # width should be > 400px in original coords
+        assert det.bbox[2] > 400
 
 
 class TestSegmentVideoLayouts:
@@ -122,14 +116,14 @@ class TestSegmentVideoLayouts:
         cap.get.side_effect = get_prop
         return cap
 
-    @patch("pipeline.overlay.segmenter.fast_overlay_check")
+    @patch("pipeline.overlay.segmenter.runtime_overlay_check")
     @patch("cv2.VideoCapture")
-    def test_all_overlay_produces_single_segment(self, mock_cap_cls, mock_fast_check):
+    def test_all_overlay_produces_single_segment(self, mock_cap_cls, mock_runtime_check):
         """All samples with overlay produce a single merged segment."""
         mock_cap_cls.return_value = self._mock_cap()
 
         bbox = (500, 200, 600, 600)
-        mock_fast_check.return_value = OverlayDetection(
+        mock_runtime_check.return_value = OverlayDetection(
             found=True,
             bbox=bbox,
             seed_bbox=bbox,
@@ -143,13 +137,13 @@ class TestSegmentVideoLayouts:
         assert segments[0].start_time == 0.0
         assert len(gaps) == 0
 
-    @patch("pipeline.overlay.segmenter.fast_overlay_check")
+    @patch("pipeline.overlay.segmenter.runtime_overlay_check")
     @patch("cv2.VideoCapture")
-    def test_all_gap_produces_single_gap(self, mock_cap_cls, mock_fast_check):
+    def test_all_gap_produces_single_gap(self, mock_cap_cls, mock_runtime_check):
         """All samples without overlay produce a single gap."""
         mock_cap_cls.return_value = self._mock_cap()
 
-        mock_fast_check.return_value = OverlayDetection(
+        mock_runtime_check.return_value = OverlayDetection(
             found=False,
             frame_resolution=(1920, 1080),
         )
@@ -159,20 +153,17 @@ class TestSegmentVideoLayouts:
         assert len(segments) == 0
         assert len(gaps) == 1
 
-    @patch("pipeline.overlay.segmenter.fast_overlay_check")
+    @patch("pipeline.overlay.segmenter.runtime_overlay_check")
     @patch("cv2.VideoCapture")
-    def test_overlay_gap_overlay_sequence(self, mock_cap_cls, mock_fast_check):
+    def test_overlay_gap_overlay_sequence(self, mock_cap_cls, mock_runtime_check):
         """Overlay -> gap -> overlay produces correct segments and gap."""
-        # 60-second video sampled every 5 seconds = 12 samples
-        mock_cap_cls.return_value = self._mock_cap(total_frames=1800)  # 60s
+        mock_cap_cls.return_value = self._mock_cap(total_frames=1800)
 
         bbox = (500, 200, 600, 600)
 
         def check_side_effect(frame):
-            # Determine time from call count (5s intervals)
-            call_num = mock_fast_check.call_count
+            call_num = mock_runtime_check.call_count
             t = (call_num - 1) * 5.0
-            # Gap between 20s and 35s
             if 20.0 <= t < 35.0:
                 return OverlayDetection(found=False, frame_resolution=(1920, 1080))
             return OverlayDetection(
@@ -183,25 +174,23 @@ class TestSegmentVideoLayouts:
                 frame_resolution=(1920, 1080),
             )
 
-        mock_fast_check.side_effect = check_side_effect
+        mock_runtime_check.side_effect = check_side_effect
 
         segments, gaps = segment_video_layouts("/fake/video.mp4")
 
         assert len(segments) == 2
         assert len(gaps) == 1
-        # First segment: 0-20s, gap: 20-35s, second segment: 35-60s
         assert segments[0].start_time == 0.0
         assert segments[1].end_time <= 60.0
 
-    @patch("pipeline.overlay.segmenter.fast_overlay_check")
+    @patch("pipeline.overlay.segmenter.runtime_overlay_check")
     @patch("cv2.VideoCapture")
-    def test_min_overlay_fraction_filter(self, mock_cap_cls, mock_fast_check):
-        """Segments with small overlays are treated as gaps."""
+    def test_min_overlay_fraction_filter(self, mock_cap_cls, mock_runtime_check):
+        """Segments with sub-threshold overlays are treated as gaps."""
         mock_cap_cls.return_value = self._mock_cap(height=1080)
 
-        # Overlay only 200px on a 1080p frame -> well below min_overlay_fraction
-        small_bbox = (500, 400, 200, 200)
-        mock_fast_check.return_value = OverlayDetection(
+        small_bbox = (500, 340, 400, 400)
+        mock_runtime_check.return_value = OverlayDetection(
             found=True,
             bbox=small_bbox,
             seed_bbox=small_bbox,
@@ -214,15 +203,14 @@ class TestSegmentVideoLayouts:
         assert len(segments) == 0
         assert len(gaps) == 1
 
-    @patch("pipeline.overlay.segmenter.fast_overlay_check")
+    @patch("pipeline.overlay.segmenter.runtime_overlay_check")
     @patch("cv2.VideoCapture")
-    def test_merges_overlay_with_small_bbox_jitter(self, mock_cap_cls, mock_fast_check):
+    def test_merges_overlay_with_small_bbox_jitter(self, mock_cap_cls, mock_runtime_check):
         """Consecutive overlay samples merge when bbox jitter is small."""
         mock_cap_cls.return_value = self._mock_cap()
 
         def jittery_bbox(frame):
-            n = mock_fast_check.call_count
-            # Small jitter: +-20px on a 600px box = ~3% shift, well below 20%
+            n = mock_runtime_check.call_count
             jitter = 20 if n % 2 == 0 else -20
             bbox = (500 + jitter, 200 + jitter, 600, 600)
             return OverlayDetection(
@@ -233,25 +221,24 @@ class TestSegmentVideoLayouts:
                 frame_resolution=(1920, 1080),
             )
 
-        mock_fast_check.side_effect = jittery_bbox
+        mock_runtime_check.side_effect = jittery_bbox
 
         segments, gaps = segment_video_layouts("/fake/video.mp4")
 
         assert len(segments) == 1
         assert len(gaps) == 0
 
-    @patch("pipeline.overlay.segmenter.fast_overlay_check")
+    @patch("pipeline.overlay.segmenter.runtime_overlay_check")
     @patch("cv2.VideoCapture")
-    def test_splits_overlay_on_large_bbox_shift(self, mock_cap_cls, mock_fast_check):
+    def test_splits_overlay_on_large_bbox_shift(self, mock_cap_cls, mock_runtime_check):
         """Overlay segments split when bbox shifts significantly (layout change)."""
-        # 60-second video sampled every 5 seconds = 12 samples
-        mock_cap_cls.return_value = self._mock_cap(total_frames=1800)  # 60s
+        mock_cap_cls.return_value = self._mock_cap(total_frames=1800)
 
         bbox_left = (100, 200, 600, 600)
         bbox_right = (900, 200, 600, 600)
 
         def layout_change(frame):
-            n = mock_fast_check.call_count
+            n = mock_runtime_check.call_count
             t = (n - 1) * 5.0
             bbox = bbox_left if t < 30.0 else bbox_right
             return OverlayDetection(
@@ -262,10 +249,9 @@ class TestSegmentVideoLayouts:
                 frame_resolution=(1920, 1080),
             )
 
-        mock_fast_check.side_effect = layout_change
+        mock_runtime_check.side_effect = layout_change
 
         segments, gaps = segment_video_layouts("/fake/video.mp4")
 
-        # Two distinct layouts -> two segments
         assert len(segments) == 2
         assert len(gaps) == 0

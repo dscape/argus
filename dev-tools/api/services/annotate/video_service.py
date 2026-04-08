@@ -120,6 +120,7 @@ def _encode_crop_b64(frame: np.ndarray, bbox: tuple) -> str:
 def _get_clip_calibration(clip_id: int):
     """Build a LayoutCalibration from a video_clips DB row."""
     from pipeline.overlay.calibration import LayoutCalibration
+
     from api.services.videos.crawl_service import get_video_clip
 
     clip = get_video_clip(clip_id)
@@ -185,10 +186,10 @@ def read_overlay_at_frame(session_id: str, frame_index: int, clip_id: int | None
 
 def detect_moves(session_id: str, sample_fps: float = 2.0, clip_id: int | None = None) -> dict:
     """Run full move detection on the video. If clip_id is given, restrict to that clip's time range and calibration."""
+    from pipeline.overlay.grid_detector import detect_grid
     from pipeline.overlay.overlay_move_detector import (
         detect_moves as run_detect,
     )
-    from pipeline.overlay.grid_detector import detect_grid
     from pipeline.overlay.piece_classifier import read_fen_with_grid
 
     session = _sessions.get(session_id)

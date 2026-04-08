@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from pipeline.overlay.scanner import fast_overlay_check
+from pipeline.overlay.scanner import runtime_overlay_check
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,7 @@ def _refine_boundary(
         frame = _read_frame_at(cap, mid, fps)
         if frame is None:
             break
-        det = fast_overlay_check(frame)
+        det = runtime_overlay_check(frame)
         if det.found:
             t_has = mid
         else:
@@ -117,7 +117,7 @@ def _refine_layout_boundary(
         frame = _read_frame_at(cap, mid, fps)
         if frame is None:
             break
-        det = fast_overlay_check(frame)
+        det = runtime_overlay_check(frame)
         if not det.found or det.bbox is None:
             # No overlay at midpoint — split here
             break
@@ -137,7 +137,7 @@ def segment_video_layouts(
 ) -> tuple[list[LayoutSegment], list[tuple[float, float]]]:
     """Segment a video into overlay and gap regions.
 
-    Uses dense uniform sampling with ``fast_overlay_check`` (the default
+    Uses dense uniform sampling with ``runtime_overlay_check`` (the default
     YOLO overlay detector). Then refines segment boundaries with a binary
     search to get ~1-second precision.
 
@@ -181,7 +181,7 @@ def segment_video_layouts(
     while ts < duration:
         frame = _read_frame_at(cap, ts, fps)
         if frame is not None:
-            det = fast_overlay_check(frame)
+            det = runtime_overlay_check(frame)
             samples.append({
                 "time": ts,
                 "found": det.found,
@@ -301,9 +301,9 @@ def segment_video_layouts(
     )
 
     # ── Phase 4: Build output ─────────────────────────────────
-    # fast_overlay_check returns the runtime YOLO bbox directly, so segment
-    # filtering can use the detected size without any heuristic expansion.
-    min_overlay_px = int(height * min_overlay_fraction * 0.5)
+    # The runtime detector now returns the full overlay bbox, so the configured
+    # minimum fraction can be applied directly to the detected height/width.
+    min_overlay_px = int(height * min_overlay_fraction)
     segments: list[LayoutSegment] = []
     gaps: list[tuple[float, float]] = []
 

@@ -8,7 +8,6 @@ region. Calibrations are stored in a YAML config file and are static per channel
 import logging
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
 import yaml
 

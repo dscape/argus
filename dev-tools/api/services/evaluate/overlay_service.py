@@ -41,7 +41,7 @@ def test_image(
     theme: str = "lichess_default",
 ) -> dict:
     """Run runtime overlay detection + reading and return results as a dict."""
-    from pipeline.overlay.scanner import detect_overlay_fast
+    from pipeline.overlay.scanner import detect_overlay_runtime
 
     frame = decode_image(image_bytes)
     h, w = frame.shape[:2]
@@ -50,7 +50,7 @@ def test_image(
     bbox = overlay_bbox
 
     if bbox is None:
-        detection = detect_overlay_fast(frame)
+        detection = detect_overlay_runtime(frame)
         if not detection.found:
             return {
                 "detected": False,

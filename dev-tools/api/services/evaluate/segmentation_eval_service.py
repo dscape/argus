@@ -18,7 +18,7 @@ import numpy as np
 from pipeline.db.connection import get_conn
 from pipeline.overlay.grid_detector import detect_grid
 from pipeline.overlay.piece_classifier import CLASS_TO_PIECE, classify_squares
-from pipeline.overlay.scanner import detect_overlay_fast, fast_overlay_check
+from pipeline.overlay.scanner import detect_overlay_runtime, runtime_overlay_check
 from pipeline.overlay.segmenter import segment_video_layouts
 
 logger = logging.getLogger(__name__)
@@ -71,20 +71,17 @@ def _validate_segment_frame(
       skip a full-frame detector call.
       The stored bbox already tells us where the board should be; we just
       verify it with the grid detector (fast, ~20ms) rather than re-scanning.
-    - Otherwise, fall back to detect_overlay_fast (the default YOLO detector).
+    - Otherwise, fall back to detect_overlay_runtime (the default YOLO detector).
     - DINOv2 piece classification only runs when *run_piece_classify=True*
       (disabled for non-middle frames to avoid running it on all 5 per segment).
     """
     thumb = _frame_to_base64(frame)
     fh, fw = frame.shape[:2]
     overlay_found = False
+    fast_check_found = False
     grid_found = False
     crop: np.ndarray | None = None
     grid = None  # detect_grid result; reused for piece classification
-
-    # Also run fast_overlay_check to measure what the segmenter actually sees.
-    fast_det = fast_overlay_check(frame)
-    fast_check_found = fast_det.found
 
     if stored_bbox is not None:
         # Fast path: try detect_grid on stored bbox crop (no sliding window).
@@ -96,12 +93,14 @@ def _validate_segment_frame(
             grid = detect_grid(candidate_crop)
             if grid is not None:
                 overlay_found = True
+                fast_check_found = True
                 grid_found = True
                 crop = candidate_crop
         # If detect_grid failed on stored bbox, fall back to the runtime detector.
         if not overlay_found:
-            det = detect_overlay_fast(frame)
+            det = detect_overlay_runtime(frame)
             overlay_found = det.found
+            fast_check_found = det.found
             if det.found and det.bbox is not None:
                 bx, by, bw, bh = det.bbox
                 bx1, by1 = max(0, bx), max(0, by)
@@ -113,8 +112,9 @@ def _validate_segment_frame(
                         grid_found = True
     else:
         # No stored bbox: use the runtime detector.
-        det = detect_overlay_fast(frame)
+        det = detect_overlay_runtime(frame)
         overlay_found = det.found
+        fast_check_found = det.found
         if det.found and det.bbox is not None:
             bx, by, bw, bh = det.bbox
             bx1, by1 = max(0, bx), max(0, by)
@@ -150,9 +150,9 @@ def _validate_segment_frame(
 def _validate_gap_frame(frame: np.ndarray, t: float) -> dict:
     """Fast overlay presence check for one gap frame (no bbox needed).
 
-    Uses fast_overlay_check: gap validation only needs overlay yes/no.
+    Uses runtime_overlay_check: gap validation only needs overlay yes/no.
     """
-    det = fast_overlay_check(frame)
+    det = runtime_overlay_check(frame)
     return {
         "time": round(t, 2),
         "overlay_detected": det.found,
@@ -246,9 +246,9 @@ def inspect_segmentation(video_id: str) -> dict:
     Performance strategy:
     - All frame timestamps are sorted ascending so video seeking is
       monotonically forward — no expensive backward H264 seeks.
-    - Segment frames use fast_overlay_check plus the stored bbox from
+    - Segment frames use the runtime YOLO detector plus the stored bbox from
       video_clips for grid/piece cropping, avoiding unnecessary detector work.
-    - Gap frames use fast_overlay_check (only need yes/no, not bbox).
+    - Gap frames use runtime_overlay_check (only need yes/no, not bbox).
     """
     t0 = time.monotonic()
 
@@ -529,7 +529,7 @@ def inspect_segmentation(video_id: str) -> dict:
         else 0.0
     )
 
-    # fast_overlay_check consistency: what the segmenter would actually see
+    # runtime_overlay_check consistency: what the segmenter would actually see
     fast_check_consistency = (
         fast_check_found_count / total_segment_frames
         if total_segment_frames > 0

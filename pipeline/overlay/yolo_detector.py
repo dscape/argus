@@ -9,11 +9,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from pipeline.paths import PROJECT_ROOT
-from pipeline.runtime_assets import (
-    OVERLAY_YOLO_WEIGHTS,
-    RuntimeAsset,
-    ensure_runtime_asset,
-)
+from pipeline.runtime_assets import OVERLAY_YOLO_WEIGHTS, RuntimeAsset, ensure_runtime_asset
 
 if TYPE_CHECKING:
     from pipeline.overlay.scanner import OverlayDetection
@@ -30,6 +26,17 @@ def _load_model(weights_path: str):
     return YOLO(weights_path)
 
 
+@lru_cache(maxsize=8)
+def _validated_weights_path(weights_path: str) -> Path:
+    candidate = Path(weights_path).expanduser().resolve()
+    if candidate == DEFAULT_WEIGHTS_PATH.resolve():
+        return ensure_runtime_asset(OVERLAY_YOLO_WEIGHTS)
+
+    return ensure_runtime_asset(
+        RuntimeAsset(name="overlay YOLO detector weights", path=candidate)
+    )
+
+
 def detect_overlay_yolo(
     frame: np.ndarray,
     *,
@@ -37,7 +44,7 @@ def detect_overlay_yolo(
     conf: float = 0.25,
     imgsz: int = 640,
     device: str = "auto",
-) -> "OverlayDetection":
+) -> OverlayDetection:
     """Run YOLO detection and return the best overlay bbox, if any."""
     from pipeline.overlay.scanner import OverlayDetection
 
@@ -79,13 +86,7 @@ def detect_overlay_yolo(
 
 
 def _resolve_weights_path(weights_path: str | Path) -> Path:
-    candidate = Path(weights_path).expanduser().resolve()
-    if candidate == DEFAULT_WEIGHTS_PATH.resolve():
-        return ensure_runtime_asset(OVERLAY_YOLO_WEIGHTS)
-
-    return ensure_runtime_asset(
-        RuntimeAsset(name="overlay YOLO detector weights", path=candidate)
-    )
+    return _validated_weights_path(str(weights_path))
 
 
 def _resolve_device(device: str) -> str:

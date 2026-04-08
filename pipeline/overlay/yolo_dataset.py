@@ -10,12 +10,13 @@ from pathlib import Path
 
 import cv2
 
-from pipeline.paths import GROUND_TRUTH_PATH, PROJECT_ROOT, VIDEOS_DIR
+from pipeline.paths import GROUND_TRUTH_PATH, PROJECT_ROOT, VIDEOS_DIR, find_frame
 
 FIXTURES_DIR = PROJECT_ROOT / "tests" / "fixtures" / "frames"
 FIXTURE_GROUND_TRUTH_PATH = FIXTURES_DIR / "ground_truth.json"
 DEFAULT_DATASET_DIR = PROJECT_ROOT / "data" / "overlay" / "yolo"
 DATASET_CLASS_NAME = "overlay"
+_LEGACY_GT_PATH = PROJECT_ROOT / "data" / "overlay" / "dataset" / "frames" / "ground_truth.json"
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,10 @@ def export_overlay_yolo_dataset(
     the YOLO ``test`` split so detector training is evaluated against the same
     frames used by the runtime overlay detector tests.
     """
-    all_gt = _load_ground_truth(source_ground_truth)
+    source_ground_truth = source_ground_truth.resolve()
+    fixture_ground_truth = fixture_ground_truth.resolve()
+    legacy_fallback = _LEGACY_GT_PATH if source_ground_truth == GROUND_TRUTH_PATH.resolve() else None
+    all_gt = _load_ground_truth(source_ground_truth, legacy_fallback=legacy_fallback)
     fixture_gt = _load_ground_truth(fixture_ground_truth)
 
     dataset_dir = dataset_dir.resolve()
@@ -68,7 +72,8 @@ def export_overlay_yolo_dataset(
         dirs["images"].mkdir(parents=True, exist_ok=True)
         dirs["labels"].mkdir(parents=True, exist_ok=True)
 
-    train_val_keys = [key for key in all_gt if key not in fixture_gt]
+    fixture_video_ids = {_video_id(key) for key in fixture_gt}
+    train_val_keys = [key for key in all_gt if _video_id(key) not in fixture_video_ids]
     train_keys, val_keys = _split_train_val(train_val_keys, all_gt, val_fraction, seed)
     test_keys = sorted(fixture_gt)
 
@@ -77,11 +82,25 @@ def export_overlay_yolo_dataset(
         "fixture_ground_truth": str(fixture_ground_truth),
         "class_name": DATASET_CLASS_NAME,
         "splits": {
-            "train": _export_split(train_keys, all_gt, VIDEOS_DIR, split_dirs["train"]),
-            "val": _export_split(val_keys, all_gt, VIDEOS_DIR, split_dirs["val"]),
+            "train": _export_split(
+                train_keys,
+                all_gt,
+                VIDEOS_DIR,
+                split_dirs["train"],
+                resolve_from_video_store=True,
+            ),
+            "val": _export_split(
+                val_keys,
+                all_gt,
+                VIDEOS_DIR,
+                split_dirs["val"],
+                resolve_from_video_store=True,
+            ),
             "test": _export_split(test_keys, fixture_gt, FIXTURES_DIR, split_dirs["test"]),
         },
     }
+
+    _validate_train_split(manifest["splits"]["train"])
 
     dataset_yaml = dataset_dir / "dataset.yaml"
     dataset_yaml.write_text(_build_dataset_yaml(dataset_dir))
@@ -105,12 +124,21 @@ def _counts_from_manifest(entries: list[dict[str, object]]) -> SplitCounts:
     return SplitCounts(images=len(entries), positives=positives, negatives=negatives)
 
 
-def _load_ground_truth(path: Path) -> dict[str, dict[str, object]]:
-    if not path.exists():
-        return {}
-    data = json.loads(path.read_text())
+def _load_ground_truth(
+    path: Path,
+    *,
+    legacy_fallback: Path | None = None,
+) -> dict[str, dict[str, object]]:
+    load_path = path
+    if not load_path.exists():
+        if legacy_fallback is not None and legacy_fallback.exists():
+            load_path = legacy_fallback
+        else:
+            raise FileNotFoundError(f"Ground truth file not found: {path}")
+
+    data = json.loads(load_path.read_text())
     if not isinstance(data, dict):
-        raise ValueError(f"Expected mapping ground truth file at {path}")
+        raise ValueError(f"Expected mapping ground truth file at {load_path}")
     return data
 
 
@@ -121,16 +149,39 @@ def _split_train_val(
     seed: int,
 ) -> tuple[list[str], list[str]]:
     rng = random.Random(seed)
-    positives = [key for key in keys if bool(ground_truth[key].get("has_overlay"))]
-    negatives = [key for key in keys if not bool(ground_truth[key].get("has_overlay"))]
-    rng.shuffle(positives)
-    rng.shuffle(negatives)
+    keys_by_video: dict[str, list[str]] = {}
+    for key in keys:
+        keys_by_video.setdefault(_video_id(key), []).append(key)
 
-    val_pos = _split_count(len(positives), val_fraction)
-    val_neg = _split_count(len(negatives), val_fraction)
+    positive_videos = [
+        video_id
+        for video_id, video_keys in keys_by_video.items()
+        if any(bool(ground_truth[key].get("has_overlay")) for key in video_keys)
+    ]
+    negative_videos = [
+        video_id
+        for video_id, video_keys in keys_by_video.items()
+        if not any(bool(ground_truth[key].get("has_overlay")) for key in video_keys)
+    ]
+    rng.shuffle(positive_videos)
+    rng.shuffle(negative_videos)
 
-    val_keys = sorted(positives[:val_pos] + negatives[:val_neg])
-    train_keys = sorted(positives[val_pos:] + negatives[val_neg:])
+    val_pos = _split_count(len(positive_videos), val_fraction)
+    val_neg = _split_count(len(negative_videos), val_fraction)
+    val_videos = set(positive_videos[:val_pos] + negative_videos[:val_neg])
+
+    train_keys = sorted(
+        key
+        for video_id, video_keys in keys_by_video.items()
+        if video_id not in val_videos
+        for key in video_keys
+    )
+    val_keys = sorted(
+        key
+        for video_id, video_keys in keys_by_video.items()
+        if video_id in val_videos
+        for key in video_keys
+    )
     return train_keys, val_keys
 
 
@@ -147,13 +198,21 @@ def _export_split(
     ground_truth: dict[str, dict[str, object]],
     images_root: Path,
     split_dirs: dict[str, Path],
+    *,
+    resolve_from_video_store: bool = False,
 ) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
 
     for key in keys:
         video_id, label = key.split("/", 1)
         annotation = ground_truth[key]
-        source_image = _resolve_annotation_image(images_root, video_id, label, annotation)
+        source_image = _resolve_annotation_image(
+            images_root,
+            video_id,
+            label,
+            annotation,
+            resolve_from_video_store=resolve_from_video_store,
+        )
         image_name = f"{video_id}__{label}.jpg"
         image_dest = split_dirs["images"] / image_name
         label_dest = split_dirs["labels"] / f"{video_id}__{label}.txt"
@@ -189,6 +248,8 @@ def _resolve_annotation_image(
     video_id: str,
     label: str,
     annotation: dict[str, object],
+    *,
+    resolve_from_video_store: bool = False,
 ) -> Path:
     image_rel = annotation.get("image")
     if isinstance(image_rel, str):
@@ -197,14 +258,14 @@ def _resolve_annotation_image(
             return direct
 
     expected_size = _annotation_size(annotation)
-    candidates = [
-        VIDEOS_DIR / video_id / "hires" / f"{label}.jpg",
-        VIDEOS_DIR / video_id / "fullres" / f"{label}.jpg",
-        VIDEOS_DIR / video_id / "lores" / f"{label}.jpg",
-        images_root / video_id / f"{label}.jpg",
-    ]
+    candidates: list[Path] = [images_root / video_id / f"{label}.jpg"]
+    if resolve_from_video_store:
+        for tier in ("hires", "fullres", "lores"):
+            candidate = find_frame(video_id, tier, label)
+            if candidate is not None:
+                candidates.append(candidate)
 
-    existing = [path for path in candidates if path.exists()]
+    existing = _unique_existing_paths(candidates)
     if expected_size is not None:
         for candidate in existing:
             if _image_size(candidate) == expected_size:
@@ -214,6 +275,29 @@ def _resolve_annotation_image(
         return existing[0]
 
     raise FileNotFoundError(f"Could not resolve image for {video_id}/{label}")
+
+
+def _unique_existing_paths(paths: list[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for path in paths:
+        resolved = path.resolve()
+        if resolved in seen or not path.exists():
+            continue
+        seen.add(resolved)
+        result.append(path)
+    return result
+
+
+def _video_id(key: str) -> str:
+    return key.split("/", 1)[0]
+
+
+def _validate_train_split(entries: list[dict[str, object]]) -> None:
+    if not entries:
+        raise ValueError("YOLO export produced an empty train split")
+    if not any(bool(entry["has_overlay"]) for entry in entries):
+        raise ValueError("YOLO export train split has no positive overlay labels")
 
 
 def _annotation_size(annotation: dict[str, object]) -> tuple[int, int] | None:

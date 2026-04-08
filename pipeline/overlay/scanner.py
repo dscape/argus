@@ -1,13 +1,13 @@
 """Screen crawled videos for 2D chess board overlay presence.
 
-Runtime overlay localization now uses the committed YOLO detector in
-``pipeline.overlay.yolo_detector``. The legacy heuristic scanner remains in
-this file only for training-data workflows and historical debugging: bbox
-annotation refinement, dataset bootstrapping, and old experiments.
+This module keeps two overlay-detection tracks:
+- runtime YOLO localization via ``runtime_overlay_check`` /
+  ``detect_overlay_runtime``
+- legacy heuristic detectors via ``fast_overlay_check`` /
+  ``detect_overlay_fast`` for training-data workflows, bbox refinement,
+  detector bootstrapping, and historical debugging
 
-Do not wire new product or app flows to the legacy heuristic entry points
-(``detect_overlay_in_frame`` / ``_fast_overlay_check_impl``). Runtime callers
-should use ``fast_overlay_check`` or ``detect_overlay_fast``.
+Do not wire new product or app flows to the heuristic entry points.
 """
 
 import logging
@@ -1283,12 +1283,6 @@ def _run_yolo_overlay_detector(frame: np.ndarray) -> OverlayDetection:
 
     weights_override = os.getenv(_YOLO_WEIGHTS_OVERRIDE_ENV, "").strip()
     weights_path = weights_override or str(DEFAULT_WEIGHTS_PATH)
-    if not os.path.exists(weights_path):
-        raise FileNotFoundError(
-            "Default overlay detector weights are missing. "
-            f"Expected {weights_path}."
-        )
-
     conf = float(os.getenv(_YOLO_CONF_ENV, "0.25"))
     imgsz = int(os.getenv(_YOLO_IMGSZ_ENV, "640"))
     device = os.getenv(_YOLO_DEVICE_ENV, "auto")
@@ -1330,24 +1324,44 @@ def _pad_detection_bbox(
 
 
 
-def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
+def runtime_overlay_check(frame: np.ndarray) -> OverlayDetection:
     """Fast runtime overlay check backed by the default YOLO detector."""
     return _run_yolo_overlay_detector(frame)
 
 
 # ---------------------------------------------------------------------------
-# Fast overlay detection with accurate coordinates
+# Heuristic overlay detectors (training / bootstrapping only)
 # ---------------------------------------------------------------------------
 
 
-def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
-    """Fast runtime overlay detection with a padded YOLO bbox.
+def fast_overlay_check(frame: np.ndarray) -> OverlayDetection:
+    """Legacy heuristic fast overlay check for training-data workflows only."""
+    return _fast_overlay_check_impl(frame)
+
+
+# ---------------------------------------------------------------------------
+# Runtime overlay detection with accurate coordinates
+# ---------------------------------------------------------------------------
+
+
+def detect_overlay_runtime(frame: np.ndarray) -> OverlayDetection:
+    """Runtime overlay detection with a padded YOLO bbox.
 
     The default YOLO detector is accurate but can land a few pixels inside the
     annotated training box. Pad by a small fixed margin so downstream board
     crops do not clip the outer ranks/files.
     """
     return _pad_detection_bbox(_run_yolo_overlay_detector(frame), frame.shape, padding_px=8)
+
+
+# ---------------------------------------------------------------------------
+# Heuristic overlay detection with accurate coordinates
+# ---------------------------------------------------------------------------
+
+
+def detect_overlay_fast(frame: np.ndarray) -> OverlayDetection:
+    """Legacy heuristic precise detector for training-data workflows only."""
+    return _detect_overlay_fast_legacy(frame)
 
 
 
@@ -1839,8 +1853,8 @@ def detect_overlay_in_frame(frame: np.ndarray) -> OverlayDetection:
 
     This pre-YOLO scanner exists so annotation workflows can still reuse the
     old grid/regularity heuristics while producing detector-training labels.
-    Runtime and app code must use ``fast_overlay_check`` or
-    ``detect_overlay_fast`` instead.
+    Runtime and app code must use ``runtime_overlay_check`` or
+    ``detect_overlay_runtime`` instead.
     """
     h, w = frame.shape[:2]
     resolution = (w, h)
@@ -2068,7 +2082,7 @@ def scan_video(video_url_or_path: str) -> OverlayDetection:
         if frame is None:
             continue
 
-        detection = fast_overlay_check(frame)
+        detection = runtime_overlay_check(frame)
         if detection.found and detection.score > best_detection.score:
             best_detection = detection
 

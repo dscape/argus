@@ -294,7 +294,7 @@ Screening results are stored on `youtube_videos` as `screening_status`, `screeni
 For videos with a 2D board overlay:
 
 1. **Calibration** — per-channel layout config defines overlay crop, camera crop, reference resolution, board flip, and board theme. Can be auto-proposed via `auto-calibrate` or set manually.
-2. **Overlay localization** — `detect_overlay_fast()` runs the default YOLO detector and applies a small padding margin so the board crop does not clip outer squares.
+2. **Overlay localization** — `detect_overlay_runtime()` runs the default YOLO detector and applies a small padding margin so the board crop does not clip outer squares.
 3. **FEN reading** — `PieceClassifier` (DINOv2-based) classifies each of the 64 squares using a trained CNN to produce a FEN string. `GridDetector` handles automatic board boundary detection inside the YOLO crop.
 3. **Move detection with hard cut detection** — `OverlayMoveDetector` compares FENs across frames with a stability window, using python-chess to find the legal move transforming old FEN to new FEN. Detects game resets AND hard cuts (when >4 squares change simultaneously, indicating a board switch rather than a legal move).
 4. **Per-move confidence scoring** — each detected move receives a confidence score based on how many consecutive frames agreed on the FEN before and after the transition. Higher stability = higher confidence. Moves found via resync (no legal move path) get confidence 0.0.
@@ -305,7 +305,7 @@ For videos with a 2D board overlay:
 
 | Module | What it does |
 |--------|-------------|
-| `scanner.py` | Runtime entry points `fast_overlay_check()` and `detect_overlay_fast()` now call the committed YOLO detector. Legacy heuristic bbox code remains in the file for training-label tooling only. |
+| `scanner.py` | Runtime entry points `runtime_overlay_check()` and `detect_overlay_runtime()` use the committed YOLO detector. Legacy heuristic `fast_overlay_check()` / `detect_overlay_fast()` remain in the file for training-label tooling and detector bootstrapping. |
 | `piece_classifier.py` | DINOv2-based per-square piece classifier (99.83% accuracy). Classifies 64 squares in a single batch. |
 | `grid_detector.py` | Detects the 8x8 board grid using Sobel edge projection with HoughLinesP fallback. Handles borders and coordinate labels. |
 | `yolo_detector.py` | Loads the committed default YOLO overlay detector weights from `weights/overlay_yolo/`. |

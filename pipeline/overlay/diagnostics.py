@@ -39,7 +39,7 @@ def test_image(
     """
     from pipeline.overlay.grid_detector import detect_grid
     from pipeline.overlay.piece_classifier import read_fen_with_grid
-    from pipeline.overlay.scanner import detect_overlay_fast
+    from pipeline.overlay.scanner import detect_overlay_runtime
 
     frame = cv2.imread(image_path)
     if frame is None:
@@ -57,7 +57,7 @@ def test_image(
         detection_score = None
     else:
         print("Running YOLO overlay detector...")
-        detection = detect_overlay_fast(frame)
+        detection = detect_overlay_runtime(frame)
         if not detection.found:
             print("  NOT FOUND: No 2D overlay board detected in this image.")
             print("  Tip: Try providing --overlay x,y,w,h manually.")
@@ -319,7 +319,11 @@ def test_reader(
         theme: Board theme for piece recognition.
     """
     from pipeline.overlay.grid_detector import detect_grid
-    from pipeline.overlay.piece_classifier import CLASS_TO_PIECE, classify_squares, read_fen_with_grid
+    from pipeline.overlay.piece_classifier import (
+        CLASS_TO_PIECE,
+        classify_squares,
+        read_fen_with_grid,
+    )
 
     frame = cv2.imread(image_path)
     if frame is None:

@@ -24,7 +24,7 @@ from pipeline.overlay.auto_calibration import (
 )
 from pipeline.overlay.grid_detector import detect_grid
 from pipeline.overlay.piece_classifier import CLASS_TO_PIECE, classify_squares
-from pipeline.overlay.scanner import OverlayDetection, detect_overlay_fast
+from pipeline.overlay.scanner import OverlayDetection, detect_overlay_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def _detect_overlay_for_eval(frame: np.ndarray) -> OverlayDetection:
     it should use the default YOLO detector used by runtime overlay
     localization, then fall back to the legacy grid scan if YOLO misses.
     """
-    detection = detect_overlay_fast(frame)
+    detection = detect_overlay_runtime(frame)
     if detection.found and detection.bbox is not None:
         return detection
 
