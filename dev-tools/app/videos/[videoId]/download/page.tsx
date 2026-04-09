@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { SpinnerIcon } from "@/components/video-shared";
 import { useVideoWorkbench } from "../_context";
 
@@ -41,7 +42,6 @@ export default function DownloadPage() {
     startDownload,
   } = useVideoWorkbench();
   const [elapsed, setElapsed] = useState(0);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!downloadBusy) return;
@@ -51,11 +51,10 @@ export default function DownloadPage() {
   }, [downloadBusy]);
 
   const handleDownload = async () => {
-    setError(null);
     try {
       await startDownload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Download failed");
+      toast.error(e instanceof Error ? e.message : "Download failed");
     }
   };
 
@@ -123,7 +122,6 @@ export default function DownloadPage() {
           )}
         </div>
       )}
-      {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
 }

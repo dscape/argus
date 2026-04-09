@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 import { generateClips } from "@/lib/api";
 import type { GeneratedClip } from "@/lib/types";
 import { fmtTime } from "@/lib/format";
@@ -10,17 +11,14 @@ export default function GeneratePage() {
   const { session, activeClips: clips, downloadStatus } = useVideoWorkbench();
   const [generatingId, setGeneratingId] = useState<number | null>(null);
   const [generated, setGenerated] = useState<Map<number, GeneratedClip[]>>(new Map());
-  const [error, setError] = useState<string | null>(null);
-
   const handleGenerate = async (clipId?: number) => {
     if (!session) return;
     setGeneratingId(clipId ?? -1);
-    setError(null);
     try {
       const result = await generateClips(session.session_id, clipId);
       setGenerated((prev) => new Map(prev).set(clipId ?? -1, result.clips));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Generation failed");
+      toast.error(e instanceof Error ? e.message : "Generation failed");
     } finally {
       setGeneratingId(null);
     }
@@ -106,7 +104,6 @@ export default function GeneratePage() {
         </div>
       )}
 
-      {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
 }

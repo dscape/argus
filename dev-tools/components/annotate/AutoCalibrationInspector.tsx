@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 
 interface OverlayDetection {
   found: boolean;
@@ -58,10 +59,11 @@ export default function AutoCalibrationInspector() {
         body: JSON.stringify({ video_id: videoId.trim() }),
       });
       if (!res.ok) throw new Error(await res.text());
-      setResult(await res.json());
+      const data = await res.json();
+      if (data.error) toast.error(data.error);
+      setResult(data);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Unknown error";
-      alert(msg);
+      toast.error(e instanceof Error ? e.message : "Calibration analysis failed");
     } finally {
       setLoading(false);
     }
@@ -87,9 +89,6 @@ export default function AutoCalibrationInspector() {
         </button>
       </div>
 
-      {result?.error && (
-        <div className="p-3 bg-red-50 text-red-700 rounded text-sm">{result.error}</div>
-      )}
 
       {result && !result.error && (
         <div className="space-y-4">

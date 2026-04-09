@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 import { loadClip, getClipInfo, clipFrameUrl } from "@/lib/api";
 import type { GeneratedClip, ClipInspectResponse } from "@/lib/types";
 import { useVideoWorkbench } from "../_context";
@@ -12,11 +13,9 @@ export default function InspectPage() {
   const [clipInfo, setClipInfo] = useState<Map<number, ClipInspectResponse>>(new Map());
   const [clipSessions, setClipSessions] = useState<Map<number, string>>(new Map());
   const [frameIndices, setFrameIndices] = useState<Map<number, number>>(new Map());
-  const [error, setError] = useState<string | null>(null);
 
   const handleInspectClip = async (clip: GeneratedClip) => {
     setInspecting(clip.game_index);
-    setError(null);
     try {
       const response = await fetch(clip.filepath);
       const blob = await response.blob();
@@ -25,9 +24,10 @@ export default function InspectPage() {
       setClipSessions((prev) => new Map(prev).set(clip.game_index, session_id));
 
       const info = await getClipInfo(session_id);
+      if (info.replay_error) toast.error(info.replay_error);
       setClipInfo((prev) => new Map(prev).set(clip.game_index, info));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to inspect clip");
+      toast.error(e instanceof Error ? e.message : "Failed to inspect clip");
     } finally {
       setInspecting(null);
     }
@@ -77,9 +77,6 @@ export default function InspectPage() {
                   <div><span className="text-muted-foreground">No-move frames:</span> {info.no_move_frames}</div>
                   <div><span className="text-muted-foreground">Avg legal:</span> {info.avg_legal_moves?.toFixed(1)}</div>
                 </div>
-                {info.replay_error && (
-                  <p className="text-xs text-destructive">{info.replay_error}</p>
-                )}
 
                 <div>
                   <input
@@ -112,7 +109,6 @@ export default function InspectPage() {
         );
       })}
 
-      {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
 }

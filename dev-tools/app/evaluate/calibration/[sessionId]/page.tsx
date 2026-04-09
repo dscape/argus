@@ -2,6 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { useState, useEffect } from "react";
+import { toast } from "sonner";
 import CalibrationEvalInspector from "@/components/evaluate/CalibrationEvalInspector";
 import { getCalibrationEvalSession } from "@/lib/api";
 
@@ -19,7 +20,6 @@ export default function CalibrationEvalSessionPage() {
     pin_state: Record<string, boolean>;
     created_at: string;
   } | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -41,9 +41,9 @@ export default function CalibrationEvalSessionPage() {
         const raw = e instanceof Error ? e.message : "Failed to load session";
         try {
           const parsed = JSON.parse(raw);
-          setError(parsed.detail ?? raw);
+          toast.error(parsed.detail ?? raw);
         } catch {
-          setError(raw);
+          toast.error(raw);
         }
       } finally {
         setLoading(false);
@@ -56,8 +56,8 @@ export default function CalibrationEvalSessionPage() {
     return <p className="text-sm text-muted-foreground">Loading session...</p>;
   }
 
-  if (error || !session) {
-    return <p className="text-sm text-red-600">{error ?? "Session not found"}</p>;
+  if (!session) {
+    return <p className="text-sm text-muted-foreground">Session not found</p>;
   }
 
   return <CalibrationEvalInspector initialSession={session} />;

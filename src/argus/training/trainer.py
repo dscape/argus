@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from pathlib import Path
 
@@ -10,7 +11,12 @@ import torch
 import torch.nn as nn
 from torch.amp import GradScaler, autocast  # type: ignore[attr-defined]
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.optim.lr_scheduler import (
+    CosineAnnealingLR,
+    LinearLR,
+    LRScheduler,
+    SequentialLR,
+)
 from torch.utils.data import DataLoader
 
 from argus.eval.metrics import compute_move_metrics
@@ -18,6 +24,22 @@ from argus.model.argus_model import ArgusModel
 from argus.model.losses import ArgusLoss
 
 logger = logging.getLogger(__name__)
+
+
+def compute_num_optimizer_steps(num_batches: int, gradient_accumulation: int) -> int:
+    """Return the number of optimizer/scheduler steps per epoch."""
+    if num_batches <= 0:
+        return 0
+    return math.ceil(num_batches / max(gradient_accumulation, 1))
+
+
+def compute_warmup_steps(requested_warmup_steps: int, total_steps: int) -> int:
+    """Scale warmup down for short runs so training still reaches the base LR."""
+    if requested_warmup_steps <= 0 or total_steps <= 1:
+        return 0
+    if requested_warmup_steps < total_steps:
+        return requested_warmup_steps
+    return max(int(total_steps * 0.1), 1)
 
 
 class Trainer:
@@ -73,23 +95,43 @@ class Trainer:
 
         # Scheduler
         if total_steps is None:
-            total_steps = len(train_loader) * 50  # Default to 50 epochs
-        warmup_scheduler = LinearLR(
-            self.optimizer,
-            start_factor=0.01,
-            end_factor=1.0,
-            total_iters=warmup_steps,
-        )
-        cosine_scheduler = CosineAnnealingLR(
-            self.optimizer,
-            T_max=total_steps - warmup_steps,
-            eta_min=min_lr,
-        )
-        self.scheduler = SequentialLR(
-            self.optimizer,
-            schedulers=[warmup_scheduler, cosine_scheduler],
-            milestones=[warmup_steps],
-        )
+            total_steps = compute_num_optimizer_steps(len(train_loader), gradient_accumulation) * 50
+        if total_steps <= 0:
+            raise ValueError("Training requires at least one optimizer step")
+
+        effective_warmup_steps = compute_warmup_steps(warmup_steps, total_steps)
+        if effective_warmup_steps != warmup_steps:
+            logger.info(
+                "Clamped warmup from %d to %d step(s) for a %d-step run",
+                warmup_steps,
+                effective_warmup_steps,
+                total_steps,
+            )
+
+        self.scheduler: LRScheduler
+        if effective_warmup_steps > 0:
+            warmup_scheduler = LinearLR(
+                self.optimizer,
+                start_factor=0.01,
+                end_factor=1.0,
+                total_iters=effective_warmup_steps,
+            )
+            cosine_scheduler = CosineAnnealingLR(
+                self.optimizer,
+                T_max=max(total_steps - effective_warmup_steps, 1),
+                eta_min=min_lr,
+            )
+            self.scheduler = SequentialLR(
+                self.optimizer,
+                schedulers=[warmup_scheduler, cosine_scheduler],
+                milestones=[effective_warmup_steps],
+            )
+        else:
+            self.scheduler = CosineAnnealingLR(
+                self.optimizer,
+                T_max=max(total_steps, 1),
+                eta_min=min_lr,
+            )
 
         # Mixed precision
         self.use_amp = precision in ("fp16", "bf16")
@@ -146,6 +188,7 @@ class Trainer:
 
         self.optimizer.zero_grad()
 
+        num_batches = len(self.train_loader)
         for batch_idx, batch in enumerate(self.train_loader):
             # Move to device
             frames = batch["frames"].to(self.device)
@@ -167,12 +210,16 @@ class Trainer:
                     move_targets=move_targets,
                     detect_targets=detect_targets,
                     move_mask=move_mask,
+                    legal_masks=legal_masks,
                 )
 
             loss = losses["total"] / self.gradient_accumulation
             self.scaler.scale(loss).backward()
 
-            if (batch_idx + 1) % self.gradient_accumulation == 0:
+            should_step = (batch_idx + 1) % self.gradient_accumulation == 0 or (
+                batch_idx + 1
+            ) == num_batches
+            if should_step:
                 self.scaler.unscale_(self.optimizer)
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
                 self.scaler.step(self.optimizer)
@@ -236,6 +283,7 @@ class Trainer:
                 move_targets=move_targets,
                 detect_targets=detect_targets,
                 move_mask=move_mask,
+                legal_masks=legal_masks,
             )
             total_loss += losses["total"].item()
             count += 1

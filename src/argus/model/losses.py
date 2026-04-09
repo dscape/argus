@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from argus.chess.constraint_mask import apply_constraint_mask
+
 
 class FocalLoss(nn.Module):
     """Focal loss for handling class imbalance in move detection."""
@@ -49,6 +51,7 @@ class ArgusLoss(nn.Module):
         move_targets: torch.Tensor,
         detect_targets: torch.Tensor,
         move_mask: torch.Tensor | None = None,
+        legal_masks: torch.Tensor | None = None,
         bbox_pred: torch.Tensor | None = None,
         bbox_target: torch.Tensor | None = None,
         identity_pred: torch.Tensor | None = None,
@@ -60,6 +63,11 @@ class ArgusLoss(nn.Module):
         if move_mask is not None and move_mask.any():
             active_logits = move_logits[move_mask]
             active_targets = move_targets[move_mask]
+            if legal_masks is not None:
+                active_legal_masks = legal_masks[move_mask]
+                if not active_legal_masks.gather(-1, active_targets.unsqueeze(-1)).all().item():
+                    raise ValueError("Move targets must be legal under the provided legal masks")
+                active_logits = apply_constraint_mask(active_logits, active_legal_masks)
             losses["move"] = self.move_loss(active_logits, active_targets)
         else:
             losses["move"] = torch.tensor(0.0, device=device)

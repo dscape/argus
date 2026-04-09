@@ -1,0 +1,6 @@
+name: real_clips
+type: clip_dataset
+data_dir: data/argus/training_dataset
+clip_length: 200
+num_val_clips: 0
+image_size: 224

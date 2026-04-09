@@ -137,6 +137,7 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
     setReadingFrame(true);
     try {
       const result = await readOverlayFrame(session.session_id, frameIdx, clip.id, readerBackend);
+      if (!result.fen) toast.error("Could not read board");
       setOverlayResult(result);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to read overlay");
@@ -231,7 +232,7 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
                   )}
                 </div>
               ) : (
-                <p className="text-xs text-destructive">Could not read board</p>
+                <p className="text-xs text-muted-foreground">Could not read board</p>
               )}
             </div>
           </div>
@@ -261,9 +262,6 @@ function ClipExtractCard({ clip }: { clip: VideoClip }) {
               />
             </div>
           </div>
-        )}
-        {detectionJob?.status === "failed" && detectionJob.error && (
-          <div className="text-xs text-destructive pl-2">{detectionJob.error}</div>
         )}
         {detection && (
           <div className="space-y-2 pl-2">

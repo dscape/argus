@@ -173,6 +173,9 @@ make datagen ARGS="--num-clips 20 --output-dir data/argus/val --image-size 64"
 
 # Train Phase 1 (move detection)
 make train ARGS="data.data_dir=data training.wandb.enabled=false"
+
+# Or train from real-video clips prepared with split-clips
+make train ARGS="data=real_clips training.wandb.enabled=false"
 ```
 
 ## Quick Start: Data Pipeline
@@ -209,6 +212,7 @@ python -m pipeline auto-calibrate --channel @NewChannel --apply
 
 make download          # Fetch approved videos via yt-dlp
 make generate-clips    # Overlay FEN reading + change-gated move detection → .pt training clips
+make split-clips       # Video-disjoint train/val dataset under data/argus/training_dataset/
 ```
 
 ## Quick Start: Dev Tools
@@ -429,6 +433,9 @@ graph LR
 # From pre-generated data on disk (recommended)
 make train ARGS="data.data_dir=data training.wandb.enabled=false"
 
+# From real-video clips produced by the pipeline
+make train ARGS="data=real_clips training.wandb.enabled=false"
+
 # Or generate on-the-fly (slower)
 make train ARGS="data.num_train_clips=100 data.num_val_clips=20 data.image_size=64 training.wandb.enabled=false"
 
@@ -498,6 +505,9 @@ See [Deployment & Production Status](#deployment--production-status) for the ful
 
 ```bash
 make eval ARGS="--checkpoint outputs/checkpoint_epoch0050.pt --num-clips 200"
+
+# Evaluate on real-video validation clips prepared with split-clips
+make eval ARGS="--checkpoint outputs/checkpoint_epoch0050.pt --data-dir data/argus/training_dataset/val --clip-length 200"
 ```
 
 Uses plain argparse (not Hydra).
@@ -838,6 +848,7 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 | `auto-calibrate` | — | Auto-propose calibration from screening data | `--channel` (required), `--video-id ID`, `--apply` |
 | `analyze-video` | — | Analyze a local video into PGN + annotated output | `VIDEO`, `--reader overlay\|hybrid`, `--scene none\|vlm`, `--fps`, `--device`, `--output` |
 | `generate-clips` | `make generate-clips` | Generate .pt training clips (with hard cut detection) | `--channel @Handle`, `--video-id ID`, `--limit N`, `--min-moves N` |
+| `split-clips` | `make split-clips` | Create a video-disjoint train/val dataset from generated clips | `--clips-dir DIR`, `--out-dir DIR`, `--val-fraction FLOAT`, `--seed N`, `--copy` |
 
 ### Pipeline Domain — AI Screening
 
@@ -867,8 +878,8 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 | Target | Domain | Description | Example |
 |--------|--------|-------------|---------|
 | `make datagen` | Data Generation | Generate synthetic training data | `ARGS="--num-clips 5000 --output-dir data/argus/train"` |
-| `make train` | Training | Train model (Hydra config) | `ARGS="training=phase1_detection data.data_dir=data"` |
-| `make eval` | Training | Evaluate model | `ARGS="--checkpoint outputs/ckpt.pt --num-clips 200"` |
+| `make train` | Training | Train model (Hydra config) | `ARGS="training=phase1_detection data=real_clips"` |
+| `make eval` | Training | Evaluate model | `ARGS="--checkpoint outputs/ckpt.pt --data-dir data/argus/training_dataset/val --clip-length 200"` |
 | `make infer` | Inference | Run inference on video | `ARGS="--video file.mp4 --checkpoint ckpt.pt --output-dir pgns/"` |
 
 ### Docker-Wrapped Pipeline Targets
@@ -906,7 +917,8 @@ configs/
 │   └── argus_small.yaml           # Smaller variant for development
 ├── data/
 │   ├── synthetic.yaml             # On-the-fly generation settings
-│   └── real.yaml                  # Disk-loaded real data settings
+│   ├── real.yaml                  # Legacy raw-real-data settings
+│   └── real_clips.yaml            # Disk-loaded real training clips (train/val)
 ├── training/
 │   ├── phase1_detection.yaml      # 50 epochs, move + detect losses
 │   ├── phase2_recognition.yaml    # 100 epochs, + bbox + identity losses

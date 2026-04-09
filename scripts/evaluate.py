@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from argus.data.collate import argus_collate_fn
-from argus.data.dataset import ArgusInMemoryDataset
+from argus.data.dataset import ArgusDataset, ArgusInMemoryDataset
 from argus.datagen.synth import generate_dataset
 from argus.eval.evaluator import Evaluator
 from argus.model.argus_model import ArgusModel
@@ -26,20 +26,31 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate Argus model")
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--num-clips", type=int, default=500)
+    parser.add_argument("--data-dir", type=str, default=None)
+    parser.add_argument("--clip-length", type=int, default=16)
+    parser.add_argument("--max-clips", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
 
     device = args.device if torch.cuda.is_available() else "cpu"
 
-    logger.info(f"Generating {args.num_clips} synthetic evaluation clips...")
-    clips = generate_dataset(
-        num_clips=args.num_clips,
-        clip_length=16,
-        image_size=224,
-        seed=12345,
-    )
-    dataset = ArgusInMemoryDataset(clips=clips, clip_length=16)
+    if args.data_dir:
+        logger.info(f"Loading evaluation clips from {args.data_dir}...")
+        dataset = ArgusDataset(
+            args.data_dir,
+            clip_length=args.clip_length,
+            max_clips=args.max_clips,
+        )
+    else:
+        logger.info(f"Generating {args.num_clips} synthetic evaluation clips...")
+        clips = generate_dataset(
+            num_clips=args.num_clips,
+            clip_length=args.clip_length,
+            image_size=224,
+            seed=12345,
+        )
+        dataset = ArgusInMemoryDataset(clips=clips, clip_length=args.clip_length)
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,

@@ -225,7 +225,10 @@ python -m pipeline generate-clips --channel @STLChessClub --limit 1 -v
 # 3. Inspect a generated clip — verify move_confidence is present
 python -m pipeline inspect-clip --file data/argus/training_clips/clip_overlay_VIDEO_ID_0.pt
 
-# 4. Use the dev-tools Video Annotator (localhost:3000/videos/VIDEO_ID):
+# 4. Prepare a video-disjoint train/val split for model training
+python -m pipeline split-clips --clips-dir data/argus/training_clips --out-dir data/argus/training_dataset
+
+# 5. Use the dev-tools Video Annotator (localhost:3000/videos/VIDEO_ID):
 #    - Open the video and run "Detect Moves"
 #    - Check that each move in the move list shows a confidence score
 #    - Verify that unchanged frames are skipped without losing legal moves

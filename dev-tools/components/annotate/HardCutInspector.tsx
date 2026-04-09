@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 
 interface Move {
   move_san: string;
@@ -64,9 +65,11 @@ export default function HardCutInspector() {
         body: JSON.stringify({ video_id: videoId.trim(), sample_fps: sampleFps }),
       });
       if (!res.ok) throw new Error(await res.text());
-      setResult(await res.json());
+      const data = await res.json();
+      if (data.error) toast.error(data.error);
+      setResult(data);
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : "Hard cut analysis failed");
+      toast.error(e instanceof Error ? e.message : "Hard cut analysis failed");
     } finally {
       setLoading(false);
     }
@@ -104,9 +107,6 @@ export default function HardCutInspector() {
         </button>
       </div>
 
-      {result?.error && (
-        <div className="p-3 bg-red-50 text-red-700 rounded text-sm">{result.error}</div>
-      )}
 
       {result && !result.error && (
         <div className="space-y-4">

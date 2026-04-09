@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import {
   videoFrameUrl,
@@ -56,7 +57,6 @@ export default function CalibratePage() {
   const [drawingMode, setDrawingMode] = useState<"overlay" | "camera">("overlay");
   const [boardTheme, setBoardTheme] = useState("lichess_default");
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [autoCalClipId, setAutoCalClipId] = useState<number | null>(null);
   const [autoCalAllRunning, setAutoCalAllRunning] = useState(false);
@@ -70,7 +70,6 @@ export default function CalibratePage() {
     setCameraBbox(toEditorBbox(clip.camera_bbox));
     setBoardTheme(clip.board_theme);
     setAutoCalPreview(null);
-    setError(null);
     setSuccess(null);
     if (session && session.fps > 0) {
       setFrameIdx(Math.round(clip.start_time * session.fps));
@@ -100,7 +99,6 @@ export default function CalibratePage() {
     if (selectedIdx === null || !overlayBbox || !cameraBbox || !video) return;
     const clip = clips[selectedIdx];
     setSaving(true);
-    setError(null);
     try {
       const updated = await updateVideoClip(video.video_id, clip.id, {
         overlay_bbox: [overlayBbox.x, overlayBbox.y, overlayBbox.w, overlayBbox.h],
@@ -114,7 +112,7 @@ export default function CalibratePage() {
       setSuccess("Saved");
       setTimeout(() => setSuccess(null), 3000);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed");
+      toast.error(e instanceof Error ? e.message : "Save failed");
     } finally {
       setSaving(false);
     }
@@ -123,7 +121,6 @@ export default function CalibratePage() {
   const handleAutoCalibrateSingle = async (clipId: number) => {
     if (!video) return;
     setAutoCalClipId(clipId);
-    setError(null);
     try {
       const result = await autoCalibrateClip(video.video_id, clipId);
       setAutoCalPreview(result);
@@ -149,10 +146,10 @@ export default function CalibratePage() {
         setSuccess("Auto-calibrated");
         setTimeout(() => setSuccess(null), 3000);
       } else {
-        setError(autoCalibrateErrorMessage(result));
+        toast.error(autoCalibrateErrorMessage(result));
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Auto-calibration failed");
+      toast.error(e instanceof Error ? e.message : "Auto-calibration failed");
     } finally {
       setAutoCalClipId(null);
     }
@@ -161,7 +158,6 @@ export default function CalibratePage() {
   const handleAutoCalAll = async () => {
     if (!video) return;
     setAutoCalAllRunning(true);
-    setError(null);
     let calibrated = 0;
     for (const clip of clips) {
       try {
@@ -356,7 +352,6 @@ export default function CalibratePage() {
               >
                 {autoCalClipId === selected.id ? "Calibrating..." : "Auto-Calibrate This Clip"}
               </button>
-              {error && <span className="text-xs text-destructive">{error}</span>}
               {success && <span className="text-xs text-green-600">{success}</span>}
             </div>
           </>

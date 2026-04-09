@@ -24,21 +24,19 @@ export default function SegmentPage() {
   const [dragging, setDragging] = useState<DragState | null>(null);
   const [segmenting, setSegmenting] = useState(false);
   const [segmentResult, setSegmentResult] = useState<AutoSegmentResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   // ── Handlers ──────────────────────────────────────────────
 
   const handleAutoSegment = async (replace: boolean) => {
     if (!video) return;
     setSegmenting(true);
-    setError(null);
     try {
       const result = await autoSegmentVideo(video.video_id, { replaceExisting: replace });
       setSegmentResult(result);
-      if (result.error) setError(result.error);
+      if (result.error) toast.error(result.error);
       await refreshClips();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Segmentation failed");
+      toast.error(e instanceof Error ? e.message : "Segmentation failed");
     } finally {
       setSegmenting(false);
     }
@@ -46,7 +44,6 @@ export default function SegmentPage() {
 
   const handleAddClip = async () => {
     if (!session || !video) return;
-    setError(null);
     const fps = session.fps;
     const currentTime = fps > 0 ? frameIdx / fps : 0;
     try {
@@ -63,13 +60,12 @@ export default function SegmentPage() {
       });
       setClips((prev) => [...prev, newClip]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to add segment");
+      toast.error(e instanceof Error ? e.message : "Failed to add segment");
     }
   };
 
   const handleDeleteClips = async (ids: Set<number>) => {
     if (!video) return;
-    setError(null);
     try {
       for (const id of ids) {
         await deleteVideoClip(video.video_id, id);
@@ -78,7 +74,7 @@ export default function SegmentPage() {
       setSelectedClipIds(new Set());
       toast.success(`Deleted ${ids.size} segment(s)`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to delete segment");
+      toast.error(e instanceof Error ? e.message : "Failed to delete segment");
     }
   };
 
@@ -98,7 +94,6 @@ export default function SegmentPage() {
       return;
     }
 
-    setError(null);
     try {
       await updateVideoClip(video.video_id, clip.id, { end_time: splitTime } as Partial<VideoClip>);
       await createVideoClip(video.video_id, {
@@ -116,7 +111,7 @@ export default function SegmentPage() {
       setSelectedClipIds(new Set());
       toast.success("Segment split");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to split segment");
+      toast.error(e instanceof Error ? e.message : "Failed to split segment");
     }
   };
 
@@ -140,7 +135,6 @@ export default function SegmentPage() {
       }
     }
 
-    setError(null);
     try {
       const keeper = selected[0];
       const lastEnd = selected[selected.length - 1].end_time;
@@ -155,7 +149,7 @@ export default function SegmentPage() {
       setSelectedClipIds(new Set());
       toast.success(`Merged ${selected.length} segments`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to merge segments");
+      toast.error(e instanceof Error ? e.message : "Failed to merge segments");
     }
   };
 
@@ -164,7 +158,6 @@ export default function SegmentPage() {
     const selected = clips.filter((c) => selectedClipIds.has(c.id));
     if (selected.length === 0) return;
 
-    setError(null);
     try {
       for (const clip of selected) {
         await updateVideoClip(video.video_id, clip.id, { is_gap: !clip.is_gap } as Partial<VideoClip>);
@@ -172,7 +165,7 @@ export default function SegmentPage() {
       await refreshClips();
       toast.success(`Toggled gap on ${selected.length} segment(s)`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to toggle gap");
+      toast.error(e instanceof Error ? e.message : "Failed to toggle gap");
     }
   };
 
@@ -365,7 +358,6 @@ export default function SegmentPage() {
         </p>
       )}
 
-      {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
 }

@@ -226,6 +226,23 @@ class TestBuildTrainingClip:
         assert detect_count == len(ITALIAN_GAME)
 
     @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
+    def test_move_mask_marks_only_move_frames(self, generator):
+        segment, frame_indices = _make_game_segment(ITALIAN_GAME, frames_per_move=3)
+        camera_crops = _make_camera_crops(len(frame_indices))
+
+        clip = generator._build_training_clip(
+            camera_crops=camera_crops,
+            frame_indices=frame_indices,
+            segment=segment,
+            fps=30.0,
+        )
+
+        assert clip is not None
+        assert clip["move_mask"].dtype == torch.bool
+        assert torch.equal(clip["move_mask"], clip["detect_targets"].bool())
+        assert int(clip["move_mask"].sum().item()) == len(ITALIAN_GAME)
+
+    @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
     def test_legal_masks_shape(self, generator):
         """Legal masks should be (T, vocab_size) bool."""
         segment, frame_indices = _make_game_segment(ITALIAN_GAME, frames_per_move=3)

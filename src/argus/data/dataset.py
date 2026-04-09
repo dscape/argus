@@ -45,11 +45,10 @@ class ArgusDataset(Dataset):  # type: ignore[type-arg]
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         clip_data = torch.load(self.clip_paths[idx], map_location="cpu", weights_only=True)
 
-        frames = clip_data["frames"]  # (T, C, H, W)
-        move_targets = clip_data["move_targets"]  # (T,)
-        detect_targets = clip_data["detect_targets"]  # (T,)
-        legal_masks = clip_data["legal_masks"]  # (T, VOCAB_SIZE)
-        move_mask = clip_data["move_mask"]  # (T,)
+        frames = _prepare_frames(clip_data["frames"])  # (T, C, H, W) float in [0, 1]
+        move_targets = clip_data["move_targets"].to(torch.long)  # (T,)
+        detect_targets = clip_data["detect_targets"].to(torch.float32)  # (T,)
+        legal_masks = clip_data["legal_masks"].to(torch.bool)  # (T, VOCAB_SIZE)
 
         # Pad or truncate to clip_length
         T = frames.shape[0]
@@ -58,13 +57,13 @@ class ArgusDataset(Dataset):  # type: ignore[type-arg]
             move_targets = _pad_tensor(move_targets, self.clip_length, dim=0)
             detect_targets = _pad_tensor(detect_targets, self.clip_length, dim=0)
             legal_masks = _pad_tensor(legal_masks, self.clip_length, dim=0)
-            move_mask = _pad_tensor(move_mask, self.clip_length, dim=0)
         elif T > self.clip_length:
             frames = frames[: self.clip_length]
             move_targets = move_targets[: self.clip_length]
             detect_targets = detect_targets[: self.clip_length]
             legal_masks = legal_masks[: self.clip_length]
-            move_mask = move_mask[: self.clip_length]
+
+        move_mask = _derive_move_mask(detect_targets)
 
         if self.transform is not None:
             frames = self.transform(frames)
@@ -96,11 +95,10 @@ class ArgusInMemoryDataset(Dataset):  # type: ignore[type-arg]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         clip = self.clips[idx]
-        frames = clip["frames"]
-        move_targets = clip["move_targets"]
-        detect_targets = clip["detect_targets"]
-        legal_masks = clip["legal_masks"]
-        move_mask = clip["move_mask"]
+        frames = _prepare_frames(clip["frames"])
+        move_targets = clip["move_targets"].to(torch.long)
+        detect_targets = clip["detect_targets"].to(torch.float32)
+        legal_masks = clip["legal_masks"].to(torch.bool)
 
         T = frames.shape[0]
         if T < self.clip_length:
@@ -108,13 +106,13 @@ class ArgusInMemoryDataset(Dataset):  # type: ignore[type-arg]
             move_targets = _pad_tensor(move_targets, self.clip_length, dim=0)
             detect_targets = _pad_tensor(detect_targets, self.clip_length, dim=0)
             legal_masks = _pad_tensor(legal_masks, self.clip_length, dim=0)
-            move_mask = _pad_tensor(move_mask, self.clip_length, dim=0)
         elif T > self.clip_length:
             frames = frames[: self.clip_length]
             move_targets = move_targets[: self.clip_length]
             detect_targets = detect_targets[: self.clip_length]
             legal_masks = legal_masks[: self.clip_length]
-            move_mask = move_mask[: self.clip_length]
+
+        move_mask = _derive_move_mask(detect_targets)
 
         if self.transform is not None:
             frames = self.transform(frames)
@@ -126,6 +124,18 @@ class ArgusInMemoryDataset(Dataset):  # type: ignore[type-arg]
             "legal_masks": legal_masks,
             "move_mask": move_mask,
         }
+
+
+def _prepare_frames(frames: torch.Tensor) -> torch.Tensor:
+    """Canonicalize clip frames to float tensors in ``[0, 1]``."""
+    if frames.dtype == torch.uint8:
+        return frames.to(torch.float32) / 255.0
+    return frames.to(torch.float32)
+
+
+def _derive_move_mask(detect_targets: torch.Tensor) -> torch.Tensor:
+    """Use detection targets as the source of truth for move-frame masking."""
+    return detect_targets > 0.5
 
 
 def _pad_tensor(tensor: torch.Tensor, target_len: int, dim: int = 0) -> torch.Tensor:

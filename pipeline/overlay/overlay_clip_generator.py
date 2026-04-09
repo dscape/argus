@@ -7,6 +7,7 @@ Combines OTB camera crops (training frames) with overlay-extracted ground truth
 import logging
 import os
 import subprocess
+import time
 
 import chess
 import chess.pgn
@@ -57,6 +58,7 @@ class OverlayClipGenerator:
         video_id: str = "",
         start_time: float | None = None,
         end_time: float | None = None,
+        channel_handle: str | None = None,
     ) -> list[dict]:
         """Generate training clips from a video with 2D overlay.
 
@@ -108,6 +110,7 @@ class OverlayClipGenerator:
         )
 
         sequence_reader: LockedOverlaySequenceReader | None = None
+        started_at = time.perf_counter()
 
         current_frame = first_frame
         while current_frame < last_frame:
@@ -142,6 +145,20 @@ class OverlayClipGenerator:
             current_frame += frame_skip
 
         cap.release()
+
+        elapsed = time.perf_counter() - started_at
+        sampled_fps = len(frame_indices) / elapsed if elapsed > 0 else 0.0
+        sampled_video_fps = fps / frame_skip if frame_skip > 0 else fps
+        processed_seconds = max(last_frame - first_frame, 0) / fps if fps > 0 else 0.0
+        realtime_factor = processed_seconds / elapsed if elapsed > 0 else 0.0
+        logger.info(
+            "Sampled %d frames in %.2fs (%.2f sampled fps, %.2fx realtime at %.2f video fps)",
+            len(frame_indices),
+            elapsed,
+            sampled_fps,
+            realtime_factor,
+            sampled_video_fps,
+        )
 
         if len(fens) < 10:
             logger.warning(f"Too few frames extracted: {len(fens)}")
@@ -190,6 +207,11 @@ class OverlayClipGenerator:
                 move_delay_seconds=cal.move_delay_seconds,
             )
 
+            if clip_data is not None:
+                clip_data["source_video_id"] = os.path.splitext(os.path.basename(video_path))[0]
+                clip_data["source_channel_handle"] = channel_handle or ""
+                clip_data["sampled_video_fps"] = float(sampled_video_fps)
+
             if clip_data is None:
                 continue
 
@@ -204,13 +226,15 @@ class OverlayClipGenerator:
                 f"{clip_data['frames'].shape[0]} frames)"
             )
 
-            results.append({
-                "filepath": filepath,
-                "num_frames": clip_data["frames"].shape[0],
-                "num_moves": segment.num_moves,
-                "game_index": game_idx,
-                "pgn_moves": segment.pgn_moves,
-            })
+            results.append(
+                {
+                    "filepath": filepath,
+                    "num_frames": clip_data["frames"].shape[0],
+                    "num_moves": segment.num_moves,
+                    "game_index": game_idx,
+                    "pgn_moves": segment.pgn_moves,
+                }
+            )
 
         return results
 
@@ -264,11 +288,13 @@ class OverlayClipGenerator:
             rgb = cv2.cvtColor(r, cv2.COLOR_BGR2RGB)
             resized.append(rgb)
 
-        frames_tensor = torch.from_numpy(
-            np.stack(resized)
-        ).permute(0, 3, 1, 2).to(torch.uint8)  # (T, C, H, W)
+        frames_tensor = (
+            torch.from_numpy(np.stack(resized)).permute(0, 3, 1, 2).to(torch.uint8)
+        )  # (T, C, H, W)
 
-        delay_sample_steps = int(move_delay_seconds * fps / frame_skip) if move_delay_seconds > 0 else 0
+        delay_sample_steps = (
+            int(move_delay_seconds * fps / frame_skip) if move_delay_seconds > 0 else 0
+        )
         delay_frame_offset = delay_sample_steps * frame_skip
         frame_timestamps = torch.tensor(
             [frame_idx / fps for frame_idx in segment_frame_indices],
@@ -276,14 +302,15 @@ class OverlayClipGenerator:
         )
 
         adjusted_move_frames = [
-            max(move.frame_idx - delay_frame_offset, segment.start_frame)
-            for move in segment.moves
+            max(move.frame_idx - delay_frame_offset, segment.start_frame) for move in segment.moves
         ]
         move_timestamps = torch.tensor(
             [frame_idx / fps for frame_idx in adjusted_move_frames],
             dtype=torch.float32,
         )
-        initial_board_fen = segment.moves[0].fen_before if segment.moves else chess.STARTING_BOARD_FEN
+        initial_board_fen = (
+            segment.moves[0].fen_before if segment.moves else chess.STARTING_BOARD_FEN
+        )
         clip_metadata = {
             "initial_board_fen": initial_board_fen,
             "pgn_moves": segment.pgn_moves,
@@ -312,7 +339,7 @@ class OverlayClipGenerator:
         move_targets = torch.full((num_frames,), no_move_idx, dtype=torch.long)
         detect_targets = torch.zeros(num_frames, dtype=torch.float32)
         legal_masks = torch.zeros(num_frames, vocab_size, dtype=torch.bool)
-        move_mask = torch.ones(num_frames, dtype=torch.float32)
+        move_mask = torch.zeros(num_frames, dtype=torch.bool)
         move_confidence = torch.ones(num_frames, dtype=torch.float32)
 
         # Build a map from frame index to move.
@@ -340,6 +367,7 @@ class OverlayClipGenerator:
 
                 move_targets[i] = idx
                 detect_targets[i] = 1.0
+                move_mask[i] = True
                 move_confidence[i] = m.confidence
 
                 # Push the move on the board
@@ -375,8 +403,10 @@ def download_video(url: str, output_dir: str = "data/videos/overlay") -> str | N
         result = subprocess.run(
             [
                 "yt-dlp",
-                "-f", "best[ext=mp4]/best",
-                "-o", output_template,
+                "-f",
+                "best[ext=mp4]/best",
+                "-o",
+                output_template,
                 "--no-warnings",
                 url,
             ],
@@ -497,6 +527,7 @@ def generate_from_video(
                 video_id=f"{video_id}_clip{clip_row['id']}",
                 start_time=clip_row["start_time"],
                 end_time=clip_row["end_time"],
+                channel_handle=channel_handle,
             )
             results.extend(clip_results)
         return results
@@ -515,4 +546,9 @@ def generate_from_video(
         base_fps=base_fps,
         min_moves_per_segment=min_moves_per_segment,
     )
-    return generator.generate_clips(video_path, calibration, video_id=video_id)
+    return generator.generate_clips(
+        video_path,
+        calibration,
+        video_id=video_id,
+        channel_handle=channel_handle,
+    )

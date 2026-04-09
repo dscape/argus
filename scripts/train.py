@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader, random_split  # noqa: E402
 from argus.data.collate import argus_collate_fn  # noqa: E402
 from argus.data.dataset import ArgusDataset, ArgusInMemoryDataset  # noqa: E402
 from argus.model.argus_model import ArgusModel  # noqa: E402
-from argus.training.trainer import Trainer  # noqa: E402
+from argus.training.trainer import Trainer, compute_num_optimizer_steps  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,6 +33,17 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
+
+
+def _compute_split_lengths(total_clips: int, requested_val_clips: int) -> tuple[int, int]:
+    if total_clips <= 0:
+        raise ValueError("Dataset is empty")
+    if total_clips == 1:
+        return 1, 0
+
+    val_clips = min(max(requested_val_clips, 0), total_clips - 1)
+    train_clips = total_clips - val_clips
+    return train_clips, val_clips
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
@@ -55,9 +66,18 @@ def main(cfg: DictConfig) -> None:
             # Flat directory: split by ratio
             logger.info(f"Loading data from {data_dir}...")
             full_ds = ArgusDataset(data_dir, clip_length=clip_length)
-            num_val = cfg.data.get("num_val_clips", 100)
-            num_train = len(full_ds) - num_val
-            train_ds, val_ds = random_split(full_ds, [num_train, num_val])
+            requested_val = int(cfg.data.get("num_val_clips", 100))
+            num_train, num_val = _compute_split_lengths(len(full_ds), requested_val)
+            logger.info(
+                "Using deterministic random split for flat clip directory: %d train / %d val",
+                num_train,
+                num_val,
+            )
+            train_ds, val_ds = random_split(
+                full_ds,
+                [num_train, num_val],
+                generator=torch.Generator().manual_seed(seed),
+            )
         else:
             # Separate train/val directories
             logger.info(f"Loading train from {train_dir}, val from {val_dir}...")
@@ -120,7 +140,16 @@ def main(cfg: DictConfig) -> None:
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Model params: {total_params:,} total, {trainable_params:,} trainable")
 
-    total_steps = len(train_loader) * cfg.training.epochs // cfg.training.gradient_accumulation
+    steps_per_epoch = compute_num_optimizer_steps(
+        len(train_loader),
+        cfg.training.gradient_accumulation,
+    )
+    total_steps = steps_per_epoch * cfg.training.epochs
+    logger.info(
+        "Optimizer steps: %d per epoch, %d total",
+        steps_per_epoch,
+        total_steps,
+    )
 
     trainer = Trainer(
         model=model,

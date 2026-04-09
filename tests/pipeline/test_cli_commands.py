@@ -163,6 +163,39 @@ class TestGenerateClipsCommand:
         assert "Generated 1 clip(s) total" in capsys.readouterr().out
 
 
+class TestSplitClipsCommand:
+    """Test the split-clips CLI command."""
+
+    def test_reports_split_counts(self, monkeypatch, capsys):
+        import pipeline.overlay.training_dataset as training_dataset
+
+        monkeypatch.setattr(
+            training_dataset,
+            "export_training_dataset",
+            lambda clips_dir, out_dir, val_fraction=0.2, seed=42, link_mode="hardlink": {
+                "splits": {
+                    "train": [{"clip": "train/clip_a.pt", "source_video_id": "vidA"}],
+                    "val": [{"clip": "val/clip_b.pt", "source_video_id": "vidB"}],
+                }
+            },
+        )
+
+        cli.cmd_split_clips(
+            SimpleNamespace(
+                clips_dir="data/argus/training_clips",
+                out_dir="data/argus/training_dataset",
+                val_fraction=0.2,
+                seed=42,
+                copy=False,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "Prepared dataset" in out
+        assert "Train clips: 1" in out
+        assert "Val clips:   1" in out
+
+
 class TestInspectCalibrationCommand:
     """Test the inspect-calibration CLI command."""
 

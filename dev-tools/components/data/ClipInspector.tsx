@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect } from "react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -25,6 +27,10 @@ export function ClipInspector({
   sessionId,
   clipInfo,
 }: ClipInspectorProps) {
+  useEffect(() => {
+    if (open && clipInfo.replay_error) toast.error(clipInfo.replay_error);
+  }, [open, clipInfo.replay_error]);
+
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent fullscreen>
@@ -108,9 +114,6 @@ export function ClipInspector({
           </div>
         </div>
 
-        {clipInfo.replay_error && (
-          <p className="text-sm text-destructive">{clipInfo.replay_error}</p>
-        )}
       </DialogContent>
     </Dialog>
   );

@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { VideoWorkbenchProvider, useVideoWorkbench } from "./_context";
 import { StatusDropdown, SpinnerIcon } from "@/components/video-shared";
 import type { VideoWithReason } from "@/components/video-shared";
@@ -91,13 +93,16 @@ function WorkbenchContent({ children }: { children: React.ReactNode }) {
   const { video, error } = useVideoWorkbench();
   const router = useRouter();
 
+  useEffect(() => {
+    if (error) toast.error(error);
+  }, [error]);
+
   if (error) {
     return (
       <div className="p-6">
         <button onClick={() => router.push("/videos/browse")} className="text-sm text-primary hover:underline mb-4 block">
           &larr; Back to Videos
         </button>
-        <p className="text-destructive">{error}</p>
       </div>
     );
   }

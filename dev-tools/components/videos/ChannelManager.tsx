@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +21,6 @@ export default function ChannelManager() {
   const router = useRouter();
   const [channels, setChannels] = useState<CrawlChannel[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [newHandle, setNewHandle] = useState("");
   const [adding, setAdding] = useState(false);
   const [crawlingId, setCrawlingId] = useState<string | null>(null);
@@ -33,9 +33,8 @@ export default function ChannelManager() {
     try {
       const data = await listCrawlChannels();
       setChannels(data);
-      setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load channels");
+      toast.error(e instanceof Error ? e.message : "Failed to load channels");
     } finally {
       setLoading(false);
     }
@@ -63,7 +62,7 @@ export default function ChannelManager() {
       setNewHandle("");
       await loadChannels();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to add channel");
+      toast.error(e instanceof Error ? e.message : "Failed to add channel");
     } finally {
       setAdding(false);
     }
@@ -78,7 +77,7 @@ export default function ChannelManager() {
         )
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to toggle channel");
+      toast.error(e instanceof Error ? e.message : "Failed to toggle channel");
     }
   };
 
@@ -91,7 +90,7 @@ export default function ChannelManager() {
       await loadChannels();
       await loadQuota();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Crawl failed");
+      toast.error(e instanceof Error ? e.message : "Crawl failed");
     } finally {
       setCrawlingId(null);
     }
@@ -108,7 +107,7 @@ export default function ChannelManager() {
       await loadChannels();
       await loadQuota();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Crawl all failed");
+      toast.error(e instanceof Error ? e.message : "Crawl all failed");
     } finally {
       setCrawlingAll(false);
     }
@@ -124,7 +123,7 @@ export default function ChannelManager() {
         `Fetched ${result.frames_fetched} ${label} frames from ${result.videos_processed} videos`
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Fetch frames failed");
+      toast.error(e instanceof Error ? e.message : "Fetch frames failed");
     } finally {
       setFetchingFramesId(null);
     }
@@ -173,17 +172,6 @@ export default function ChannelManager() {
         )}
       </div>
 
-      {error && (
-        <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
-          {error}
-          <button
-            onClick={() => setError(null)}
-            className="ml-2 underline text-xs"
-          >
-            dismiss
-          </button>
-        </div>
-      )}
 
       {crawlResult && (
         <div className="rounded-md bg-primary/10 border border-primary/20 p-3 text-sm">
