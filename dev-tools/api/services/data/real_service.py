@@ -23,7 +23,7 @@ def _resolve(path: str | Path) -> Path:
     return (_PROJECT_ROOT / p).resolve()
 
 
-def _list_local_videos() -> list[dict[str, Any]]:
+def _list_local_videos(max_file_size_mb: float | None = 200.0) -> list[dict[str, Any]]:
     videos_root = _resolve("data/videos")
     if not videos_root.exists():
         return []
@@ -36,11 +36,14 @@ def _list_local_videos() -> list[dict[str, Any]]:
             if not path.is_file() or path.suffix.lower() not in _VIDEO_EXTENSIONS:
                 continue
             stat = path.stat()
+            file_size_mb = round(stat.st_size / 1024 / 1024, 1)
+            if max_file_size_mb is not None and file_size_mb > max_file_size_mb:
+                continue
             videos.append(
                 {
                     "video_id": video_dir.name,
                     "video_path": str(path),
-                    "file_size_mb": round(stat.st_size / 1024 / 1024, 1),
+                    "file_size_mb": file_size_mb,
                     "modified_ts": stat.st_mtime,
                 }
             )
@@ -138,9 +141,10 @@ def _blocker_for_video(
 def get_overview(
     clips_dir: str = "data/argus/train_real",
     *,
+    max_file_size_mb: float | None = 200.0,
     limit: int = 100,
 ) -> dict[str, Any]:
-    local_videos = _list_local_videos()
+    local_videos = _list_local_videos(max_file_size_mb)
     selected_videos = local_videos[:limit]
     video_ids = [row["video_id"] for row in selected_videos]
 
@@ -229,7 +233,7 @@ def start_processing(
     if _current_job is not None and _current_job.get("status") == "running":
         raise ValueError("Real-video processing already in progress. Stop it first.")
 
-    overview = get_overview(clips_dir, limit=5000)
+    overview = get_overview(clips_dir, max_file_size_mb=200.0, limit=5000)
     candidates = [row for row in overview["videos"] if row["ready"]][:limit]
     if not candidates:
         raise ValueError("No eligible local videos found to process.")

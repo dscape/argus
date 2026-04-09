@@ -284,10 +284,7 @@ class TestBoardCropReuse:
         )
 
         assert result == {"saved": 1, "errors": []}
-        saved_path = (
-            tmp_path
-            / "f_video-1_25pct_rnbqkbnr-pppppppp-8-8-8-8-PPPPPPPP-RNBQKBNR.jpg"
-        )
+        saved_path = tmp_path / "f_video-1_25pct_rnbqkbnr-pppppppp-8-8-8-8-PPPPPPPP-RNBQKBNR.jpg"
         saved = cv2.imread(str(saved_path), cv2.IMREAD_COLOR)
         assert saved is not None
         assert saved.shape[:2] == board.shape[:2]

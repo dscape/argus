@@ -36,10 +36,12 @@ class _FakeModel:
 
 def test_detect_otb_yolo_retries_at_higher_resolution_after_miss(monkeypatch) -> None:
     frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
-    fake_model = _FakeModel({
-        640: None,
-        1280: ([0.42], [[1321, 878, 1715, 1057]]),
-    })
+    fake_model = _FakeModel(
+        {
+            640: None,
+            1280: ([0.42], [[1321, 878, 1715, 1057]]),
+        }
+    )
 
     monkeypatch.setattr(otb_yolo_detector, "_load_model", lambda _: fake_model)
     monkeypatch.setattr(otb_yolo_detector, "_resolve_weights_path", lambda _: Path("fake.pt"))

@@ -138,8 +138,8 @@ def detect_board_orientation(
 ) -> tuple[bool, float]:
     """Detect whether the board is flipped (Black at bottom).
 
-    Uses the DINOv2 piece classifier to read the board in both orientations
-    and checks which has the expected piece distribution.
+    Uses the square classifier to read the board in both orientations and
+    checks which has the expected piece distribution.
 
     Returns (flipped, confidence).
     """

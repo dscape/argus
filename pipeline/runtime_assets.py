@@ -25,7 +25,7 @@ SCREENING_WEIGHTS = RuntimeAsset(
 )
 OVERLAY_PIECE_CLASSIFIER_WEIGHTS = RuntimeAsset(
     name="overlay piece-classifier weights",
-    path=PROJECT_ROOT / "weights" / "overlay" / "best.pt",
+    path=PROJECT_ROOT / "weights" / "overlay" / "best.onnx",
 )
 OVERLAY_YOLO_WEIGHTS = RuntimeAsset(
     name="overlay YOLO detector weights",

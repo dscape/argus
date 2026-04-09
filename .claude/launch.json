@@ -3,12 +3,16 @@
   "configurations": [
     {
       "name": "dev",
-      "runtimeExecutable": "make",
-      "runtimeArgs": ["preview"],
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd dev-tools && npm run dev"
+      ],
       "port": 3000,
       "autoPort": false,
       "env": {
-        "PATH": "/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        "API_URL": "http://localhost:8000",
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
       }
     },
     {

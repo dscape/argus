@@ -310,7 +310,7 @@ For videos with a 2D board overlay:
 
 1. **Calibration** — per-channel layout config defines overlay crop, camera crop, reference resolution, board flip, and board theme. Can be auto-proposed via `auto-calibrate` or set manually.
 2. **Overlay localization** — `detect_overlay_runtime()` runs the default YOLO detector and applies a small padding margin so the board crop does not clip outer squares.
-3. **FEN reading** — `PieceClassifier` (DINOv2-based) classifies each of the 64 squares using a trained CNN to produce a FEN string. `GridDetector` handles automatic board boundary detection inside the YOLO crop.
+3. **FEN reading** — `piece_classifier.py` batches all 64 squares through a tiny ONNX CNN to produce a FEN string in under 100ms on warm CPU reads. `GridDetector` handles automatic board boundary detection inside the YOLO crop.
 3. **Move detection with hard cut detection** — `OverlayMoveDetector` compares FENs across frames with a stability window, using python-chess to find the legal move transforming old FEN to new FEN. Detects game resets AND hard cuts (when >4 squares change simultaneously, indicating a board switch rather than a legal move).
 4. **Per-move confidence scoring** — each detected move receives a confidence score based on how many consecutive frames agreed on the FEN before and after the transition. Higher stability = higher confidence. Moves found via resync (no legal move path) get confidence 0.0.
 5. **Move synchronization** — broadcast delay compensation aligns overlay moves to camera footage timestamps
@@ -342,7 +342,7 @@ graph TD
 | Module | What it does |
 |--------|-------------|
 | `scanner.py` | Runtime entry points `runtime_overlay_check()` and `detect_overlay_runtime()` use the committed YOLO detector. Legacy heuristic `fast_overlay_check()` / `detect_overlay_fast()` remain in the file for training-label tooling and detector bootstrapping. |
-| `piece_classifier.py` | DINOv2-based per-square piece classifier (99.83% accuracy). Handles full-board reads and partial square reclassification for locked overlays. |
+| `piece_classifier.py` | Tiny ONNX per-square piece classifier. Reads all 64 squares in one batch, applies empty-square suppression / king-count repair, and supports partial square reclassification for locked overlays. |
 | `sequence_reader.py` | Locks board geometry once, computes cheap per-square deltas, skips unchanged frames, and only re-reads candidate move transitions or periodic resync frames. |
 | `grid_detector.py` | Detects the 8x8 board grid using Sobel edge projection with HoughLinesP fallback. Handles borders and coordinate labels. |
 | `yolo_detector.py` | Loads the committed default YOLO overlay detector weights from `weights/overlay_yolo/`. |
@@ -528,16 +528,16 @@ Uses plain argparse (not Hydra).
 
 > **Domain: Pipeline** — `pipeline/overlay/piece_classifier.py`, `scripts/train_piece_classifier.py`
 
-DINOv2-base (frozen) + MLP head classifying individual board squares into 13 classes (empty + 12 piece types). Trained on synthetic data and the [chess-positions](https://www.kaggle.com/datasets/koryakinp/chess-positions) dataset.
+Tiny depthwise-separable CNN exported to ONNX, classifying individual board squares into 13 classes (empty + 12 piece types). Trained on synthetic data and the [chess-positions](https://www.kaggle.com/datasets/koryakinp/chess-positions) dataset.
 
 ### Training
 
 ```bash
-# Train with feature caching (seconds per epoch after initial extraction)
-make train-pieces ARGS="--chess-positions-dir data/overlay/train --epochs 20"
+# Train the tiny square classifier and export weights/overlay/best.onnx
+make train-pieces ARGS="--epochs 6 --batch-size 256"
 ```
 
-Feature caching pre-computes DINOv2 embeddings once, then trains only the MLP head on cached 768-D vectors.
+The training script mixes synthetic square crops with sampled `data/overlay/train` / `data/overlay/val` squares, deliberately oversamples real empty squares to suppress false positives, and then exports a CPU runtime ONNX model.
 
 ### Accuracy Validation
 
@@ -1025,6 +1025,8 @@ argus/
 │   │   ├── v2r1.pt                             #     Versioned: code v2, training revision 1
 │   │   └── metadata.json                       #     Version, accuracy, training details
 │   ├── overlay/                                #   Runtime piece classifier
+│   │   ├── best.onnx                           #     Current runtime artifact
+│   │   └── metadata.json                       #     Version, accuracy, training details
 │   ├── overlay_yolo/                           #   Default runtime overlay detector
 │   │   ├── best.pt                             #     Current best checkpoint
 │   │   ├── v1r1.pt                             #     Versioned detector checkpoint
@@ -1118,7 +1120,7 @@ argus/
 │   │   ├── yolo_detector.py                    #     Default runtime YOLO overlay detector
 │   │   ├── yolo_dataset.py                     #     Export bbox training labels to YOLO format
 │   │   ├── yolo_train.py                       #     Train the overlay detector
-│   │   ├── piece_classifier.py                 #     DINOv2-based piece classification to FEN
+│   │   ├── piece_classifier.py                 #     Tiny ONNX square classification to FEN
 │   │   ├── grid_detector.py                    #     Board grid detection (Sobel + Hough)
 │   │   ├── overlay_move_detector.py            #     FEN diffs to legal moves + hard cut detection
 │   │   ├── overlay_clip_generator.py           #     Camera frames + moves + confidence to .pt

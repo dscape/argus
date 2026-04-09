@@ -987,7 +987,7 @@ def main():
     p.add_argument(
         "--clips-dir",
         type=str,
-        default="data/argus/training_clips",
+        default="data/argus/train_real",
         help="Directory containing generated clip_*.pt files",
     )
     p.add_argument(

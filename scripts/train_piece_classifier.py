@@ -1,18 +1,9 @@
 #!/usr/bin/env python3
-"""Train the DINOv2-based piece classifier on synthetic + chess-positions data.
+"""Train and export the tiny ONNX square classifier for overlay board reading.
 
 Usage:
-    .venv/bin/python scripts/train_piece_classifier.py [--epochs N] [--samples N]
-    .venv/bin/python scripts/train_piece_classifier.py \\
-        --chess-positions-dir data/overlay/train
-
-Supports two training modes:
-- **Feature-cached** (default): pre-compute DINOv2 embeddings once, then train
-  the MLP head on cached 768-D vectors.  Extremely fast (~seconds per epoch).
-- **Full forward**: pass images through the frozen encoder each epoch (slower,
-  useful for debugging).  Enable with ``--no-cache-features``.
-
-Follows the same version-control pattern as pipeline/screen/ai_train.py.
+    .venv/bin/python scripts/train_piece_classifier.py
+    .venv/bin/python scripts/train_piece_classifier.py --device mps --epochs 12
 """
 
 from __future__ import annotations
@@ -20,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import random
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,426 +24,327 @@ from torch.utils.data import DataLoader, TensorDataset
 # Project root on path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline.overlay.piece_classifier import (
-    IMAGENET_MEAN,
-    IMAGENET_STD,
+from pipeline.overlay.chess_positions_data import sample_chess_positions_squares
+from pipeline.overlay.piece_classifier_data import CLASS_NAMES, NUM_CLASSES, generate_dataset
+from pipeline.overlay.square_classifier_model import (
     INPUT_SIZE,
     MODEL_CODE_VERSION,
-    NUM_CLASSES,
-    WEIGHTS_DIR,
-    PieceClassifier,
-)
-from pipeline.overlay.piece_classifier_data import (
-    CLASS_NAMES,
-    DATASET_DIR,
-    generate_dataset,
-    load_dataset,
+    TinySquareClassifier,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "overlay"
+DEFAULT_CP_TRAIN_DIR = _PROJECT_ROOT / "data" / "overlay" / "train"
+DEFAULT_CP_VAL_DIR = _PROJECT_ROOT / "data" / "overlay" / "val"
 
-# ---------------------------------------------------------------------------
-# Image → tensor helpers (used in non-cached mode)
-# ---------------------------------------------------------------------------
 
-
-def _to_tensor_dataset(
-    images: np.ndarray,
-    labels: np.ndarray,
-) -> TensorDataset:
-    """Convert (N, H, W, 3) uint8 BGR images to normalised (N, 3, 224, 224) tensors."""
-    import cv2
-
-    tensors: list[torch.Tensor] = []
-    mean = torch.tensor(IMAGENET_MEAN).view(3, 1, 1)
-    std = torch.tensor(IMAGENET_STD).view(3, 1, 1)
-
-    for img in images:
-        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        resized = cv2.resize(rgb, (INPUT_SIZE, INPUT_SIZE))
-        t = torch.from_numpy(resized).float().permute(2, 0, 1) / 255.0
-        t = (t - mean) / std
-        tensors.append(t)
-
-    x = torch.stack(tensors)
-    y = torch.from_numpy(labels).long()
+def _to_tensor_dataset(images: np.ndarray, labels: np.ndarray) -> TensorDataset:
+    """Convert uint8 BGR images to an in-memory float tensor dataset."""
+    rgb = np.ascontiguousarray(images[:, :, :, ::-1])
+    x = torch.from_numpy(rgb).permute(0, 3, 1, 2).float() / 255.0
+    y = torch.from_numpy(labels.astype(np.int64, copy=False))
     return TensorDataset(x, y)
 
 
-# ---------------------------------------------------------------------------
-# Training loops
-# ---------------------------------------------------------------------------
-
-
-def _train_on_features(
-    features: torch.Tensor,
-    labels: torch.Tensor,
+def _load_synthetic_splits(
     *,
-    epochs: int,
+    train_samples_per_class: int,
+    val_samples_per_class: int,
+    seed: int,
+) -> tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
+    train_images, train_labels = generate_dataset(
+        num_samples_per_class=train_samples_per_class,
+        size=INPUT_SIZE,
+        seed=seed,
+        output_dir=_PROJECT_ROOT / "outputs" / "overlay_classifier" / "synthetic_train_cache",
+    )
+    val_images, val_labels = generate_dataset(
+        num_samples_per_class=val_samples_per_class,
+        size=INPUT_SIZE,
+        seed=seed + 1,
+        output_dir=_PROJECT_ROOT / "outputs" / "overlay_classifier" / "synthetic_val_cache",
+    )
+    return (train_images, train_labels), (val_images, val_labels)
+
+
+def _load_chess_positions_split(
+    data_dir: Path | None,
+    *,
+    max_per_class: int,
+    empty_multiplier: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    if data_dir is None:
+        return None
+    if not data_dir.exists():
+        logger.warning("Chess-positions directory not found: %s", data_dir)
+        return None
+
+    targets = {class_index: max_per_class for class_index in range(NUM_CLASSES)}
+    targets[0] = max_per_class * empty_multiplier
+
+    images, labels = sample_chess_positions_squares(
+        data_dir,
+        max_per_class=targets,
+        size=INPUT_SIZE,
+        seed=seed,
+    )
+    return images, labels
+
+
+def _concat_splits(
+    parts: list[tuple[np.ndarray, np.ndarray] | None],
+) -> tuple[np.ndarray, np.ndarray]:
+    valid = [part for part in parts if part is not None]
+    if not valid:
+        raise ValueError("No training data loaded")
+    images = np.concatenate([part[0] for part in valid], axis=0)
+    labels = np.concatenate([part[1] for part in valid], axis=0)
+    return images, labels
+
+
+def _build_loaders(
+    train_images: np.ndarray,
+    train_labels: np.ndarray,
+    val_images: np.ndarray,
+    val_labels: np.ndarray,
+    *,
     batch_size: int,
-    lr: float,
+) -> tuple[
+    DataLoader[tuple[torch.Tensor, torch.Tensor]],
+    DataLoader[tuple[torch.Tensor, torch.Tensor]],
+]:
+    train_loader = DataLoader(
+        _to_tensor_dataset(train_images, train_labels),
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,
+        pin_memory=False,
+    )
+    val_loader = DataLoader(
+        _to_tensor_dataset(val_images, val_labels),
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=False,
+    )
+    return train_loader, val_loader
+
+
+def _evaluate(
+    model: TinySquareClassifier,
+    loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
+    *,
     device: torch.device,
-) -> tuple[dict, float]:
-    """Train the MLP head on pre-computed 768-D features.  Returns (best_state, best_val_acc)."""
-    n = len(features)
-    split = int(n * 0.8)
-
-    # Shuffle deterministically
-    perm = torch.randperm(n, generator=torch.Generator().manual_seed(42))
-    features, labels = features[perm], labels[perm]
-
-    train_ds = TensorDataset(features[:split], labels[:split])
-    val_ds = TensorDataset(features[split:], labels[split:])
-    logger.info("Train: %d, Val: %d (feature-cached mode)", len(train_ds), len(val_ds))
-
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=batch_size)
-
-    # Build only the head (no encoder needed)
-    model = PieceClassifier()
-    head = model.head.to(device)
-    head.train()
-    optimizer = torch.optim.Adam(head.parameters(), lr=lr)
-    criterion = nn.CrossEntropyLoss()
-
-    best_val_acc = 0.0
-    best_state: dict | None = None
-
-    for epoch in range(epochs):
-        head.train()
-        train_loss = 0.0
-        train_correct = 0
-        train_total = 0
-        for x, y in train_loader:
-            x, y = x.to(device), y.to(device)
-            logits = head(x)
-            loss = criterion(logits, y)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item() * x.size(0)
-            train_correct += (logits.argmax(1) == y).sum().item()
-            train_total += x.size(0)
-
-        head.eval()
-        val_correct = 0
-        val_total = 0
-        with torch.no_grad():
-            for x, y in val_loader:
-                x, y = x.to(device), y.to(device)
-                logits = head(x)
-                val_correct += (logits.argmax(1) == y).sum().item()
-                val_total += x.size(0)
-
-        train_acc = train_correct / max(train_total, 1)
-        val_acc = val_correct / max(val_total, 1)
-        logger.info(
-            "Epoch %d/%d  train_loss=%.4f  train_acc=%.3f  val_acc=%.3f",
-            epoch + 1,
-            epochs,
-            train_loss / max(train_total, 1),
-            train_acc,
-            val_acc,
-        )
-
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            best_state = {"head": {k: v.cpu().clone() for k, v in head.state_dict().items()}}
-            logger.info("  → New best (val_acc=%.4f)", val_acc)
-
-    # Per-class accuracy
-    if best_state is not None:
-        head.load_state_dict(best_state["head"])
-    head.eval()
+) -> tuple[float, list[int], list[int]]:
+    model.eval()
+    total = 0
+    correct = 0
     class_correct = [0] * NUM_CLASSES
     class_total = [0] * NUM_CLASSES
     with torch.no_grad():
-        for x, y in val_loader:
-            x, y = x.to(device), y.to(device)
-            preds = head(x).argmax(1)
-            for p, t in zip(preds.cpu().tolist(), y.cpu().tolist()):
-                class_total[t] += 1
-                if p == t:
-                    class_correct[t] += 1
-
-    logger.info("Per-class val accuracy:")
-    for i, name in enumerate(CLASS_NAMES):
-        acc = class_correct[i] / max(class_total[i], 1)
-        logger.info("  %6s: %d/%d (%.1f%%)", name, class_correct[i], class_total[i], acc * 100)
-
-    return best_state, best_val_acc, len(train_ds), len(val_ds)
+        for images, labels in loader:
+            images = images.to(device)
+            labels = labels.to(device)
+            logits = model(images)
+            preds = logits.argmax(dim=1)
+            total += labels.numel()
+            correct += (preds == labels).sum().item()
+            for pred, target in zip(preds.cpu().tolist(), labels.cpu().tolist()):
+                class_total[target] += 1
+                if pred == target:
+                    class_correct[target] += 1
+    return correct / max(total, 1), class_correct, class_total
 
 
-def _train_full_forward(
-    images: np.ndarray,
-    labels: np.ndarray,
+def _train(
+    train_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
+    val_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
     *,
     epochs: int,
-    batch_size: int,
     lr: float,
+    weight_decay: float,
     device: torch.device,
-) -> tuple[dict, float, int, int]:
-    """Train with full DINOv2 forward pass each epoch (original mode)."""
-    n = len(images)
-    split = int(n * 0.8)
-    train_ds = _to_tensor_dataset(images[:split], labels[:split])
-    val_ds = _to_tensor_dataset(images[split:], labels[split:])
-    logger.info("Train: %d, Val: %d (full forward mode)", len(train_ds), len(val_ds))
-
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=batch_size)
-
-    model = PieceClassifier().to(device)
-    model.train()
-    optimizer = torch.optim.Adam(model.head.parameters(), lr=lr)
-    criterion = nn.CrossEntropyLoss()
+) -> tuple[TinySquareClassifier, float]:
+    model = TinySquareClassifier().to(device)
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
     best_val_acc = 0.0
-    best_state: dict | None = None
+    best_state: dict[str, torch.Tensor] | None = None
 
     for epoch in range(epochs):
         model.train()
         train_loss = 0.0
         train_correct = 0
         train_total = 0
-        for x, y in train_loader:
-            x, y = x.to(device), y.to(device)
-            logits = model(x)
-            loss = criterion(logits, y)
+
+        for images, labels in train_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+            logits = model(images)
+            loss = criterion(logits, labels)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            train_loss += loss.item() * x.size(0)
-            train_correct += (logits.argmax(1) == y).sum().item()
-            train_total += x.size(0)
 
-        model.eval()
-        val_correct = 0
-        val_total = 0
-        with torch.no_grad():
-            for x, y in val_loader:
-                x, y = x.to(device), y.to(device)
-                logits = model(x)
-                val_correct += (logits.argmax(1) == y).sum().item()
-                val_total += x.size(0)
+            train_loss += loss.item() * images.size(0)
+            train_correct += (logits.argmax(dim=1) == labels).sum().item()
+            train_total += images.size(0)
 
+        scheduler.step()
+
+        val_acc, _, _ = _evaluate(model, val_loader, device=device)
         train_acc = train_correct / max(train_total, 1)
-        val_acc = val_correct / max(val_total, 1)
         logger.info(
-            "Epoch %d/%d  train_loss=%.4f  train_acc=%.3f  val_acc=%.3f",
+            "Epoch %d/%d  train_loss=%.4f  train_acc=%.4f  val_acc=%.4f",
             epoch + 1,
             epochs,
             train_loss / max(train_total, 1),
             train_acc,
             val_acc,
         )
-
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            best_state = {"head": {k: v.cpu().clone() for k, v in model.head.state_dict().items()}}
-            logger.info("  → New best (val_acc=%.4f)", val_acc)
+            best_state = {
+                key: value.detach().cpu().clone() for key, value in model.state_dict().items()
+            }
+            logger.info("  -> New best (val_acc=%.4f)", val_acc)
 
-    # Per-class accuracy
-    if best_state is not None:
-        model.head.load_state_dict(best_state["head"])
-    model.eval()
-    class_correct = [0] * NUM_CLASSES
-    class_total = [0] * NUM_CLASSES
-    with torch.no_grad():
-        for x, y in val_loader:
-            x, y = x.to(device), y.to(device)
-            preds = model(x).argmax(1)
-            for p, t in zip(preds.cpu().tolist(), y.cpu().tolist()):
-                class_total[t] += 1
-                if p == t:
-                    class_correct[t] += 1
+    if best_state is None:
+        raise RuntimeError("Training did not produce a best checkpoint")
 
+    best_model = TinySquareClassifier()
+    best_model.load_state_dict(best_state)
+    best_model.to(device)
+    best_model.eval()
+    return best_model, best_val_acc
+
+
+def _export_onnx(model: TinySquareClassifier, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    model = model.cpu().eval()
+    dummy_input = torch.randn(1, 3, INPUT_SIZE, INPUT_SIZE, dtype=torch.float32)
+    torch.onnx.export(
+        model,
+        dummy_input,
+        path,
+        input_names=["input"],
+        output_names=["logits"],
+        dynamic_axes={"input": {0: "batch"}, "logits": {0: "batch"}},
+        opset_version=17,
+        do_constant_folding=True,
+        dynamo=False,
+    )
+
+
+def _log_per_class_accuracy(
+    model: TinySquareClassifier,
+    loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
+    *,
+    device: torch.device,
+) -> None:
+    val_acc, class_correct, class_total = _evaluate(model, loader, device=device)
+    logger.info("Final val accuracy: %.4f", val_acc)
     logger.info("Per-class val accuracy:")
-    for i, name in enumerate(CLASS_NAMES):
-        acc = class_correct[i] / max(class_total[i], 1)
-        logger.info("  %6s: %d/%d (%.1f%%)", name, class_correct[i], class_total[i], acc * 100)
-
-    return best_state, best_val_acc, len(train_ds), len(val_ds)
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Train piece classifier")
-    parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--samples", type=int, default=400, help="Synthetic samples per class")
-    parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--device", type=str, default="cpu")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument(
-        "--regenerate",
-        action="store_true",
-        help="Force regeneration of the synthetic dataset even if cached",
-    )
-    # Chess positions integration
-    parser.add_argument(
-        "--chess-positions-dir",
-        type=str,
-        default=None,
-        help="Path to chess-positions train/ directory (e.g. data/overlay/train)",
-    )
-    parser.add_argument(
-        "--chess-positions-samples",
-        type=int,
-        default=1500,
-        help="Max chess-positions samples per class",
-    )
-    # Feature caching
-    parser.add_argument(
-        "--cache-features",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Use feature caching for fast training (default: on)",
-    )
-    parser.add_argument(
-        "--recache",
-        action="store_true",
-        help="Force re-extraction of cached features",
-    )
-    args = parser.parse_args()
-
-    device = torch.device(args.device)
-
-    # -------------------------------------------------------------------
-    # Load or generate synthetic dataset
-    # -------------------------------------------------------------------
-    cached = None if args.regenerate else load_dataset(DATASET_DIR)
-
-    if cached is not None:
-        synth_images, synth_labels = cached
+    for class_index, name in enumerate(CLASS_NAMES):
+        acc = class_correct[class_index] / max(class_total[class_index], 1)
         logger.info(
-            "Using cached synthetic dataset: %d images from %s", len(synth_images), DATASET_DIR
-        )
-    else:
-        logger.info(
-            "Generating %d synthetic samples per class (%d total)…",
-            args.samples,
-            args.samples * NUM_CLASSES,
-        )
-        synth_images, synth_labels = generate_dataset(
-            num_samples_per_class=args.samples,
-            size=128,
-            seed=args.seed,
+            "  %6s: %d/%d (%.1f%%)",
+            name,
+            class_correct[class_index],
+            class_total[class_index],
+            acc * 100,
         )
 
-    logger.info("Synthetic: %d images, shape=%s", len(synth_images), synth_images.shape)
 
-    # -------------------------------------------------------------------
-    # Load chess-positions dataset (optional)
-    # -------------------------------------------------------------------
-    cp_images: np.ndarray | None = None
-    cp_labels: np.ndarray | None = None
-
-    if args.chess_positions_dir:
-        from pipeline.overlay.chess_positions_data import sample_chess_positions_squares
-
-        cp_dir = Path(args.chess_positions_dir)
-        if not cp_dir.exists():
-            logger.error("Chess positions directory not found: %s", cp_dir)
-            sys.exit(1)
-
-        cp_images, cp_labels = sample_chess_positions_squares(
-            cp_dir,
-            max_per_class=args.chess_positions_samples,
-            size=128,
-            seed=args.seed,
-        )
-        logger.info("Chess positions: %d images, shape=%s", len(cp_images), cp_images.shape)
-
-    # -------------------------------------------------------------------
-    # Train
-    # -------------------------------------------------------------------
-    if args.cache_features:
-        from pipeline.overlay.feature_cache import (
-            extract_and_cache_features,
-            load_cached_features,
-        )
-
-        # Cache synthetic features
-        synth_cached = None if args.recache else load_cached_features("synthetic")
-        if synth_cached is None:
-            extract_and_cache_features(
-                synth_images,
-                synth_labels,
-                "synthetic",
-                device=str(device),
-                batch_size=args.batch_size,
-            )
-            synth_cached = load_cached_features("synthetic")
-        synth_feats, synth_labs = synth_cached
-
-        # Cache chess-positions features
-        if cp_images is not None:
-            cp_cached = None if args.recache else load_cached_features("chess_positions")
-            if cp_cached is None:
-                extract_and_cache_features(
-                    cp_images,
-                    cp_labels,
-                    "chess_positions",
-                    device=str(device),
-                    batch_size=args.batch_size,
-                )
-                cp_cached = load_cached_features("chess_positions")
-            cp_feats, cp_labs = cp_cached
-            all_features = torch.cat([synth_feats, cp_feats], dim=0)
-            all_labels = torch.cat([synth_labs, cp_labs], dim=0)
-        else:
-            all_features = synth_feats
-            all_labels = synth_labs
-
-        logger.info("Total features: %d", len(all_features))
-        best_state, best_val_acc, train_size, val_size = _train_on_features(
-            all_features,
-            all_labels,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            lr=args.lr,
-            device=device,
-        )
-    else:
-        # Full forward mode — combine images
-        if cp_images is not None:
-            all_images = np.concatenate([synth_images, cp_images], axis=0)
-            all_labels_np = np.concatenate([synth_labels, cp_labels], axis=0)
-        else:
-            all_images = synth_images
-            all_labels_np = synth_labels
-
-        logger.info("Total images: %d", len(all_images))
-        best_state, best_val_acc, train_size, val_size = _train_full_forward(
-            all_images,
-            all_labels_np,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            lr=args.lr,
-            device=device,
-        )
-
-    # -------------------------------------------------------------------
-    # Version control — match pipeline/screen/ai_train.py pattern
-    # -------------------------------------------------------------------
-    WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
-
+def _next_version() -> tuple[int, str]:
     meta_path = WEIGHTS_DIR / "metadata.json"
     revision = 1
     if meta_path.exists():
-        with open(meta_path) as f:
-            old_meta = json.load(f)
+        with meta_path.open() as handle:
+            old_meta = json.load(handle)
         if old_meta.get("code_version") == MODEL_CODE_VERSION:
-            revision = old_meta.get("revision", 0) + 1
+            revision = int(old_meta.get("revision", 0)) + 1
+    return revision, f"{MODEL_CODE_VERSION}r{revision}"
 
-    version_str = f"{MODEL_CODE_VERSION}r{revision}"
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Train overlay square classifier")
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--synthetic-train-samples", type=int, default=1200)
+    parser.add_argument("--synthetic-val-samples", type=int, default=300)
+    parser.add_argument("--chess-positions-train-dir", type=Path, default=DEFAULT_CP_TRAIN_DIR)
+    parser.add_argument("--chess-positions-val-dir", type=Path, default=DEFAULT_CP_VAL_DIR)
+    parser.add_argument("--chess-positions-train-samples", type=int, default=2500)
+    parser.add_argument("--chess-positions-val-samples", type=int, default=1200)
+    parser.add_argument("--chess-positions-empty-multiplier", type=int, default=6)
+    args = parser.parse_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+
+    device = torch.device(args.device)
+
+    logger.info("Loading datasets at %dx%d…", INPUT_SIZE, INPUT_SIZE)
+    synthetic_train, synthetic_val = _load_synthetic_splits(
+        train_samples_per_class=args.synthetic_train_samples,
+        val_samples_per_class=args.synthetic_val_samples,
+        seed=args.seed,
+    )
+    cp_train = _load_chess_positions_split(
+        args.chess_positions_train_dir,
+        max_per_class=args.chess_positions_train_samples,
+        empty_multiplier=args.chess_positions_empty_multiplier,
+        seed=args.seed,
+    )
+    cp_val = _load_chess_positions_split(
+        args.chess_positions_val_dir,
+        max_per_class=args.chess_positions_val_samples,
+        empty_multiplier=args.chess_positions_empty_multiplier,
+        seed=args.seed,
+    )
+
+    train_images, train_labels = _concat_splits([synthetic_train, cp_train])
+    val_images, val_labels = _concat_splits([synthetic_val, cp_val])
+
+    logger.info("Train: %d images", len(train_images))
+    logger.info("Val:   %d images", len(val_images))
+
+    train_loader, val_loader = _build_loaders(
+        train_images,
+        train_labels,
+        val_images,
+        val_labels,
+        batch_size=args.batch_size,
+    )
+
+    model, best_val_acc = _train(
+        train_loader,
+        val_loader,
+        epochs=args.epochs,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        device=device,
+    )
+    _log_per_class_accuracy(model, val_loader, device=device)
+
+    revision, version_str = _next_version()
+    best_path = WEIGHTS_DIR / "best.onnx"
+    versioned_path = WEIGHTS_DIR / f"{version_str}.onnx"
+
+    _export_onnx(model, best_path)
+    _export_onnx(model, versioned_path)
 
     metadata = {
         "code_version": MODEL_CODE_VERSION,
@@ -460,18 +353,22 @@ def main() -> None:
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "best_val_accuracy": round(best_val_acc, 4),
         "epochs": args.epochs,
-        "train_size": train_size,
-        "val_size": val_size,
+        "train_size": int(len(train_images)),
+        "val_size": int(len(val_images)),
         "seed": args.seed,
-        "chess_positions": args.chess_positions_dir is not None,
-        "feature_cached": args.cache_features,
+        "input_size": INPUT_SIZE,
+        "runtime_format": "onnx",
+        "architecture": "tiny_square_cnn",
+        "sources": {
+            "synthetic_train_per_class": args.synthetic_train_samples,
+            "synthetic_val_per_class": args.synthetic_val_samples,
+            "chess_positions_train_per_piece_class": args.chess_positions_train_samples,
+            "chess_positions_val_per_piece_class": args.chess_positions_val_samples,
+            "chess_positions_empty_multiplier": args.chess_positions_empty_multiplier,
+        },
     }
-
-    versioned_path = WEIGHTS_DIR / f"{version_str}.pt"
-    torch.save(best_state, versioned_path)
-    torch.save(best_state, WEIGHTS_DIR / "best.pt")
-    with open(meta_path, "w") as f:
-        json.dump(metadata, f, indent=2)
+    with (WEIGHTS_DIR / "metadata.json").open("w") as handle:
+        json.dump(metadata, handle, indent=2)
 
     logger.info("Training complete. Best val accuracy: %.4f", best_val_acc)
     logger.info("  Model version: %s", version_str)

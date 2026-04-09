@@ -32,7 +32,7 @@ except ImportError:
     logger.warning("argus package not installed. Clip generation will use basic format.")
     VOCAB = None
 
-OUTPUT_DIR = os.path.join("data", "argus", "training_clips")
+OUTPUT_DIR = os.path.join("data", "argus", "train_real")
 FRAME_SIZE = 224
 
 

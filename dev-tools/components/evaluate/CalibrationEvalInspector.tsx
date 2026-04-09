@@ -612,6 +612,7 @@ export default function CalibrationEvalInspector({
                     key={r.clip_id}
                     result={r}
                     pinned
+                    sessionId={sessionId}
                     onPin={() => togglePin(String(r.clip_id))}
                   />
                 ))}
@@ -697,6 +698,7 @@ export default function CalibrationEvalInspector({
                         <CalibrationResultCard
                           result={r}
                           pinned={false}
+                          sessionId={sessionId}
                           onPin={() => togglePin(String(r.clip_id))}
                         />
                       </div>
@@ -716,10 +718,12 @@ export default function CalibrationEvalInspector({
 function CalibrationResultCard({
   result,
   pinned,
+  sessionId,
   onPin,
 }: {
   result: any;
   pinned: boolean;
+  sessionId: string | null;
   onPin: () => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);

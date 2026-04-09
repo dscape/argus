@@ -2,6 +2,24 @@
 
 Under no circunstance ask user for input, as it will stop work
 
+## Current blocker summary
+
+- The main blocker is **real training data production**, not model tuning.
+- Current local real dataset is far too small to justify serious training/eval work:
+  - `data/argus/training_clips/`: `7` `.pt` clips
+  - source videos represented: `5`
+  - prepared split under `data/argus/training_dataset/`: `6` train clips, `1` val clip
+  - a validation set of `1` clip is not meaningful; any model metric from it is mostly noise.
+- Local raw-video inventory is larger than the current clip dataset:
+  - downloaded local videos under `data/videos/` smaller than `200MB`: `39`
+  - only a small subset has actually been turned into legal `.pt` clips so far
+- Therefore the correct dependency order is:
+  1. inventory and unblock real-video processing coverage
+  2. generate substantially more real `.pt` clips with PGN/timing/frame tensors
+  3. build a larger train/val split
+  4. only then do fresh training/eval and judge model quality
+- Any checkpoint or metric discussion before step 2/3 is provisional at best.
+
 ## Current architecture findings
 
 - `pipeline/` is the real-data ingestion, labeling, calibration, and evaluation stack. It is not the final Argus runtime model.
@@ -102,7 +120,22 @@ Under no circunstance ask user for input, as it will stop work
   - `OverlayClipGenerator.generate_clips()` now logs sampled-frame throughput and realtime factor for each processed video.
   - Added a steady-state benchmark in `tests/pipeline/test_overlay_sequence_reader.py` that requires the locked overlay reader cached path to sustain at least `1 fps`.
   - Local benchmark probe on the committed board fixture measured ~`12.45 fps` steady-state after the initial lock/read.
-- Inference validation is currently blocked by model quality, not tooling:
+- Dev-tools data visibility follow-up fixed on this branch:
+  - `/data` now defaults to a new **Real footage** tab instead of only exposing synthetic generation.
+  - The real-data view surfaces:
+    - current real clip stats from `data/argus/training_clips/`
+    - source-video count derived from generated clips
+    - local downloaded video inventory under `200MB`
+    - per-video readiness/blocker state (`ready`, `processed`, `needs calibration`, `rejected`, etc.)
+    - direct links back to `/videos/[videoId]/generate` and `/videos/[videoId]/calibrate`
+    - a background `Process 10 videos` action for the next eligible local real videos
+  - Real clip inspection now shows clip metadata (initial FEN, PGN moves, segment timing, etc.) in addition to tensors/frames.
+  - Browser validation:
+    - `http://localhost:3000/data` now shows `7` real clips, `5` source videos, `39` local downloaded videos under `200MB`, and `11` currently ready to process.
+    - Real clip cards open an inspector with real-footage metadata and frame grids.
+- Inference/model validation is currently blocked first by **dataset size/coverage**, and only secondarily by model quality:
+  - current real dataset is too small to support credible sign-off
+  - the old checkpoint/eval numbers are still useful as bug signals, but not as an honest assessment of the final approach
   - `make eval ARGS="--checkpoint outputs/2026-03-22/09-34-07/checkpoint_epoch0050.pt --num-clips 20 --batch-size 4 --device cpu"`
   - Result: `move_accuracy=0.0192`, `move_detection_f1=0.1124`, `avg_pgn_edit_distance=1.0000`, `avg_prefix_accuracy=0.0000`
   - The same run's training log already showed near-zero validation detection F1 across epochs, so the committed checkpoint itself is not good enough for an honest "model works" sign-off.
@@ -121,6 +154,29 @@ Under no circunstance ask user for input, as it will stop work
   - `make typecheck`
   - `make lint`
   - `make test`
+
+## Overlay piece-classifier runtime rewrite
+
+- Replaced the overlay DINOv2 per-square reader with a tiny ONNX CNN runtime in `pipeline/overlay/piece_classifier.py`.
+  - runtime now batches all 64 squares through one ONNX session instead of running DINOv2-base over 64 crops on CPU
+  - added lightweight empty-square suppression and king-count repair so ambiguous low-confidence piece hallucinations get dropped before FEN assembly
+  - preserved the existing public API (`classify_square_crops`, `classify_squares`, `read_board_with_grid`, `read_fen_with_grid`, `read_fen_from_frame`) so the rest of the overlay stack did not need architectural churn
+- Added `pipeline/overlay/square_classifier_model.py` and rewrote `scripts/train_piece_classifier.py` to train/export the tiny CNN directly to `weights/overlay/best.onnx`.
+  - removed the old overlay-specific DINO feature-cache path (`pipeline/overlay/feature_cache.py`)
+  - updated runtime asset preflight to require `weights/overlay/best.onnx`
+  - removed the unused committed overlay `.pt` checkpoints from `weights/overlay/`
+- Added regression coverage in `tests/pipeline/test_piece_classifier_runtime.py` for preprocessing + ONNX runtime plumbing.
+- Tightened the full-board read performance guard in `tests/pipeline/test_overlay_sequence_reader.py` from `<1.8s` to `<0.1s`.
+- Validation on this branch:
+  - targeted board/FEN/runtime tests pass:
+    - `pytest -q tests/pipeline/test_chess_positions.py tests/pipeline/test_overlay_fen_extraction.py tests/pipeline/test_overlay_sequence_reader.py::test_full_board_read_microbenchmark tests/pipeline/test_piece_classifier_runtime.py tests/pipeline/test_runtime_assets.py`
+  - local warm full-board read benchmark on `tests/fixtures/boards/` now measures ~`3.5ms` median after session warmup
+  - `python scripts/eval_chess_positions.py data/overlay/val --limit 500` now reports `495/500` boards correct (`99.0%`)
+  - `python -m pipeline.runtime_assets` now validates `weights/overlay/best.onnx`
+  - branch validation after the rewrite:
+    - `make typecheck` ✅
+    - `make lint` ✅
+    - `make test` ✅ (`479 passed, 22 skipped`)
 
 ## Calibration follow-up fixes
 
@@ -149,11 +205,20 @@ Under no circunstance ask user for input, as it will stop work
     - `make lint` ✅
     - `make typecheck` ✅
     - `make test` ✅ (`461 passed, 22 skipped`)
-- Latest branch validation after the trainer/loss fixes:
+- Latest branch validation after the data-page real-footage work:
   - `make lint` ✅
   - `make typecheck` ✅
-  - `make test` ✅ (`474 passed, 22 skipped`)
+  - `make test` ✅ (`477 passed, 22 skipped`)
 
+
+## Active dependency-unblocking plan
+
+1. Audit the `39` downloaded local videos under `200MB` and determine, for each one, why it is or is not currently convertible into training clips.
+   - expected failure modes: no approval row, no channel calibration, no clip-level calibration, overlay read instability, no legal move segment found
+2. Improve the pipeline/tooling so this audit is fast and repeatable from the CLI.
+3. Use the fixed pipeline to process as many eligible local videos as possible into `.pt` clips.
+4. Rebuild `data/argus/training_dataset/` once the clip count is materially larger.
+5. Only after that, run fresh training/eval on the expanded real dataset.
 
 # Validation of progress tasks
 

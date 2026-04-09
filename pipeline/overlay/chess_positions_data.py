@@ -84,14 +84,14 @@ def crop_board_squares(image: np.ndarray) -> list[list[np.ndarray]]:
 
 def sample_chess_positions_squares(
     data_dir: str | Path,
-    max_per_class: int = 1500,
+    max_per_class: int | dict[int, int] = 1500,
     size: int = 128,
     seed: int = 42,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Sample balanced per-class squares from chess-positions boards.
 
-    Scans boards until all 13 classes have *max_per_class* samples (or data
-    is exhausted).  Empty squares are subsampled to match piece classes.
+    Scans boards until all 13 classes hit their targets (or data is exhausted).
+    ``max_per_class`` can be a single integer or a per-class target dict.
 
     Returns ``(images, labels)`` where images are ``(N, size, size, 3)``
     uint8 BGR and labels are ``(N,)`` int64.
@@ -102,12 +102,18 @@ def sample_chess_positions_squares(
     rng.shuffle(files)
 
     per_class: dict[int, list[np.ndarray]] = {c: [] for c in range(NUM_CLASSES)}
-    target = max_per_class
+    if isinstance(max_per_class, int):
+        targets = {class_index: max_per_class for class_index in range(NUM_CLASSES)}
+    else:
+        targets = {
+            class_index: int(max_per_class.get(class_index, 0))
+            for class_index in range(NUM_CLASSES)
+        }
 
     scanned = 0
     for fname in files:
         # Stop early if all classes are full
-        if all(len(per_class[c]) >= target for c in range(NUM_CLASSES)):
+        if all(len(per_class[c]) >= targets[c] for c in range(NUM_CLASSES)):
             break
 
         path = data_dir / fname
@@ -127,7 +133,7 @@ def sample_chess_positions_squares(
         for r in range(8):
             for c in range(8):
                 cls = labels_grid[r][c]
-                if len(per_class[cls]) >= target:
+                if len(per_class[cls]) >= targets[cls]:
                     continue
                 sq = squares[r][c]
                 if size != SQ_SIZE:
@@ -157,8 +163,10 @@ def sample_chess_positions_squares(
 
     total = len(images_arr)
     logger.info(
-        "Sampled %d squares from %d boards (%d per class target)",
-        total, scanned, target,
+        "Sampled %d squares from %d boards (targets=%s)",
+        total,
+        scanned,
+        targets,
     )
     for cls in range(NUM_CLASSES):
         logger.info("  %6s: %d", CLASS_NAMES[cls], len(per_class[cls]))

@@ -21,7 +21,7 @@ GRID = GridResult(
     h_lines=list(range(0, SQ_SIZE * 8 + 1, SQ_SIZE)),
     sq_size=SQ_SIZE,
 )
-MAX_FULL_BOARD_READ_SECONDS = 1.8
+MAX_FULL_BOARD_READ_SECONDS = 0.1
 MIN_LOCKED_READER_STEADY_STATE_FPS = 1.0
 NUM_FULL_BOARD_READ_WARMUPS = 2
 NUM_FULL_BOARD_READ_SAMPLES = 3
@@ -275,8 +275,8 @@ def test_full_board_read_microbenchmark() -> None:
         sq_size=grid_info["v_lines"][1] - grid_info["v_lines"][0],
     )
 
-    # Torch CPU inference has a noticeable warmup phase for kernel selection and caches.
-    # Measure the steady-state median instead of a single noisy post-load sample.
+    # ONNX Runtime has a noticeable first-call warmup phase for session initialization.
+    # Measure the steady-state median instead of a single noisy cold sample.
     for _ in range(NUM_FULL_BOARD_READ_WARMUPS):
         warm = read_board_with_grid(frame, grid, detect_orientation=False)
         assert warm.fen == entry["fen"]

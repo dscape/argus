@@ -182,7 +182,7 @@ class TestSplitClipsCommand:
 
         cli.cmd_split_clips(
             SimpleNamespace(
-                clips_dir="data/argus/training_clips",
+                clips_dir="data/argus/train_real",
                 out_dir="data/argus/training_dataset",
                 val_fraction=0.2,
                 seed=42,
