@@ -134,7 +134,7 @@ cd dev-tools && npm install && npm run dev
 |--------|---------|--------------|
 | **All** | `make test` | Full suite |
 | **Chess core** | `pytest tests/test_move_vocabulary.py tests/test_chess_state_machine.py tests/test_constraint_mask.py -v` | Move vocabulary, state machine, constraint masking |
-| **Pipeline — overlay** | `pytest tests/pipeline/test_overlay_move_detector.py -v` | Overlay move detection (including hard cut detection) |
+| **Pipeline — overlay** | `pytest tests/pipeline/test_overlay_move_detector.py tests/pipeline/test_overlay_sequence_reader.py -v` | Overlay move detection, change gating, and hard cut detection |
 | **Pipeline — screening** | `pytest tests/pipeline/ -v` | Screening orchestration |
 
 ### Quick Smoke Tests (no DB required)
@@ -223,11 +223,12 @@ Hard cut detection splits clip segments when a video abruptly changes between ga
 python -m pipeline generate-clips --channel @STLChessClub --limit 1 -v
 
 # 3. Inspect a generated clip — verify move_confidence is present
-python -m pipeline inspect-clip --file data/argus/training_clips/overlay_VIDEO_ID_0.pt
+python -m pipeline inspect-clip --file data/argus/training_clips/clip_overlay_VIDEO_ID_0.pt
 
 # 4. Use the dev-tools Video Annotator (localhost:3000/videos/VIDEO_ID):
 #    - Open the video and run "Detect Moves"
 #    - Check that each move in the move list shows a confidence score
+#    - Verify that unchanged frames are skipped without losing legal moves
 #    - Verify that game segments are split at hard cuts (multiple segments shown)
 ```
 

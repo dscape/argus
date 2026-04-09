@@ -16,3 +16,20 @@ layouts:
     board_flipped: false
     board_theme: lichess_default
     move_delay_seconds: 2.0
+  '@AnnaCramling':
+    overlay:
+    - 711
+    - 0
+    - 531
+    - 546
+    camera:
+    - 576
+    - 708
+    - 738
+    - 318
+    ref_resolution:
+    - 1920
+    - 1080
+    board_flipped: true
+    board_theme: chess_com_green
+    move_delay_seconds: 2.0

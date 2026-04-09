@@ -100,11 +100,15 @@ def cmd_generate_clips(args):
             print(f"Video {args.video_id} not found in DB.")
             return
         channel_handle = row[0] or ""
-        video_path = get_video_path(args.video_id, channel_handle)
+        video_path = get_video_path(args.video_id)
         if video_path is None:
             print(f"Video {args.video_id} not downloaded.")
             return
-        results = generate_from_video(video_path, channel_handle=channel_handle)
+        results = generate_from_video(
+            video_path,
+            channel_handle=channel_handle,
+            min_moves_per_segment=args.min_moves,
+        )
         for r in results:
             print(f"  {r['filepath']} ({r['num_moves']} moves, {r['num_frames']} frames)")
         print(f"\nGenerated {len(results)} clip(s)")
@@ -140,12 +144,16 @@ def cmd_generate_clips(args):
 
     total_clips = 0
     for video_id, channel_handle in videos:
-        video_path = get_video_path(video_id, channel_handle)
+        video_path = get_video_path(video_id)
         if video_path is None:
             print(f"  Skipping {video_id}: not downloaded")
             continue
 
-        results = generate_from_video(video_path, channel_handle=channel_handle)
+        results = generate_from_video(
+            video_path,
+            channel_handle=channel_handle,
+            min_moves_per_segment=args.min_moves,
+        )
         if results:
             total_clips += len(results)
             for r in results:
@@ -929,6 +937,12 @@ def main():
     p.add_argument("--channel", type=str, default=None, help="Generate for specific channel")
     p.add_argument("--video-id", type=str, default=None, help="Generate for a single video by ID")
     p.add_argument("--limit", type=int, default=None, help="Max videos to process")
+    p.add_argument(
+        "--min-moves",
+        type=int,
+        default=5,
+        help="Minimum detected moves required to save a clip",
+    )
 
     # overlay-test
     p = subparsers.add_parser("overlay-test", help="Test overlay pipeline on a screenshot")

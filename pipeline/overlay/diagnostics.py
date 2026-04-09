@@ -247,6 +247,9 @@ def inspect_clip(
             # ── Replay validation ──
             print("Game replay validation:")
             board = chess.Board()
+            initial_board_fen = clip.get("initial_board_fen")
+            if isinstance(initial_board_fen, str):
+                board.set_board_fen(initial_board_fen)
             valid = True
             for i, (t, uci, _) in enumerate(moves_list):
                 try:

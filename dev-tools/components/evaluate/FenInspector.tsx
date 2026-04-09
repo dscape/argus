@@ -315,8 +315,8 @@ export default function FenInspector({
       {/* Controls */}
       <div className="flex gap-2 items-center flex-wrap">
         <span className="text-sm text-muted-foreground">
-          Samples from overlays:
-          <InfoIcon tip="Samples local synthetic/real overlay boards when available, and falls back to committed board fixtures so the inspector remains usable in a fresh clone." />
+          Samples from board fixtures:
+          <InfoIcon tip="Samples committed board-crop fixtures so this view isolates piece-classifier accuracy from full-frame overlay extraction. Runtime real-frame coverage lives on the Overlay evaluator." />
         </span>
         <input
           type="number"

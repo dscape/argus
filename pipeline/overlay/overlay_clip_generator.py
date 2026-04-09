@@ -17,7 +17,7 @@ import torch
 from pipeline.overlay.calibration import LayoutCalibration, get_calibration
 from pipeline.overlay.grid_detector import detect_grid
 from pipeline.overlay.overlay_move_detector import GameSegment, detect_moves
-from pipeline.overlay.piece_classifier import read_fen_with_grid
+from pipeline.overlay.sequence_reader import LockedOverlaySequenceReader
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +42,13 @@ class OverlayClipGenerator:
         self,
         output_dir: str = OUTPUT_DIR,
         base_fps: float = 2.0,
+        device: str = "cpu",
+        min_moves_per_segment: int = 5,
     ):
         self.output_dir = output_dir
         self.base_fps = base_fps
+        self.device = device
+        self.min_moves_per_segment = min_moves_per_segment
 
     def generate_clips(
         self,
@@ -103,6 +107,8 @@ class OverlayClipGenerator:
             f"sampling every {frame_skip} frames"
         )
 
+        sequence_reader: LockedOverlaySequenceReader | None = None
+
         current_frame = first_frame
         while current_frame < last_frame:
             cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
@@ -118,9 +124,15 @@ class OverlayClipGenerator:
             cx, cy, cw, ch = cal.camera
             camera_crop = frame[cy : cy + ch, cx : cx + cw]
 
-            # Read board from overlay
-            grid = detect_grid(overlay_crop)
-            fen = read_fen_with_grid(overlay_crop, grid) if grid else None
+            # Lock grid once, then use cheap per-square gating plus partial reads.
+            fen: str | None = None
+            if sequence_reader is None:
+                grid = detect_grid(overlay_crop)
+                if grid is not None:
+                    sequence_reader = LockedOverlaySequenceReader(grid, device=self.device)
+                    fen = sequence_reader.read(overlay_crop).fen
+            else:
+                fen = sequence_reader.read(overlay_crop).fen
 
             overlay_crops.append(overlay_crop)
             camera_crops.append(camera_crop)
@@ -137,6 +149,14 @@ class OverlayClipGenerator:
 
         readable = sum(1 for f in fens if f is not None)
         logger.info(f"Extracted {len(fens)} frames, {readable} readable FENs")
+        if sequence_reader is not None:
+            logger.info(
+                "Overlay read stats: %d full, %d partial, %d cached, %d suppressed",
+                sequence_reader.num_full_reads,
+                sequence_reader.num_partial_reads,
+                sequence_reader.num_cached_reads,
+                sequence_reader.num_suppressed_reads,
+            )
 
         # Detect moves from FEN sequence
         segments = detect_moves(
@@ -157,7 +177,7 @@ class OverlayClipGenerator:
         os.makedirs(self.output_dir, exist_ok=True)
 
         for game_idx, segment in enumerate(segments):
-            if segment.num_moves < 5:
+            if segment.num_moves < self.min_moves_per_segment:
                 logger.info(f"Skipping segment {game_idx}: only {segment.num_moves} moves")
                 continue
 
@@ -175,7 +195,7 @@ class OverlayClipGenerator:
 
             # Generate video_id from path if not provided
             vid = video_id or os.path.splitext(os.path.basename(video_path))[0]
-            filename = f"overlay_{vid}_{game_idx}.pt"
+            filename = f"clip_overlay_{vid}_{game_idx}.pt"
             filepath = os.path.join(self.output_dir, filename)
 
             torch.save(clip_data, filepath)
@@ -248,11 +268,40 @@ class OverlayClipGenerator:
             np.stack(resized)
         ).permute(0, 3, 1, 2).to(torch.uint8)  # (T, C, H, W)
 
+        delay_sample_steps = int(move_delay_seconds * fps / frame_skip) if move_delay_seconds > 0 else 0
+        delay_frame_offset = delay_sample_steps * frame_skip
+        frame_timestamps = torch.tensor(
+            [frame_idx / fps for frame_idx in segment_frame_indices],
+            dtype=torch.float32,
+        )
+
+        adjusted_move_frames = [
+            max(move.frame_idx - delay_frame_offset, segment.start_frame)
+            for move in segment.moves
+        ]
+        move_timestamps = torch.tensor(
+            [frame_idx / fps for frame_idx in adjusted_move_frames],
+            dtype=torch.float32,
+        )
+        initial_board_fen = segment.moves[0].fen_before if segment.moves else chess.STARTING_BOARD_FEN
+        clip_metadata = {
+            "initial_board_fen": initial_board_fen,
+            "pgn_moves": segment.pgn_moves,
+            "num_moves": segment.num_moves,
+            "move_ucis": [move.move_uci for move in segment.moves],
+            "move_sans": [move.move_san for move in segment.moves],
+            "frame_indices": torch.tensor(segment_frame_indices, dtype=torch.long),
+            "frame_timestamps_seconds": frame_timestamps,
+            "move_frame_indices": torch.tensor(adjusted_move_frames, dtype=torch.long),
+            "move_timestamps_seconds": move_timestamps,
+            "segment_start_time_seconds": float(segment.start_time),
+            "segment_end_time_seconds": float(segment.end_time),
+        }
+
         if VOCAB is None:
             return {
                 "frames": frames_tensor,
-                "pgn_moves": segment.pgn_moves,
-                "num_moves": segment.num_moves,
+                **clip_metadata,
             }
 
         from argus.chess.move_vocabulary import NO_MOVE_IDX
@@ -267,16 +316,13 @@ class OverlayClipGenerator:
         move_confidence = torch.ones(num_frames, dtype=torch.float32)
 
         # Build a map from frame index to move.
-        # Apply move delay: shift overlay-detected move timestamps backward
-        # so they align with when the move was actually played OTB.
-        delay_frames = int(move_delay_seconds * fps / frame_skip) if move_delay_seconds > 0 else 0
         move_frame_map = {}
-        for m in segment.moves:
-            adjusted_idx = max(m.frame_idx - delay_frames, segment.start_frame)
-            move_frame_map[adjusted_idx] = m
+        for adjusted_idx, move in zip(adjusted_move_frames, segment.moves):
+            move_frame_map[adjusted_idx] = move
 
         # Replay the game to generate legal masks
         board = chess.Board()
+        board.set_board_fen(initial_board_fen)
 
         for i, frame_idx in enumerate(segment_frame_indices):
             # Generate legal mask for current position
@@ -288,20 +334,26 @@ class OverlayClipGenerator:
                 m = move_frame_map[frame_idx]
                 uci = m.move_uci
                 idx = VOCAB.uci_to_index(uci) if VOCAB.contains(uci) else None
-                if idx is not None:
-                    move_targets[i] = idx
-                    detect_targets[i] = 1.0
-                    move_confidence[i] = m.confidence
+                if idx is None:
+                    logger.warning("Move %s missing from vocabulary at frame %d", uci, frame_idx)
+                    return None
+
+                move_targets[i] = idx
+                detect_targets[i] = 1.0
+                move_confidence[i] = m.confidence
 
                 # Push the move on the board
                 try:
                     move = chess.Move.from_uci(uci)
-                    if move in board.legal_moves:
-                        board.push(move)
-                    else:
-                        logger.warning(f"Move {uci} not legal at frame {frame_idx}")
                 except ValueError:
-                    logger.warning(f"Invalid UCI move: {uci}")
+                    logger.warning("Invalid UCI move: %s", uci)
+                    return None
+
+                if move not in board.legal_moves:
+                    logger.warning("Move %s not legal at frame %d", uci, frame_idx)
+                    return None
+
+                board.push(move)
 
         return {
             "frames": frames_tensor,
@@ -310,6 +362,7 @@ class OverlayClipGenerator:
             "legal_masks": legal_masks,
             "move_mask": move_mask,
             "move_confidence": move_confidence,
+            **clip_metadata,
         }
 
 
@@ -390,6 +443,7 @@ def generate_from_video(
     channel_handle: str,
     output_dir: str = OUTPUT_DIR,
     base_fps: float = 2.0,
+    min_moves_per_segment: int = 5,
 ) -> list[dict]:
     """Generate training clips from a video path or URL.
 
@@ -401,6 +455,7 @@ def generate_from_video(
         channel_handle: Channel handle for calibration lookup.
         output_dir: Output directory for .pt files.
         base_fps: Frame sampling rate.
+        min_moves_per_segment: Minimum detected moves required to save a clip.
 
     Returns:
         List of clip metadata dicts.
@@ -422,7 +477,11 @@ def generate_from_video(
     db_clips = _get_db_clips(video_id)
     if db_clips:
         logger.info(f"Using {len(db_clips)} clip(s) from DB for {video_id}")
-        generator = OverlayClipGenerator(output_dir=output_dir, base_fps=base_fps)
+        generator = OverlayClipGenerator(
+            output_dir=output_dir,
+            base_fps=base_fps,
+            min_moves_per_segment=min_moves_per_segment,
+        )
         results: list[dict] = []
         for clip_row in db_clips:
             cal = LayoutCalibration(
@@ -451,5 +510,9 @@ def generate_from_video(
         )
         return []
 
-    generator = OverlayClipGenerator(output_dir=output_dir, base_fps=base_fps)
+    generator = OverlayClipGenerator(
+        output_dir=output_dir,
+        base_fps=base_fps,
+        min_moves_per_segment=min_moves_per_segment,
+    )
     return generator.generate_clips(video_path, calibration, video_id=video_id)

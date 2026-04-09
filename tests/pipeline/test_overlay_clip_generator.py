@@ -34,20 +34,33 @@ def _make_game_segment(
 
     Returns (segment, all_frame_indices).
     """
-    board = chess.Board()
+    return _make_game_segment_from_board(
+        chess.Board(),
+        moves_uci,
+        frames_per_move=frames_per_move,
+        start_frame=start_frame,
+    )
+
+
+def _make_game_segment_from_board(
+    board: chess.Board,
+    moves_uci: list[str],
+    frames_per_move: int = 5,
+    start_frame: int = 0,
+) -> tuple[GameSegment, list[int]]:
     detected_moves = []
     frame_idx = start_frame
 
-    # Initial position frames
     all_frame_indices = list(range(frame_idx, frame_idx + frames_per_move))
     frame_idx += frames_per_move
 
+    working_board = board.copy()
     for uci in moves_uci:
         move = chess.Move.from_uci(uci)
-        san = board.san(move)
-        fen_before = board.board_fen()
-        board.push(move)
-        fen_after = board.board_fen()
+        san = working_board.san(move)
+        fen_before = working_board.board_fen()
+        working_board.push(move)
+        fen_after = working_board.board_fen()
 
         detected_moves.append(
             OverlayDetectedMove(
@@ -127,6 +140,36 @@ class TestBuildTrainingClip:
         assert frames.shape[2] == 224  # H
         assert frames.shape[3] == 224  # W
         assert frames.dtype == torch.uint8
+
+    def test_clip_includes_pgn_and_timing_metadata(self, generator):
+        segment, frame_indices = _make_game_segment(ITALIAN_GAME, frames_per_move=3)
+        camera_crops = _make_camera_crops(len(frame_indices))
+
+        clip = generator._build_training_clip(
+            camera_crops=camera_crops,
+            frame_indices=frame_indices,
+            segment=segment,
+            fps=30.0,
+        )
+
+        assert clip is not None
+        assert clip["pgn_moves"] == segment.pgn_moves
+        assert clip["move_ucis"] == ITALIAN_GAME
+        assert clip["move_sans"] == [move.move_san for move in segment.moves]
+        assert clip["num_moves"] == len(ITALIAN_GAME)
+        assert torch.equal(clip["frame_indices"], torch.tensor(frame_indices, dtype=torch.long))
+        assert torch.allclose(
+            clip["frame_timestamps_seconds"],
+            torch.tensor([idx / 30.0 for idx in frame_indices], dtype=torch.float32),
+        )
+        assert torch.equal(
+            clip["move_frame_indices"],
+            torch.tensor([move.frame_idx for move in segment.moves], dtype=torch.long),
+        )
+        assert torch.allclose(
+            clip["move_timestamps_seconds"],
+            torch.tensor([move.frame_idx / 30.0 for move in segment.moves], dtype=torch.float32),
+        )
 
     @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
     def test_move_target_indices_valid(self, generator):
@@ -230,6 +273,40 @@ class TestBuildTrainingClip:
 
         assert extracted_moves == ITALIAN_GAME
 
+    @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
+    def test_midgame_segment_uses_first_move_fen_before(self, generator):
+        board = chess.Board()
+        for uci in ["e2e4", "e7e5"]:
+            board.push(chess.Move.from_uci(uci))
+
+        segment, frame_indices = _make_game_segment_from_board(
+            board,
+            ["g1f3", "b8c6"],
+            frames_per_move=3,
+        )
+        camera_crops = _make_camera_crops(len(frame_indices))
+
+        clip = generator._build_training_clip(
+            camera_crops=camera_crops,
+            frame_indices=frame_indices,
+            segment=segment,
+            fps=30.0,
+        )
+
+        assert clip is not None
+        assert clip["initial_board_fen"] == board.board_fen()
+
+        detect = clip["detect_targets"]
+        targets = clip["move_targets"]
+        move_frames = (detect == 1.0).nonzero(as_tuple=True)[0]
+        extracted_moves = []
+        for frame_t in move_frames:
+            idx = targets[frame_t].item()
+            if idx != NO_MOVE_IDX:
+                extracted_moves.append(VOCAB.index_to_uci(idx))
+
+        assert extracted_moves == ["g1f3", "b8c6"]
+
     def test_short_segment_skipped(self, generator):
         """Segments with < 5 frames should return None."""
         segment, frame_indices = _make_game_segment(["e2e4"], frames_per_move=1)
@@ -243,6 +320,83 @@ class TestBuildTrainingClip:
         )
 
         assert clip is None
+
+    def test_custom_min_moves_allows_short_legal_segment(self, tmp_path):
+        generator = OverlayClipGenerator(output_dir=str(tmp_path), min_moves_per_segment=1)
+        segment, frame_indices = _make_game_segment(["e2e4"], frames_per_move=5)
+        camera_crops = _make_camera_crops(len(frame_indices))
+
+        clip = generator._build_training_clip(
+            camera_crops=camera_crops,
+            frame_indices=frame_indices,
+            segment=segment,
+            fps=30.0,
+        )
+
+        assert clip is not None
+        assert clip["num_moves"] == 1
+
+    @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
+    def test_illegal_segment_skipped(self, generator):
+        segment, frame_indices = _make_game_segment(["e1g1"], frames_per_move=5)
+        camera_crops = _make_camera_crops(len(frame_indices))
+
+        clip = generator._build_training_clip(
+            camera_crops=camera_crops,
+            frame_indices=frame_indices,
+            segment=segment,
+            fps=30.0,
+        )
+
+        assert clip is None
+
+    def test_clip_delay_metadata_matches_shifted_move_frames(self, generator):
+        segment, frame_indices = _make_game_segment(["e2e4", "e7e5"], frames_per_move=4)
+        frame_indices = [frame_idx * 2 for frame_idx in frame_indices]
+        for move in segment.moves:
+            move.frame_idx *= 2
+            move.timestamp_seconds = move.frame_idx / 8.0
+        segment.end_frame = frame_indices[-1]
+        camera_crops = _make_camera_crops(len(frame_indices))
+
+        clip = generator._build_training_clip(
+            camera_crops=camera_crops,
+            frame_indices=frame_indices,
+            segment=segment,
+            fps=8.0,
+            frame_skip=2,
+            move_delay_seconds=1.0,
+        )
+
+        assert clip is not None
+        assert torch.equal(
+            clip["move_frame_indices"],
+            torch.tensor([0, 8], dtype=torch.long),
+        )
+        assert torch.allclose(
+            clip["move_timestamps_seconds"],
+            torch.tensor([0.0, 1.0], dtype=torch.float32),
+        )
+
+    @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
+    def test_saved_clip_prefix_loads_with_argus_dataset(self, generator, tmp_path):
+        from argus.data.dataset import ArgusDataset
+
+        segment, frame_indices = _make_game_segment(ITALIAN_GAME, frames_per_move=3)
+        camera_crops = _make_camera_crops(len(frame_indices))
+        clip = generator._build_training_clip(
+            camera_crops=camera_crops,
+            frame_indices=frame_indices,
+            segment=segment,
+            fps=30.0,
+        )
+
+        assert clip is not None
+        clip_path = tmp_path / "clip_overlay_demo_0.pt"
+        torch.save(clip, clip_path)
+
+        dataset = ArgusDataset(tmp_path, clip_length=clip["frames"].shape[0])
+        assert len(dataset) == 1
 
     def test_fallback_format_without_argus(self, generator, monkeypatch):
         """Without argus, clip should have basic format."""

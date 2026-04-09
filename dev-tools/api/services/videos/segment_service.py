@@ -6,10 +6,7 @@ import time
 
 import cv2
 import numpy as np
-from pipeline.overlay.auto_calibration import (
-    _get_video_path,
-    propose_calibration_for_clip,
-)
+from pipeline.overlay.auto_calibration import _get_video_path, inspect_clip_calibration
 from pipeline.overlay.segmenter import segment_video_layouts
 
 from api.services.videos import crawl_service
@@ -24,6 +21,39 @@ def _frame_to_base64(frame: np.ndarray, max_width: int = 640) -> str:
         frame = cv2.resize(frame, (max_width, int(h * scale)))
     _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
     return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+def _annotate_calibration_preview(
+    frame: np.ndarray,
+    overlay_bbox: tuple[int, int, int, int] | None = None,
+    camera_bbox: tuple[int, int, int, int] | None = None,
+) -> np.ndarray:
+    annotated = frame.copy()
+    if overlay_bbox is not None:
+        ox, oy, ow, oh = overlay_bbox
+        cv2.rectangle(annotated, (ox, oy), (ox + ow, oy + oh), (0, 255, 0), 3)
+        cv2.putText(
+            annotated,
+            "Overlay",
+            (ox + 6, oy + 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (0, 255, 0),
+            2,
+        )
+    if camera_bbox is not None:
+        cx, cy, cw, ch = camera_bbox
+        cv2.rectangle(annotated, (cx, cy), (cx + cw, cy + ch), (255, 0, 0), 3)
+        cv2.putText(
+            annotated,
+            "OTB board",
+            (cx + 6, cy + 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (255, 0, 0),
+            2,
+        )
+    return annotated
 
 
 def auto_segment_video(
@@ -120,19 +150,34 @@ def auto_calibrate_clip(video_id: str, clip_id: int) -> dict:
     cap.release()
 
     ref_resolution = (vid_w, vid_h)
-    proposal = propose_calibration_for_clip(
+    inspection = inspect_clip_calibration(
         video_path,
         start_time=clip["start_time"],
         end_time=clip["end_time"],
         ref_resolution=ref_resolution,
     )
+    proposal = inspection.proposal
+
+    preview_b64 = None
+    if inspection.preview_frame is not None:
+        preview_b64 = _frame_to_base64(
+            _annotate_calibration_preview(
+                inspection.preview_frame,
+                overlay_bbox=inspection.overlay_bbox,
+                camera_bbox=proposal.camera if proposal is not None else None,
+            )
+        )
 
     if proposal is None:
         return {
             "clip_id": clip_id,
             "proposal": None,
             "applied": False,
-            "preview_frame_b64": None,
+            "preview_frame_b64": preview_b64,
+            "failure_reason": inspection.failure_reason,
+            "detected_overlay_bbox": list(inspection.overlay_bbox)
+            if inspection.overlay_bbox is not None
+            else None,
         }
 
     # Update the clip in the DB
@@ -143,31 +188,6 @@ def auto_calibrate_clip(video_id: str, clip_id: int) -> dict:
         "board_flipped": proposal.board_flipped,
         "board_theme": proposal.board_theme,
     })
-
-    # Generate preview frame with bboxes drawn
-    preview_b64 = None
-
-    cap = cv2.VideoCapture(video_path)
-    mid_time = (clip["start_time"] + (clip["end_time"] or 0)) / 2
-    cap.set(cv2.CAP_PROP_POS_MSEC, mid_time * 1000)
-    ret, frame = cap.read()
-    if ret:
-        annotated = frame.copy()
-        ox, oy, ow, oh = proposal.overlay
-        cv2.rectangle(annotated, (ox, oy), (ox + ow, oy + oh), (0, 255, 0), 3)
-        cv2.putText(
-            annotated, "Overlay", (ox + 6, oy + 28),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2,
-        )
-        cx, cy, cw, ch = proposal.camera
-        cv2.rectangle(annotated, (cx, cy), (cx + cw, cy + ch), (0, 0, 255), 3)
-        cv2.putText(
-            annotated, "OTB board", (cx + 6, cy + 28),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2,
-        )
-        preview_b64 = _frame_to_base64(annotated)
-
-    cap.release()
 
     return {
         "clip_id": clip_id,
@@ -182,4 +202,8 @@ def auto_calibrate_clip(video_id: str, clip_id: int) -> dict:
         },
         "applied": True,
         "preview_frame_b64": preview_b64,
+        "failure_reason": None,
+        "detected_overlay_bbox": list(inspection.overlay_bbox)
+        if inspection.overlay_bbox is not None
+        else None,
     }

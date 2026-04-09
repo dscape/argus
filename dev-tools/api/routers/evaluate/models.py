@@ -385,6 +385,7 @@ async def detect_one_overlay(body: ExtractOneRequest):
 class ClassifyFenRequest(BaseModel):
     video_id: str
     frame_name: str
+    image_b64: str | None = None
 
 
 @router.post("/overlay-test/extract-fen")
@@ -394,7 +395,10 @@ async def classify_overlay_fen(body: ClassifyFenRequest):
     Called after extract-detect returns a result with status 'detected'.
     """
     result = await run_in_threadpool(
-        overlay_test_service.classify_overlay_fen, body.video_id, body.frame_name
+        overlay_test_service.classify_overlay_fen,
+        body.video_id,
+        body.frame_name,
+        body.image_b64,
     )
     return result
 

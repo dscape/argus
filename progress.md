@@ -1,6 +1,6 @@
 # Progress
 
-## Current architecture findings (2026-04-08)
+## Current architecture findings
 
 - `pipeline/` is the real-data ingestion, labeling, calibration, and evaluation stack. It is not the final Argus runtime model.
 - The implemented parts in `pipeline/` are meaningful and already useful:
@@ -51,59 +51,79 @@
 - `src/argus/` should own the actual **camera-input multi-board model**.
 - The overlay pipeline should be treated as training-data infrastructure and supervision tooling, not as the final Argus runtime architecture.
 
-## Dev tools debugging notes (2026-04-08)
 
-- Reproduced the extract-page failure on `/videos/9h4IE1G99OE/extract`: the `Run Detection` click was firing, but the synchronous `POST /api/video/{session}/detect-moves` request sat behind the Next.js dev proxy until it failed with a 500 after roughly 5 minutes.
-- Root cause: move detection is a long-running CPU job in the dev-tools API, while the UI was waiting on a single proxied request. The button was not dead; the request was timing out at the proxy boundary before results could come back.
-- Implemented a background move-detection job flow for the extract page:
-  - added API endpoints to start a detection job and poll job status
-  - updated the extract UI to kick off detection asynchronously, show in-progress state, and render results once polling reports `done`
-  - kept the existing synchronous detect endpoint in place for direct callers
+
+## End-to-end validation notes
+- Training-clip generation blockers found during validation and fixed on this branch:
+  - `pipeline.cli generate-clips` still called `get_video_path()` with the old two-arg signature.
+  - generated clip filenames (`overlay_*.pt`) did not match `ArgusDataset`'s `clip_*.pt` glob.
+  - generated `.pt` clips were missing PGN / timing metadata.
+  - delay compensation mixed sampled-frame steps with raw frame indices.
+  - clip replay always started from the standard position, so mid-game segments produced invalid legal masks.
+  - invalid replay segments are now dropped instead of silently writing illegal move targets.
+- Real-video clip generation validated end-to-end on five local videos under 200MB, with `.pt` outputs that now include PGN, timestamps, and frame tensors:
+  - added an `@AnnaCramling` calibration to `configs/annotate/overlay_layouts.yaml` via `auto-calibrate --apply` so a fifth legal clip could be produced from local data.
+  - `2wWUKmCBr6A` → `data/argus/training_clips/clip_overlay_2wWUKmCBr6A_clip5_0.pt`
+  - `7RaBQag34Hk` → `data/argus/training_clips/clip_overlay_7RaBQag34Hk_clip26_0.pt`
+  - `vkoTN5DxRS0` → `data/argus/training_clips/clip_overlay_vkoTN5DxRS0_clip22_1.pt`
+  - `9h4IE1G99OE` → `data/argus/training_clips/clip_overlay_9h4IE1G99OE_clip69_1.pt`
+  - `YEjQAF0hbBs` → `data/argus/training_clips/clip_overlay_YEjQAF0hbBs_1.pt` (generated with `--min-moves 3` to allow a short but legal segment)
+  - all five inspect cleanly via `python -m pipeline.cli inspect-clip --file ...` and replay as legal games from their stored `initial_board_fen`.
+- Inference validation is currently blocked by model quality, not tooling:
+  - `make eval ARGS="--checkpoint outputs/2026-03-22/09-34-07/checkpoint_epoch0050.pt --num-clips 20 --batch-size 4 --device cpu"`
+  - Result: `move_accuracy=0.0192`, `move_detection_f1=0.1124`, `avg_pgn_edit_distance=1.0000`, `avg_prefix_accuracy=0.0000`
+  - The same run's training log already showed near-zero validation detection F1 across epochs, so the committed checkpoint itself is not good enough for an honest "model works" sign-off.
+
+## Dev-tools regression fixes
+
+- `/evaluate/overlay` no longer re-detects the overlay during the async FEN phase. The fast detect step now returns the exact refined board crop shown in the UI, and the classify/save calls reuse that same crop bytes.
+- Added a local square-crop refinement pass for overlay eval crops so header/sidebar padding gets trimmed before FEN reads. This restores the previously good starting-position reads on frames like `Ez4friJ-mjo/25pct` and `uR2l9SNF1FU/50pct`.
+- `/evaluate/fen` now samples committed board-crop fixtures only. That view is back to isolating piece-classifier accuracy; runtime full-frame real-data coverage stays on `/evaluate/overlay`.
+- Regression protection added in `tests/dev_tools/test_overlay_test_service.py` for:
+  - FEN fixture sampling ignoring ad-hoc local real crops
+  - overlay detect phase returning a refined board crop, not the full overlay widget
+  - async FEN classification reusing the provided crop instead of re-detecting from disk
+  - saving confirmed extractions from the exact crop shown in the UI
+- Validation after the fix:
+  - `make typecheck`
+  - `make lint`
+  - `make test`
+
+## Calibration follow-up fixes
+
+- Shared OTB auto-calibration path now retries the OTB YOLO detector at higher input resolution on misses instead of giving up after the default 640px pass.
+  - Root cause for `e4lGbQp4pU4` clip 70: overlay detection succeeded, but the OTB detector missed the small perspective board at 640 and recovered at 1280.
+  - Added regression coverage in `tests/pipeline/test_otb_yolo_detector.py` for the retry path.
+- Clip-level auto-calibration now returns failure diagnostics (`failure_reason`, detected overlay bbox, preview frame) so the UI can explain whether the miss was the overlay or the physical board.
+- Calibration page UX fixes:
+  - placeholder `0,0 100x100` camera boxes are treated as unset instead of being shown as if valid
+  - the editor now snaps to the selected clip's start frame once the video session is ready
+  - copy now tells the user to draw a tight blue box around the physical board only
+  - auto-calibration preview colors now match the editor (`green=overlay`, `blue=OTB board`)
 - Validation:
-  - `tests/dev_tools/test_video_annotation_service.py -q` passes with coverage for the new job lifecycle
-  - `make typecheck` passes
-  - `make lint` passes
-  - `make test` passes
-  - live proxy verification: starting detection now returns immediately with a job id and `status: "running"` instead of hanging
+  - browser-validated `http://localhost:3000/videos/e4lGbQp4pU4/calibrate`
+    - page now opens on clip start (`Frame 173 / 15446`, `5.8s`) instead of frame 0
+    - `Auto-Calibrate This Clip` now succeeds for clip 70
+    - resulting local clip calibration updated to overlay `[63, 6, 1045, 1074]`, camera `[1321, 878, 394, 179]`
+  - backend-validated shared evaluation path on the same clip:
+    - `api.services.evaluate.calibration_eval_service.inspect_calibration(70)` now returns `fresh_camera_bbox=[1320, 880, 396, 177]`
+    - `camera_iou=0.9839`
+- Validation caveat discovered while rerunning the full suite:
+  - `make lint` ✅
+  - `make typecheck` ✅
+  - `make test` ❌ because `tests/pipeline/test_overlay_sequence_reader.py::test_full_board_read_microbenchmark` now measures ~`2.24s` vs the current `<1.6s` threshold on this machine. This is unrelated to the calibration changes but needs follow-up before claiming the whole branch is green again.
 
-## Overlay bbox annotation notes (2026-04-08)
 
-- Updated `/annotate/bbox` so loading an unannotated frame now triggers a best-effort overlay suggestion automatically.
-- Implementation details:
-  - added a dev-tools API endpoint that runs the committed YOLO overlay detector on the selected frame
-  - auto-detected boxes are lightly normalized through the existing square/grid-alignment refinement helper before they are shown in the UI
-  - the page only auto-fills unannotated frames; saved annotations still load exactly as stored
-  - manual drawing remains the fallback and takes precedence over late detector responses
-  - `Save` and `No Overlay` now immediately advance to the next remaining unannotated frame, and the standalone `Next` button was removed
-- Validation:
-  - `python3 -m pytest tests/dev_tools/test_overlay_bbox_service.py -q` via `.venv/bin/python3` passes
-  - `make typecheck` passes
-  - `make lint` passes
-  - `make test` passes
+# Validation of progress tasks
 
-## Pending performance work (2026-04-08)
+To validate an item is concluded:
+1. make tests, make lint, make types
+2. you added new tests in @tests/ for the feature you implemented
+3. if performance oriented you added a test with minimum performance threshold so it doesnt degrade
+4. you updated @README.md and @CONTRIBUTING.md (if necessary)
 
-- Cheap move-change gate for extract-page detection is still missing.
-  - Current state: move detection still runs a full `read_overlay_crop(...)` on every sampled frame.
-  - Example cost: clip `69` for video `9h4IE1G99OE` produces `376` sampled frames at `2.0` FPS, and each sample pays for full-board reading work.
-  - Planned optimization:
-    - lock board geometry once from clip calibration instead of rediscovering it every sample
-    - compute cheap per-square visual deltas between samples
-    - only trigger expensive FEN reading on stable candidate transitions, likely when `2-4` squares change or on periodic resync frames
-  - Ask for tests when implementing:
-    - add unit tests for the per-square change gate and debounce / hysteresis logic
-    - add integration coverage showing that non-move frames are skipped while legal moves are still detected
-    - add regression coverage for castling, captures, noisy highlight animations, and false-positive avoidance
-
-- 64-square DINOv2 board reading path is much slower than it should be and needs dedicated optimization.
-  - Current concern: the overlay reader classifies all `64` squares through the DINOv2-based path and this is a major runtime bottleneck in extraction.
-  - Planned optimization areas:
-    - profile preprocessing vs encoder time vs per-square batching overhead
-    - confirm the `64`-square batch is actually using the fastest available path on CPU / MPS
-    - avoid redundant preprocessing and repeated grid work where the board geometry is stable
-    - consider lighter-weight square embeddings or a cheaper candidate filter before invoking the full classifier
-  - Ask for tests and benchmarks when implementing:
-    - add a repeatable microbenchmark for full 64-square board reads
-    - add before/after timing assertions or at least recorded benchmark output in `progress.md`
-    - keep accuracy regression tests for FEN extraction so speed work does not silently degrade board reads
-    - add more robust tests on failing cases and fix them. Running /evaluate/screening and /evaluate/fen often produce mistakes. Find at least 10 such mistakes and make sure they pass as tests in fixtures
+To validate you finished all items in this list make sure:
+1. tooling: the dev-tools ui is fully functioning
+2. training: you can progress 5 of the videos (pick ones less than 200mb) we have and process them end to end, and output training data (pt files) with PGN,
+timings, and board pictures
+3. inference: make sure you validate against videos (or synthetic data) (i.e. val/) that our model works

@@ -10,8 +10,9 @@ import numpy as np
 
 from pipeline.analysis.config import VideoAnalysisConfig
 from pipeline.overlay.grid_detector import detect_grid
-from pipeline.overlay.piece_classifier import read_fen_with_grid
+from pipeline.overlay.piece_classifier import BoardRead, read_board_with_grid, read_fen_with_grid
 from pipeline.overlay.scanner import detect_overlay_runtime
+from pipeline.overlay.sequence_reader import LockedOverlaySequenceReader
 
 logger = logging.getLogger(__name__)
 
@@ -38,28 +39,36 @@ class OverlayFrameReader:
     def __init__(self, config: VideoAnalysisConfig) -> None:
         self.config = config
         self._locked_bbox: tuple[int, int, int, int] | None = None
-        self._locked_grid = None
+        self._locked_reader: LockedOverlaySequenceReader | None = None
 
     def read(self, frame_rgb: np.ndarray) -> FrameReadResult:
         frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
-        if self._locked_bbox is not None and self._locked_grid is not None:
-            fen = self._read_locked(frame_bgr)
-            if _fen_looks_plausible(fen):
-                return FrameReadResult(fen=fen, method="overlay_locked")
+        if self._locked_bbox is not None and self._locked_reader is not None:
+            locked_result = self._read_locked(frame_bgr)
+            if _fen_looks_plausible(locked_result.fen):
+                return locked_result
             self._locked_bbox = None
-            self._locked_grid = None
+            self._locked_reader = None
 
         detection = detect_overlay_runtime(frame_bgr)
         if not detection.found or detection.bbox is None:
             return FrameReadResult(fen=None, method=None)
 
         read_result = _read_overlay_bbox(detection.bbox, frame_bgr, self.config)
-        if read_result.fen is None or read_result.grid is None:
+        if read_result.fen is None or read_result.grid is None or read_result.board_state is None:
+            return FrameReadResult(fen=None, method=None)
+
+        overlay_crop = _crop_bbox(frame_bgr, detection.bbox)
+        if overlay_crop is None:
             return FrameReadResult(fen=None, method=None)
 
         self._locked_bbox = detection.bbox
-        self._locked_grid = read_result.grid
+        self._locked_reader = LockedOverlaySequenceReader(
+            read_result.grid,
+            device=self.config.device,
+        )
+        self._locked_reader.seed(overlay_crop, read_result.board_state)
         logger.info(
             "Overlay locked: bbox=%s sq=%d h0=%d v0=%d",
             detection.bbox,
@@ -69,14 +78,16 @@ class OverlayFrameReader:
         )
         return FrameReadResult(fen=read_result.fen, method="overlay_runtime")
 
-    def _read_locked(self, frame_bgr: np.ndarray) -> str | None:
+    def _read_locked(self, frame_bgr: np.ndarray) -> FrameReadResult:
         assert self._locked_bbox is not None
-        assert self._locked_grid is not None
+        assert self._locked_reader is not None
 
         overlay_crop = _crop_bbox(frame_bgr, self._locked_bbox)
         if overlay_crop is None:
-            return None
-        return read_fen_with_grid(overlay_crop, self._locked_grid, device=self.config.device)
+            return FrameReadResult(fen=None, method=None)
+
+        result = self._locked_reader.read(overlay_crop)
+        return FrameReadResult(fen=result.fen, method=result.method)
 
 
 class HybridFrameReader(OverlayFrameReader):
@@ -143,6 +154,7 @@ def read_overlay_crop(
 class _OverlayCropRead:
     fen: str | None
     grid: object | None
+    board_state: BoardRead | None
 
 
 def _read_overlay_bbox(
@@ -152,17 +164,17 @@ def _read_overlay_bbox(
 ) -> _OverlayCropRead:
     overlay_crop = _crop_bbox(frame_bgr, bbox)
     if overlay_crop is None:
-        return _OverlayCropRead(fen=None, grid=None)
+        return _OverlayCropRead(fen=None, grid=None, board_state=None)
 
     grid = find_board_in_crop(overlay_crop)
     if grid is None:
-        return _OverlayCropRead(fen=None, grid=None)
+        return _OverlayCropRead(fen=None, grid=None, board_state=None)
 
-    fen = read_fen_with_grid(overlay_crop, grid, device=config.device)
-    if not _fen_looks_plausible(fen):
-        return _OverlayCropRead(fen=None, grid=None)
+    board_state = read_board_with_grid(overlay_crop, grid, device=config.device)
+    if not _fen_looks_plausible(board_state.fen):
+        return _OverlayCropRead(fen=None, grid=None, board_state=None)
 
-    return _OverlayCropRead(fen=fen, grid=grid)
+    return _OverlayCropRead(fen=board_state.fen, grid=grid, board_state=board_state)
 
 
 def _crop_bbox(

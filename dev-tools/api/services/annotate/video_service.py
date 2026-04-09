@@ -2,11 +2,14 @@
 
 import base64
 import collections
+import json
 import logging
 import os
 import threading
+import time
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import chess
@@ -15,13 +18,58 @@ import numpy as np
 
 from pipeline.analysis.board_reading import read_overlay_crop
 from pipeline.analysis.config import VideoAnalysisConfig
+from pipeline.overlay.grid_detector import detect_grid
+from pipeline.overlay.sequence_reader import LockedOverlaySequenceReader
 
 _FRAME_CACHE_MAX = 64
 logger = logging.getLogger(__name__)
 
+# ── Job persistence ─────────────────────────────────────────────────
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+_JOBS_FILE = _PROJECT_ROOT / "data" / ".job_state" / "move_detection_jobs.json"
+_jobs_lock = threading.Lock()
+_PERSIST_INTERVAL = 2.0  # seconds – debounce for progress ticks
+_last_persist_time: float = 0.0
+
 # Session storage
 _sessions: dict[str, dict[str, Any]] = {}
 _move_detection_jobs: dict[str, dict[str, Any]] = {}
+
+
+def _persist_jobs(force: bool = False) -> None:
+    """Write the jobs dict to disk. Caller MUST hold _jobs_lock."""
+    global _last_persist_time
+    now = time.monotonic()
+    if not force and (now - _last_persist_time) < _PERSIST_INTERVAL:
+        return
+    try:
+        _JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _JOBS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_move_detection_jobs, default=str))
+        os.replace(str(tmp), str(_JOBS_FILE))
+        _last_persist_time = now
+    except OSError:
+        logger.warning("Failed to persist job state to %s", _JOBS_FILE, exc_info=True)
+
+
+def _load_jobs() -> None:
+    """Restore jobs from disk on startup; mark orphaned running jobs as failed."""
+    global _move_detection_jobs
+    if not _JOBS_FILE.exists():
+        return
+    try:
+        data = json.loads(_JOBS_FILE.read_text())
+        for job in data.values():
+            if job.get("status") == "running":
+                job["status"] = "failed"
+                job["error"] = "Server restarted while job was running"
+        _move_detection_jobs.update(data)
+        logger.info("Restored %d job(s) from %s", len(data), _JOBS_FILE)
+    except (json.JSONDecodeError, OSError):
+        logger.warning("Could not load job state from %s", _JOBS_FILE, exc_info=True)
+
+
+_load_jobs()
 
 
 def open_video(video_path: str, channel_handle: str | None = None) -> dict:
@@ -218,6 +266,7 @@ def detect_moves(
     frame_indices: list[int] = []
     num_readable = 0
     config = VideoAnalysisConfig(reader_backend=reader_backend, scene_backend="none", device="cpu")
+    sequence_reader: LockedOverlaySequenceReader | None = None
 
     lock = session["lock"]
     for completed_samples, idx in enumerate(sample_indices, start=1):
@@ -233,10 +282,22 @@ def detect_moves(
 
         ox, oy, ow, oh = calibration.overlay
         overlay_img = frame[oy : oy + oh, ox : ox + ow]
-        read_result = read_overlay_crop(overlay_img, config)
-        fens.append(read_result.fen)
+        if reader_backend == "overlay":
+            fen: str | None = None
+            if sequence_reader is None:
+                grid = detect_grid(overlay_img)
+                if grid is not None:
+                    sequence_reader = LockedOverlaySequenceReader(grid, device=config.device)
+                    fen = sequence_reader.read(overlay_img).fen
+            else:
+                fen = sequence_reader.read(overlay_img).fen
+            read_fen = fen
+        else:
+            read_fen = read_overlay_crop(overlay_img, config).fen
+
+        fens.append(read_fen)
         frame_indices.append(idx)
-        if read_result.fen is not None:
+        if read_fen is not None:
             num_readable += 1
         if progress_callback is not None:
             progress_callback(completed_samples, total_samples, idx, num_readable)
@@ -332,20 +393,22 @@ def start_detect_moves_job(
     total_samples = len(context["sample_indices"])
 
     job_id = uuid.uuid4().hex[:12]
-    _move_detection_jobs[job_id] = {
-        "job_id": job_id,
-        "session_id": session_id,
-        "status": "running",
-        "sample_fps": sample_fps,
-        "clip_id": clip_id,
-        "reader_backend": reader_backend,
-        "error": None,
-        "result": None,
-        "total_samples": total_samples,
-        "completed_samples": 0,
-        "num_readable": 0,
-        "current_frame_idx": None,
-    }
+    with _jobs_lock:
+        _move_detection_jobs[job_id] = {
+            "job_id": job_id,
+            "session_id": session_id,
+            "status": "running",
+            "sample_fps": sample_fps,
+            "clip_id": clip_id,
+            "reader_backend": reader_backend,
+            "error": None,
+            "result": None,
+            "total_samples": total_samples,
+            "completed_samples": 0,
+            "num_readable": 0,
+            "current_frame_idx": None,
+        }
+        _persist_jobs(force=True)
 
     thread = threading.Thread(
         target=_run_detect_moves_job,
@@ -378,18 +441,22 @@ def _run_detect_moves_job(
                 num_readable,
             ),
         )
-        job = _move_detection_jobs.get(job_id)
-        if job is not None:
-            job["status"] = "done"
-            job["result"] = result
-            job["completed_samples"] = job["total_samples"]
-            job["num_readable"] = result["num_readable"]
+        with _jobs_lock:
+            job = _move_detection_jobs.get(job_id)
+            if job is not None:
+                job["status"] = "done"
+                job["result"] = result
+                job["completed_samples"] = job["total_samples"]
+                job["num_readable"] = result["num_readable"]
+            _persist_jobs(force=True)
     except Exception as exc:
         logger.exception("Move detection job %s failed", job_id)
-        job = _move_detection_jobs.get(job_id)
-        if job is not None:
-            job["status"] = "failed"
-            job["error"] = f"{type(exc).__name__}: {exc}"
+        with _jobs_lock:
+            job = _move_detection_jobs.get(job_id)
+            if job is not None:
+                job["status"] = "failed"
+                job["error"] = f"{type(exc).__name__}: {exc}"
+            _persist_jobs(force=True)
 
 
 def _update_detect_moves_job_progress(
@@ -400,36 +467,39 @@ def _update_detect_moves_job_progress(
     num_readable: int,
 ) -> None:
     """Update progress counters for a running move-detection job."""
-    job = _move_detection_jobs.get(job_id)
-    if job is None:
-        return
-    job["completed_samples"] = completed_samples
-    job["total_samples"] = total_samples
-    job["current_frame_idx"] = frame_idx
-    job["num_readable"] = num_readable
+    with _jobs_lock:
+        job = _move_detection_jobs.get(job_id)
+        if job is None:
+            return
+        job["completed_samples"] = completed_samples
+        job["total_samples"] = total_samples
+        job["current_frame_idx"] = frame_idx
+        job["num_readable"] = num_readable
+        _persist_jobs()
 
 
 def get_detect_moves_job(job_id: str, session_id: str | None = None) -> dict | None:
     """Return the current move-detection job status."""
-    job = _move_detection_jobs.get(job_id)
-    if job is None:
-        return None
-    if session_id is not None and job["session_id"] != session_id:
-        return None
+    with _jobs_lock:
+        job = _move_detection_jobs.get(job_id)
+        if job is None:
+            return None
+        if session_id is not None and job["session_id"] != session_id:
+            return None
 
-    return {
-        "job_id": job_id,
-        "status": job["status"],
-        "sample_fps": job["sample_fps"],
-        "clip_id": job["clip_id"],
-        "reader_backend": job["reader_backend"],
-        "error": job["error"],
-        "result": job["result"],
-        "total_samples": job["total_samples"],
-        "completed_samples": job["completed_samples"],
-        "num_readable": job["num_readable"],
-        "current_frame_idx": job["current_frame_idx"],
-    }
+        return {
+            "job_id": job_id,
+            "status": job["status"],
+            "sample_fps": job["sample_fps"],
+            "clip_id": job["clip_id"],
+            "reader_backend": job["reader_backend"],
+            "error": job["error"],
+            "result": job["result"],
+            "total_samples": job["total_samples"],
+            "completed_samples": job["completed_samples"],
+            "num_readable": job["num_readable"],
+            "current_frame_idx": job["current_frame_idx"],
+        }
 
 
 def generate_clips(session_id: str, clip_id: int | None = None) -> dict:

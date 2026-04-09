@@ -1,8 +1,13 @@
 """Tests for overlay_test_service sampling and candidate selection."""
 
+import base64
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
+import chess
+import cv2
+import numpy as np
 from api.services.evaluate import overlay_test_service
 
 
@@ -18,6 +23,34 @@ def _mock_db_conn(video_rows: list[tuple[str]]) -> tuple[MagicMock, MagicMock]:
     mock_conn_ctx.__enter__.return_value = mock_conn_ctx
     mock_conn_ctx.__exit__.return_value = False
     return mock_conn_ctx, mock_cursor
+
+
+def _encode_image_b64(image: np.ndarray) -> str:
+    ok, buf = cv2.imencode(".jpg", image)
+    assert ok
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+def _make_checkerboard_overlay(
+    *,
+    board_side: int = 320,
+    margin_left: int = 8,
+    margin_top: int = 10,
+    overlay_side: int = 340,
+) -> np.ndarray:
+    overlay = np.zeros((overlay_side, overlay_side, 3), dtype=np.uint8)
+    sq = board_side // 8
+    for row in range(8):
+        for col in range(8):
+            color = 220 if (row + col) % 2 == 0 else 80
+            y1 = margin_top + row * sq
+            x1 = margin_left + col * sq
+            overlay[y1 : y1 + sq, x1 : x1 + sq] = color
+    return overlay
+
+
+def _fail_if_called(_video_id: str, _frame_name: str):
+    raise AssertionError("should not load frame")
 
 
 class TestVideoHasUnsavedFrames:
@@ -112,6 +145,26 @@ class TestFixtureFallbacks:
 
         assert overlay_test_service.sample_board_filenames(limit=1) == ["fixture-board.jpeg"]
 
+    def test_sample_board_filenames_ignores_local_real_samples(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
+        synthetic_dir = tmp_path / "synthetic"
+        fixture_dir = tmp_path / "fixtures"
+        real_dir = tmp_path / "real"
+        synthetic_dir.mkdir()
+        fixture_dir.mkdir()
+        real_dir.mkdir()
+        (synthetic_dir / "synthetic-board.jpeg").write_bytes(b"fixture")
+        (real_dir / "real-board.jpeg").write_bytes(b"fixture")
+
+        monkeypatch.setattr(overlay_test_service, "CHESS_POSITIONS_TEST_DIR", synthetic_dir)
+        monkeypatch.setattr(overlay_test_service, "BOARD_FIXTURES_DIR", fixture_dir)
+        monkeypatch.setattr(overlay_test_service, "REAL_OVERLAY_TEST_DIR", real_dir)
+
+        assert overlay_test_service.sample_board_filenames(limit=5) == ["synthetic-board.jpeg"]
+
     def test_resolve_board_image_path_falls_back_to_fixture_boards(
         self,
         monkeypatch,
@@ -142,3 +195,99 @@ class TestFixtureFallbacks:
         monkeypatch.setattr(overlay_test_service, "find_frame", lambda *_args, **_kwargs: None)
 
         assert overlay_test_service._resolve_frame_path("fixture-video", "25pct") == frame_path
+
+
+class TestBoardCropReuse:
+    def test_detect_overlay_from_frames_returns_refined_board_crop(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
+        frame = np.zeros((400, 400, 3), dtype=np.uint8)
+        overlay = _make_checkerboard_overlay()
+        frame[20:360, 30:370] = overlay
+        frame_path = tmp_path / "frame.jpg"
+        assert cv2.imwrite(str(frame_path), frame)
+
+        monkeypatch.setattr(
+            overlay_test_service,
+            "detect_overlay_runtime",
+            lambda _frame: SimpleNamespace(found=True, bbox=(30, 20, 340, 340)),
+        )
+        monkeypatch.setattr(
+            overlay_test_service,
+            "_resolve_frame_path",
+            lambda _video_id, _frame_name: frame_path,
+        )
+        monkeypatch.setattr(overlay_test_service, "_get_saved_frame_keys", lambda: set())
+
+        result = overlay_test_service.detect_overlay_from_frames("video-1")
+
+        assert result["status"] == "detected"
+        crop = overlay_test_service._decode_image_b64(result["image_b64"])
+        assert crop.shape[0] < overlay.shape[0]
+        assert crop.shape[1] < overlay.shape[1]
+        assert abs(crop.shape[0] - 320) <= 12
+        assert abs(crop.shape[1] - 320) <= 12
+        assert result["overlay_detect_ms"] >= 0.0
+        assert result["grid_detect_ms"] >= 0.0
+
+    def test_classify_overlay_fen_uses_provided_board_image(self, monkeypatch) -> None:
+        board = np.full((320, 320, 3), 180, dtype=np.uint8)
+        image_b64 = _encode_image_b64(board)
+
+        monkeypatch.setattr(
+            overlay_test_service,
+            "_load_board_crop_for_video_frame",
+            _fail_if_called,
+        )
+        monkeypatch.setattr(
+            overlay_test_service,
+            "_read_board_crop_fen",
+            lambda _image: chess.STARTING_BOARD_FEN,
+        )
+
+        result = overlay_test_service.classify_overlay_fen(
+            "video-1",
+            "25pct",
+            image_b64=image_b64,
+        )
+
+        assert result["predicted_fen"] == chess.STARTING_BOARD_FEN
+        assert result["status"] == "ok"
+        assert result["piece_classify_ms"] >= 0.0
+
+    def test_save_confirmed_frame_extractions_uses_provided_board_image(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
+        board = np.full((320, 320, 3), 180, dtype=np.uint8)
+        image_b64 = _encode_image_b64(board)
+
+        monkeypatch.setattr(overlay_test_service, "REAL_OVERLAY_TEST_DIR", tmp_path)
+        monkeypatch.setattr(
+            overlay_test_service,
+            "_load_board_crop_for_video_frame",
+            _fail_if_called,
+        )
+
+        result = overlay_test_service.save_confirmed_frame_extractions(
+            [
+                {
+                    "video_id": "video-1",
+                    "frame_name": "25pct",
+                    "fen": chess.STARTING_BOARD_FEN,
+                    "image_b64": image_b64,
+                }
+            ]
+        )
+
+        assert result == {"saved": 1, "errors": []}
+        saved_path = (
+            tmp_path
+            / "f_video-1_25pct_rnbqkbnr-pppppppp-8-8-8-8-PPPPPPPP-RNBQKBNR.jpg"
+        )
+        saved = cv2.imread(str(saved_path), cv2.IMREAD_COLOR)
+        assert saved is not None
+        assert saved.shape[:2] == board.shape[:2]

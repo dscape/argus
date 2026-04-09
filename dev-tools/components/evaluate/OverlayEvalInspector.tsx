@@ -188,6 +188,7 @@ export default function OverlayEvalInspector({
               video_id: r.video_id,
               frame_name: r.frame_name,
               fen,
+              image_b64: r.image_b64,
             },
           ],
         }),
@@ -288,6 +289,7 @@ export default function OverlayEvalInspector({
               body: JSON.stringify({
                 video_id: videoId,
                 frame_name: frameName,
+                image_b64: result.image_b64,
               }),
             })
               .then((fenRes) => fenRes.json())

@@ -39,6 +39,10 @@ export function BboxDrawer({
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
+  useEffect(() => {
+    setCurrentBbox(existingBbox || null);
+  }, [existingBbox]);
+
   // Load image — abort previous fetches on new src
   useEffect(() => {
     setLoadError(false);

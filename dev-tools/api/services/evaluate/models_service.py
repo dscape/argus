@@ -805,7 +805,7 @@ def inspect_hard_cuts(video_id: str, sample_fps: float = 2.0) -> dict | None:
         count_fen_differences,
         detect_moves,
     )
-    from pipeline.overlay.piece_classifier import read_fen_with_grid
+    from pipeline.overlay.sequence_reader import LockedOverlaySequenceReader
 
     # Get channel for calibration
     with get_conn() as conn:
@@ -842,6 +842,7 @@ def inspect_hard_cuts(video_id: str, sample_fps: float = 2.0) -> dict | None:
     frame_skip = max(1, int(fps / sample_fps))
     fens = []
     frame_indices = []
+    sequence_reader: LockedOverlaySequenceReader | None = None
 
     current_frame = 0
     while current_frame < total_frames:
@@ -852,8 +853,14 @@ def inspect_hard_cuts(video_id: str, sample_fps: float = 2.0) -> dict | None:
 
         ox, oy, ow, oh = scaled_cal.overlay
         overlay_crop = frame[oy : oy + oh, ox : ox + ow]
-        grid = detect_grid(overlay_crop)
-        fen = read_fen_with_grid(overlay_crop, grid) if grid else None
+        fen: str | None = None
+        if sequence_reader is None:
+            grid = detect_grid(overlay_crop)
+            if grid is not None:
+                sequence_reader = LockedOverlaySequenceReader(grid)
+                fen = sequence_reader.read(overlay_crop).fen
+        else:
+            fen = sequence_reader.read(overlay_crop).fen
 
         fens.append(fen)
         frame_indices.append(current_frame)

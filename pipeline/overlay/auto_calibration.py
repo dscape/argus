@@ -40,6 +40,16 @@ class CalibrationProposal:
     orientation_confidence: float
 
 
+@dataclass
+class ClipCalibrationInspection:
+    """Detailed clip-level auto-calibration result for UI/debugging."""
+
+    proposal: CalibrationProposal | None
+    preview_frame: np.ndarray | None
+    overlay_bbox: tuple[int, int, int, int] | None = None
+    failure_reason: str | None = None
+
+
 def detect_board_theme(overlay_crop: np.ndarray) -> tuple[str, float]:
     """Detect which board theme matches the overlay by sampling square colors.
 
@@ -370,7 +380,11 @@ def propose_calibration(
         detection = detect_overlay_runtime(frame)
         if detection.found:
             bbox_area = detection.bbox[2] * detection.bbox[3] if detection.bbox else 0
-            best_area = best_detection.bbox[2] * best_detection.bbox[3] if best_detection and best_detection.bbox else 0
+            best_area = (
+                best_detection.bbox[2] * best_detection.bbox[3]
+                if best_detection and best_detection.bbox
+                else 0
+            )
             if bbox_area > best_area:
                 best_detection = detection
                 best_frame = frame
@@ -508,30 +522,22 @@ def propose_calibration_for_channel(
     )
 
 
-def propose_calibration_for_clip(
+def inspect_clip_calibration(
     video_path: str,
     start_time: float,
     end_time: float | None,
     num_samples: int = 5,
     ref_resolution: tuple[int, int] = DEFAULT_REF_RESOLUTION,
-) -> CalibrationProposal | None:
-    """Auto-propose calibration for a specific clip time range.
-
-    Unlike :func:`propose_calibration` (which samples fixed timestamps or
-    thumbnails), this operates on a specific ``[start_time, end_time]``
-    window of a downloaded video.
-
-    Args:
-        video_path: Path to the local video file.
-        start_time: Clip start in seconds.
-        end_time: Clip end in seconds (``None`` = end of video).
-        num_samples: Number of frames to sample within the clip.
-        ref_resolution: Target resolution for the returned bboxes.
-    """
+) -> ClipCalibrationInspection:
+    """Inspect clip-level auto-calibration and preserve failure diagnostics."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         logger.error(f"Cannot open video: {video_path}")
-        return None
+        return ClipCalibrationInspection(
+            proposal=None,
+            preview_frame=None,
+            failure_reason="video_open_failed",
+        )
 
     fps = max(cap.get(cv2.CAP_PROP_FPS), 1)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -543,7 +549,11 @@ def propose_calibration_for_clip(
 
     if clip_duration <= 0:
         cap.release()
-        return None
+        return ClipCalibrationInspection(
+            proposal=None,
+            preview_frame=None,
+            failure_reason="invalid_clip_range",
+        )
 
     # Evenly spaced timestamps within the clip, avoiding the very edges
     margin = min(5.0, clip_duration * 0.05)
@@ -570,16 +580,21 @@ def propose_calibration_for_clip(
 
     if not frames:
         logger.warning(f"No frames extracted from {video_path} [{start_time}-{clip_end}]")
-        return None
+        return ClipCalibrationInspection(
+            proposal=None,
+            preview_frame=None,
+            failure_reason="no_frames",
+        )
+
+    preview_frame = frames[len(frames) // 2][0]
 
     # Find the best overlay detection across sampled frames.
     # Try detect_overlay_runtime first (default YOLO detector).
     # Fall back to the legacy grid scan only if YOLO finds nothing on any frame.
     #
     # Score by overlay alignment (regularity × alternation × periodicity)
-    # rather than bbox area.  Max-area selection is fooled by oversized
-    # bboxes that extend past the actual board edge — they are a few
-    # pixels larger but score worse on grid alignment.
+    # rather than bbox area. Max-area selection is fooled by oversized bboxes
+    # that extend past the actual board edge.
     best_detection = None
     best_frame = None
     best_score = -1.0
@@ -602,9 +617,13 @@ def propose_calibration_for_clip(
     if best_detection is None:
         best_detection, best_frame = _grid_scan_frames(frames)
 
-    if best_detection is None or best_frame is None:
+    if best_detection is None or best_frame is None or best_detection.bbox is None:
         logger.info(f"No overlay detected in clip [{start_time:.0f}-{clip_end:.0f}]")
-        return None
+        return ClipCalibrationInspection(
+            proposal=None,
+            preview_frame=preview_frame,
+            failure_reason="overlay_not_found",
+        )
 
     frame_h, frame_w = best_frame.shape[:2]
     overlay_bbox = best_detection.bbox
@@ -618,7 +637,12 @@ def propose_calibration_for_clip(
     camera_bbox = compute_camera_bbox(all_frames, overlay_bbox)
     if camera_bbox is None:
         logger.info(f"No OTB board detected in clip [{start_time:.0f}-{clip_end:.0f}]")
-        return None
+        return ClipCalibrationInspection(
+            proposal=None,
+            preview_frame=best_frame,
+            overlay_bbox=overlay_bbox,
+            failure_reason="camera_not_found",
+        )
 
     ref_w, ref_h = ref_resolution
     if frame_w == ref_w and frame_h == ref_h:
@@ -628,7 +652,7 @@ def propose_calibration_for_clip(
         overlay_final = _scale_bbox(overlay_bbox, frame_w, frame_h, ref_w, ref_h)
         camera_final = _scale_bbox(camera_bbox, frame_w, frame_h, ref_w, ref_h)
 
-    return CalibrationProposal(
+    proposal = CalibrationProposal(
         overlay=overlay_final,
         camera=camera_final,
         ref_resolution=ref_resolution,
@@ -637,3 +661,26 @@ def propose_calibration_for_clip(
         theme_confidence=theme_conf,
         orientation_confidence=orient_conf,
     )
+    return ClipCalibrationInspection(
+        proposal=proposal,
+        preview_frame=best_frame,
+        overlay_bbox=overlay_bbox,
+    )
+
+
+def propose_calibration_for_clip(
+    video_path: str,
+    start_time: float,
+    end_time: float | None,
+    num_samples: int = 5,
+    ref_resolution: tuple[int, int] = DEFAULT_REF_RESOLUTION,
+) -> CalibrationProposal | None:
+    """Auto-propose calibration for a specific clip time range."""
+    inspection = inspect_clip_calibration(
+        video_path,
+        start_time,
+        end_time,
+        num_samples=num_samples,
+        ref_resolution=ref_resolution,
+    )
+    return inspection.proposal

@@ -73,7 +73,8 @@ class TestMoveDelaySynchronization:
         assert clip is not None
         detect = clip["detect_targets"]
         move_at = (detect == 1.0).nonzero(as_tuple=True)[0].tolist()
-        assert move_frame in move_at
+        actual_frames = clip["frame_indices"][move_at].tolist()
+        assert move_frame in actual_frames
 
     @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
     def test_delay_shifts_backward(self, generator):
@@ -96,9 +97,10 @@ class TestMoveDelaySynchronization:
         assert clip is not None
         detect = clip["detect_targets"]
         move_at = (detect == 1.0).nonzero(as_tuple=True)[0].tolist()
+        actual_frames = clip["frame_indices"][move_at].tolist()
         # Should be at frame 80 - 60 = 20
-        assert 20 in move_at
-        assert move_frame not in move_at
+        assert 20 in actual_frames
+        assert move_frame not in actual_frames
 
     @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
     def test_delay_clamps_to_start(self, generator):
@@ -121,19 +123,20 @@ class TestMoveDelaySynchronization:
         assert clip is not None
         detect = clip["detect_targets"]
         move_at = (detect == 1.0).nonzero(as_tuple=True)[0].tolist()
+        actual_frames = clip["frame_indices"][move_at].tolist()
         # Should clamp to frame 0 (start_frame)
-        assert 0 in move_at
+        assert 0 in actual_frames
 
     @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
     def test_frame_skip_affects_delay(self, generator):
         """frame_skip should be accounted for in delay calculation."""
-        total = 50
-        move_frame = 40
-        segment = _make_segment_with_one_move(move_frame, total)
-        frame_indices = list(range(total))
-        crops = _make_camera_crops(total)
+        total_actual_frames = 750
+        move_frame = 600
+        segment = _make_segment_with_one_move(move_frame, total_actual_frames)
+        frame_indices = list(range(0, total_actual_frames, 15))
+        crops = _make_camera_crops(len(frame_indices))
 
-        # 2s delay at 30fps with frame_skip=15 -> shift by int(2*30/15)=4 frames
+        # 2s delay at 30fps with frame_skip=15 -> shift by 4 sampled frames = 60 actual frames
         clip = generator._build_training_clip(
             camera_crops=crops,
             frame_indices=frame_indices,
@@ -146,5 +149,5 @@ class TestMoveDelaySynchronization:
         assert clip is not None
         detect = clip["detect_targets"]
         move_at = (detect == 1.0).nonzero(as_tuple=True)[0].tolist()
-        # Should be at frame 40 - 4 = 36
-        assert 36 in move_at
+        actual_frames = clip["frame_indices"][move_at].tolist()
+        assert 540 in actual_frames

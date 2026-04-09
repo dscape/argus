@@ -13,6 +13,7 @@ import os
 import random
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 import chess
@@ -25,8 +26,14 @@ from pipeline.overlay.chess_positions_data import (
     parse_fen_from_filename,
 )
 from pipeline.overlay.grid_detector import GridResult, detect_grid
-from pipeline.overlay.piece_classifier import classify_squares, read_fen_with_grid
-from pipeline.overlay.scanner import detect_overlay_runtime, runtime_overlay_check
+from pipeline.overlay.piece_classifier import class_grid_to_fen, read_fen_with_grid
+from pipeline.overlay.scanner import (
+    compute_alternation_strength,
+    compute_axis_aligned_periodicity,
+    compute_grid_regularity,
+    detect_overlay_runtime,
+    runtime_overlay_check,
+)
 from pipeline.paths import find_frame
 
 logger = logging.getLogger(__name__)
@@ -93,9 +100,9 @@ def _video_has_unsaved_frames(video_id: str, saved_keys: set[str]) -> bool:
     return False
 
 
-def _frame_to_base64(frame: np.ndarray, max_width: int = 400) -> str:
+def _frame_to_base64(frame: np.ndarray, max_width: int | None = 400) -> str:
     h, w = frame.shape[:2]
-    if w > max_width:
+    if max_width is not None and w > max_width:
         scale = max_width / w
         frame = cv2.resize(frame, (max_width, int(h * scale)))
     _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -179,6 +186,175 @@ def _diff_boards(predicted: chess.Board, expected: chess.Board) -> list[str]:
     return mismatches
 
 
+@dataclass(frozen=True)
+class BoardCropResult:
+    board_crop: np.ndarray
+    overlay_detect_ms: float
+    grid_detect_ms: float
+
+
+def _decode_image_b64(image_b64: str) -> np.ndarray:
+    image_bytes = base64.b64decode(image_b64)
+    buffer = np.frombuffer(image_bytes, np.uint8)
+    image = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("Could not decode image")
+    return image
+
+
+def _uniform_grid_for_image(image: np.ndarray) -> GridResult:
+    h, w = image.shape[:2]
+    sq_w = w / 8
+    sq_h = h / 8
+    sq_size = int(round((sq_w + sq_h) / 2))
+    return GridResult(
+        v_lines=[int(round(c * sq_w)) for c in range(9)],
+        h_lines=[int(round(r * sq_h)) for r in range(9)],
+        sq_size=sq_size,
+    )
+
+
+def _board_alignment_score(image: np.ndarray) -> float:
+    regularity = compute_grid_regularity(image)
+    frac, contrast = compute_alternation_strength(image)
+    periodicity = compute_axis_aligned_periodicity(image)
+    return regularity * frac * contrast * periodicity
+
+
+def _square_bbox_from_grid(
+    image_shape: tuple[int, ...],
+    grid: GridResult,
+) -> tuple[int, int, int, int]:
+    h, w = image_shape[:2]
+    gx1, gx2 = grid.v_lines[0], grid.v_lines[-1]
+    gy1, gy2 = grid.h_lines[0], grid.h_lines[-1]
+    side = max(gx2 - gx1, gy2 - gy1)
+    x = max(0, min(gx1, w - side))
+    y = max(0, min(gy1, h - side))
+    side = min(side, w - x, h - y)
+    return x, y, side, side
+
+
+def _initial_board_crop_seeds(
+    image: np.ndarray,
+    grid: GridResult | None,
+) -> list[tuple[int, int, int, int]]:
+    h, w = image.shape[:2]
+    side = min(h, w)
+    seeds = {
+        (0, 0, side, side),
+        (max(0, (w - side) // 2), max(0, (h - side) // 2), side, side),
+    }
+    if grid is not None:
+        seeds.add(_square_bbox_from_grid(image.shape, grid))
+    return list(seeds)
+
+
+def _refine_square_bbox(
+    image: np.ndarray,
+    seed_bbox: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    h, w = image.shape[:2]
+    seed_x, seed_y, seed_w, seed_h = seed_bbox
+    seed_side = min(seed_w, seed_h, h, w)
+    seed_x = max(0, min(seed_x, w - seed_side))
+    seed_y = max(0, min(seed_y, h - seed_side))
+
+    cell = max(1, seed_side // 8)
+    step = max(2, cell // 6)
+    size_slack = max(2, cell // 2)
+    side_min = max(64, seed_side - size_slack)
+    side_max = min(min(h, w), seed_side + size_slack)
+
+    best_bbox = (seed_x, seed_y, seed_side, seed_side)
+    best_score = _board_alignment_score(
+        image[seed_y : seed_y + seed_side, seed_x : seed_x + seed_side]
+    )
+
+    for side in range(side_min, side_max + 1, step):
+        min_x = max(0, seed_x - cell)
+        max_x = min(w - side, seed_x + cell)
+        min_y = max(0, seed_y - cell)
+        max_y = min(h - side, seed_y + cell)
+
+        for x in range(min_x, max_x + 1, step):
+            for y in range(min_y, max_y + 1, step):
+                score = _board_alignment_score(image[y : y + side, x : x + side])
+                if score > best_score:
+                    best_bbox = (x, y, side, side)
+                    best_score = score
+
+    return best_bbox
+
+
+def _extract_board_crop_from_overlay_crop(overlay_crop: np.ndarray) -> BoardCropResult | None:
+    if overlay_crop.size == 0:
+        return None
+
+    t_grid = time.monotonic()
+    grid = detect_grid(overlay_crop, allow_uniform=False)
+    grid_detect_ms = round((time.monotonic() - t_grid) * 1000, 1)
+
+    best_bbox: tuple[int, int, int, int] | None = None
+    best_score = -1.0
+    for seed in _initial_board_crop_seeds(overlay_crop, grid):
+        bbox = _refine_square_bbox(overlay_crop, seed)
+        x, y, side, _ = bbox
+        score = _board_alignment_score(overlay_crop[y : y + side, x : x + side])
+        if score > best_score:
+            best_bbox = bbox
+            best_score = score
+
+    if best_bbox is None:
+        return None
+
+    x, y, side, _ = best_bbox
+    board_crop = overlay_crop[y : y + side, x : x + side]
+    if board_crop.size == 0:
+        return None
+
+    return BoardCropResult(
+        board_crop=board_crop,
+        overlay_detect_ms=0.0,
+        grid_detect_ms=grid_detect_ms,
+    )
+
+
+def _extract_board_crop_from_frame(frame: np.ndarray) -> BoardCropResult | None:
+    t_overlay = time.monotonic()
+    det = detect_overlay_runtime(frame)
+    overlay_detect_ms = round((time.monotonic() - t_overlay) * 1000, 1)
+    if not det.found or det.bbox is None:
+        return None
+
+    bx, by, bw, bh = det.bbox
+    fh, fw = frame.shape[:2]
+    overlay_crop = frame[max(0, by):min(fh, by + bh), max(0, bx):min(fw, bx + bw)]
+    result = _extract_board_crop_from_overlay_crop(overlay_crop)
+    if result is None:
+        return None
+
+    return BoardCropResult(
+        board_crop=result.board_crop,
+        overlay_detect_ms=overlay_detect_ms,
+        grid_detect_ms=result.grid_detect_ms,
+    )
+
+
+def _read_board_crop_fen(board_crop: np.ndarray) -> str:
+    grid = _uniform_grid_for_image(board_crop)
+    return read_fen_with_grid(
+        board_crop,
+        grid,
+        device="cpu",
+        detect_orientation=True,
+    )
+
+
+def _piece_count_from_fen(fen: str) -> int:
+    return sum(1 for ch in fen if ch.isalpha())
+
+
 # ── Sampling ────────────────────────────────────────────────
 
 
@@ -186,12 +362,12 @@ def sample_board_filenames(
     limit: int = 20,
     exclude: list[str] | None = None,
 ) -> list[str]:
-    """Return random sample of board image filenames from the test set.
+    """Return random sample of committed board fixtures for FEN inspection.
 
-    Mixes synthetic (chess-positions) and real samples.  Real samples come
-    from pre-extracted overlay crops in ``test_real/`` (``real__`` prefix).
-    Up to 20% of the sample will be real when real data is available;
-    if not enough real samples exist the quota is filled with synthetic.
+    ``/evaluate/fen`` is meant to isolate piece-classifier accuracy from the
+    runtime overlay-cropping path. Real full-frame extraction is exercised in
+    ``/evaluate/overlay`` instead, so this sampler sticks to curated board
+    images with stable geometry.
     """
     if not CHESS_POSITIONS_TEST_DIR.exists():
         raise FileNotFoundError(
@@ -204,35 +380,16 @@ def sample_board_filenames(
     if not synthetic:
         synthetic = _list_image_filenames(BOARD_FIXTURES_DIR, exclude=exclude_set)
 
-    # Gather real samples from pre-extracted overlay crops
-    real = [
-        _REAL_PREFIX + name
-        for name in _list_image_filenames(REAL_OVERLAY_TEST_DIR, exclude=exclude_set)
-        if (_REAL_PREFIX + name) not in exclude_set
-    ]
-
-    real_quota = min(len(real), max(1, limit // 5))
-    synth_quota = limit - real_quota
-
-    chosen_real = random.sample(real, real_quota) if real_quota else []
-    chosen_synth = random.sample(synthetic, min(synth_quota, len(synthetic)))
-
-    combined = chosen_real + chosen_synth
-    random.shuffle(combined)
-    return combined
+    chosen = random.sample(synthetic, min(limit, len(synthetic)))
+    random.shuffle(chosen)
+    return chosen
 
 
 # ── Inspection ──────────────────────────────────────────────
 
 
 def inspect_board(filename: str) -> dict:
-    """Inspect a single board image: classify pieces and compare to ground truth.
-
-    Handles two sample types:
-    - Synthetic (chess-positions): fixed 50px grid, FEN from filename.
-    - Real crops (``real__`` prefix): detected grid, FEN from filename.
-    Both always produce ``match: bool`` and ``piece_accuracy: float``.
-    """
+    """Inspect a single board image: classify pieces and compare to ground truth."""
     is_real = filename.startswith(_REAL_PREFIX)
 
     if is_real:
@@ -241,35 +398,27 @@ def inspect_board(filename: str) -> dict:
         source = "real"
         stem = Path(actual_name).stem
         if stem.startswith("f_"):
-            # Frame-based: f_{video_id}_{frame_name}_{fen_hyphenated}
             _, _, expected_fen = _parse_frame_filename(stem)
         else:
-            # Legacy clip-based: r{clip_id}_{fen_hyphenated}
             fen_hyphenated = stem.split("_", 1)[1] if "_" in stem else stem
             expected_fen = fen_hyphenated.replace("-", "/")
-        image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     else:
         image_path = resolve_board_image_path(filename)
         source = "synthetic"
         expected_fen = parse_fen_from_filename(filename)
-        image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
 
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if image is None:
         raise ValueError(f"Could not read board image: {filename}")
 
-    # Step 1: overlay detection timing
     t_overlay = time.monotonic()
-    det = runtime_overlay_check(image)
+    runtime_overlay_check(image)
     overlay_detect_ms = round((time.monotonic() - t_overlay) * 1000, 1)
 
-    # Step 2: grid detection timing
-    t_grid = time.monotonic()
-    detected_grid = detect_grid(image)
-    grid_detect_ms = round((time.monotonic() - t_grid) * 1000, 1)
-
     if is_real:
-        if detected_grid is None:
-            elapsed_ms = overlay_detect_ms + grid_detect_ms
+        crop_result = _extract_board_crop_from_overlay_crop(image)
+        if crop_result is None:
+            elapsed_ms = overlay_detect_ms
             return {
                 "filename": filename,
                 "source": source,
@@ -277,28 +426,33 @@ def inspect_board(filename: str) -> dict:
                 "predicted_fen": None,
                 "match": False,
                 "piece_accuracy": 0.0,
-                "square_diffs": ["grid detection failed"],
+                "square_diffs": ["board crop refinement failed"],
                 "board_image_b64": _frame_to_base64(image),
                 "elapsed_ms": elapsed_ms,
                 "overlay_detect_ms": overlay_detect_ms,
-                "grid_detect_ms": grid_detect_ms,
+                "grid_detect_ms": 0.0,
                 "piece_classify_ms": 0.0,
-                "error": "grid detection failed",
+                "error": "board crop refinement failed",
             }
-        grid = detected_grid
+        board_image = crop_result.board_crop
+        grid_detect_ms = crop_result.grid_detect_ms
     else:
         if image.shape[:2] != (BOARD_SIZE, BOARD_SIZE):
             raise ValueError(f"Invalid board image size: {filename}")
-        grid = _GRID  # use fixed grid for accuracy on synthetic
+        board_image = image
+        grid_detect_ms = 0.0
 
-    # Step 3: piece classification timing
-    # detect_orientation=False for synthetic (always white-at-bottom);
-    # True for real (orientation unknown).
     t_classify = time.monotonic()
     try:
-        predicted_fen = read_fen_with_grid(
-            image, grid, device="cpu", detect_orientation=is_real
-        )
+        if is_real:
+            predicted_fen = _read_board_crop_fen(board_image)
+        else:
+            predicted_fen = read_fen_with_grid(
+                board_image,
+                _GRID,
+                device="cpu",
+                detect_orientation=False,
+            )
     except Exception as e:
         piece_classify_ms = round((time.monotonic() - t_classify) * 1000, 1)
         elapsed_ms = overlay_detect_ms + grid_detect_ms + piece_classify_ms
@@ -310,7 +464,7 @@ def inspect_board(filename: str) -> dict:
             "match": False,
             "piece_accuracy": 0.0,
             "square_diffs": [str(e)],
-            "board_image_b64": _frame_to_base64(image),
+            "board_image_b64": _frame_to_base64(board_image),
             "elapsed_ms": elapsed_ms,
             "overlay_detect_ms": overlay_detect_ms,
             "grid_detect_ms": grid_detect_ms,
@@ -336,7 +490,7 @@ def inspect_board(filename: str) -> dict:
         "match": len(mismatches) == 0,
         "piece_accuracy": round(piece_accuracy, 4),
         "square_diffs": mismatches,
-        "board_image_b64": _frame_to_base64(image),
+        "board_image_b64": _frame_to_base64(board_image),
         "elapsed_ms": elapsed_ms,
         "overlay_detect_ms": overlay_detect_ms,
         "grid_detect_ms": grid_detect_ms,
@@ -371,29 +525,10 @@ def _is_valid_fen_placement(fen: str) -> bool:
         return False
 
 
-
 def _build_fen_from_class_grid(class_grid: list[list[int]]) -> str:
-    """Build a FEN piece-placement string from a classify_squares grid."""
-    piece_map = {
-        1: "P", 2: "N", 3: "B", 4: "R", 5: "Q", 6: "K",
-        7: "p", 8: "n", 9: "b", 10: "r", 11: "q", 12: "k",
-    }
-    fen_rows = []
-    for row_squares in class_grid:
-        empties = 0
-        fen_row = ""
-        for cls in row_squares:
-            if cls == 0:
-                empties += 1
-            else:
-                if empties:
-                    fen_row += str(empties)
-                    empties = 0
-                fen_row += piece_map.get(cls, "?")
-        if empties:
-            fen_row += str(empties)
-        fen_rows.append(fen_row)
-    return "/".join(fen_rows)
+    """Build a piece-placement FEN from classifier class ids."""
+    fen, _ = class_grid_to_fen(class_grid, detect_orientation=False)
+    return fen
 
 
 def _get_saved_clip_ids() -> set[int]:
@@ -495,60 +630,49 @@ def get_extraction_candidates(
     return result
 
 
+def _iter_extractable_frame_names(video_id: str, saved_keys: set[str]) -> list[str]:
+    return [
+        frame_name
+        for frame_name in _EXTRACTION_FRAME_NAMES
+        if f"{video_id}:{frame_name}" not in saved_keys
+    ]
+
+
+def _load_board_crop_for_video_frame(
+    video_id: str,
+    frame_name: str,
+) -> BoardCropResult | None:
+    frame_path = _resolve_frame_path(video_id, frame_name)
+    if frame_path is None:
+        return None
+
+    frame = cv2.imread(str(frame_path))
+    if frame is None:
+        return None
+
+    return _extract_board_crop_from_frame(frame)
+
+
 def extract_overlay_from_frames(video_id: str) -> dict:
-    """Process one video's cached screening frames and return the best overlay.
-
-    Tries frames (25pct, 50pct, 75pct), preferring hi-res overlay frames
-    from fullres/hires tiers over low-res screening frames.
-
-    Pipeline per frame: ``detect_overlay_runtime`` (default YOLO detector,
-    padded to avoid clipping) → crop to bbox → ``detect_grid`` →
-    ``classify_squares`` → FEN.
-
-    Returns a dict with ``status`` of ``ok``, ``warning``, or ``no_overlay``.
-    """
+    """Process one video's cached screening frames and return the best overlay."""
     saved_keys = _get_saved_frame_keys()
 
     if not _video_has_frames(video_id):
         return {"video_id": video_id, "status": "no_overlay"}
 
-    for frame_name in _EXTRACTION_FRAME_NAMES:
-        if f"{video_id}:{frame_name}" in saved_keys:
-            continue
-        frame_path = _resolve_frame_path(video_id, frame_name)
-        if frame_path is None:
-            continue
-        frame = cv2.imread(str(frame_path))
-        if frame is None:
+    for frame_name in _iter_extractable_frame_names(video_id, saved_keys):
+        crop_result = _load_board_crop_for_video_frame(video_id, frame_name)
+        if crop_result is None:
             continue
 
-        det = detect_overlay_runtime(frame)
-        if not det.found or det.bbox is None:
-            continue
-
-        bx, by, bw, bh = det.bbox
-        fh, fw = frame.shape[:2]
-        crop = frame[max(0, by):min(fh, by + bh), max(0, bx):min(fw, bx + bw)]
-        if crop.size == 0:
-            continue
-
-        grid = detect_grid(crop)
-        if grid is None:
-            continue
-
-        # Tighten crop to just the chess grid
-        gx1, gx2 = grid.v_lines[0], grid.v_lines[-1]
-        gy1, gy2 = grid.h_lines[0], grid.h_lines[-1]
-        board_crop = crop[gy1:gy2, gx1:gx2]
-
+        t_classify = time.monotonic()
         try:
-            squares = grid.crop_squares(crop)
-            class_grid = classify_squares(squares)
-            fen = _build_fen_from_class_grid(class_grid)
+            fen = _read_board_crop_fen(crop_result.board_crop)
         except Exception:
             continue
+        piece_classify_ms = round((time.monotonic() - t_classify) * 1000, 1)
 
-        piece_count = sum(c != 0 for row in class_grid for c in row)
+        piece_count = _piece_count_from_fen(fen)
         if piece_count < 2:
             continue
 
@@ -557,8 +681,11 @@ def extract_overlay_from_frames(video_id: str) -> dict:
             "frame_key": frame_key,
             "video_id": video_id,
             "frame_name": frame_name,
-            "image_b64": _frame_to_base64(board_crop, max_width=400),
+            "image_b64": _frame_to_base64(crop_result.board_crop, max_width=None),
             "predicted_fen": fen,
+            "overlay_detect_ms": crop_result.overlay_detect_ms,
+            "grid_detect_ms": crop_result.grid_detect_ms,
+            "piece_classify_ms": piece_classify_ms,
         }
 
         if not _is_valid_fen_placement(fen):
@@ -573,45 +700,17 @@ def extract_overlay_from_frames(video_id: str) -> dict:
 
 
 def detect_overlay_from_frames(video_id: str) -> dict:
-    """Fast phase: detect overlay + grid, return crop image without FEN.
-
-    Uses ``detect_overlay_runtime`` which runs the default YOLO detector and
-    applies a small safety padding to the bbox. Returns immediately so the UI
-    can show the overlay crop while FEN classification happens asynchronously.
-    """
+    """Fast phase: detect overlay and return the exact board crop shown to the UI."""
     saved_keys = _get_saved_frame_keys()
 
     if not _video_has_frames(video_id):
         logger.info("detect_overlay: %s — no frames on disk", video_id)
         return {"video_id": video_id, "status": "no_overlay"}
 
-    for frame_name in _EXTRACTION_FRAME_NAMES:
-        if f"{video_id}:{frame_name}" in saved_keys:
+    for frame_name in _iter_extractable_frame_names(video_id, saved_keys):
+        crop_result = _load_board_crop_for_video_frame(video_id, frame_name)
+        if crop_result is None:
             continue
-        frame_path = _resolve_frame_path(video_id, frame_name)
-        if frame_path is None:
-            continue
-        frame = cv2.imread(str(frame_path))
-        if frame is None:
-            continue
-
-        det = detect_overlay_runtime(frame)
-        if not det.found or det.bbox is None:
-            continue
-
-        bx, by, bw, bh = det.bbox
-        fh, fw = frame.shape[:2]
-        crop = frame[max(0, by):min(fh, by + bh), max(0, bx):min(fw, bx + bw)]
-        if crop.size == 0:
-            continue
-
-        grid = detect_grid(crop)
-        if grid is None:
-            continue
-
-        gx1, gx2 = grid.v_lines[0], grid.v_lines[-1]
-        gy1, gy2 = grid.h_lines[0], grid.h_lines[-1]
-        board_crop = crop[gy1:gy2, gx1:gx2]
 
         frame_key = f"{video_id}:{frame_name}"
         logger.info("detect_overlay: %s — found in %s", video_id, frame_name)
@@ -619,7 +718,9 @@ def detect_overlay_from_frames(video_id: str) -> dict:
             "frame_key": frame_key,
             "video_id": video_id,
             "frame_name": frame_name,
-            "image_b64": _frame_to_base64(board_crop, max_width=400),
+            "image_b64": _frame_to_base64(crop_result.board_crop, max_width=None),
+            "overlay_detect_ms": crop_result.overlay_detect_ms,
+            "grid_detect_ms": crop_result.grid_detect_ms,
             "status": "detected",
         }
 
@@ -627,46 +728,42 @@ def detect_overlay_from_frames(video_id: str) -> dict:
     return {"video_id": video_id, "status": "no_overlay"}
 
 
-def classify_overlay_fen(video_id: str, frame_name: str) -> dict:
-    """Slow phase: run DINOv2 piece classification on a detected overlay.
+def classify_overlay_fen(
+    video_id: str,
+    frame_name: str,
+    image_b64: str | None = None,
+) -> dict:
+    """Slow phase: classify the exact board crop shown in the detect phase."""
+    if image_b64:
+        try:
+            board_crop = _decode_image_b64(image_b64)
+        except ValueError as e:
+            return {"status": "error", "warning": str(e)}
+    else:
+        crop_result = _load_board_crop_for_video_frame(video_id, frame_name)
+        if crop_result is None:
+            return {"status": "error", "warning": "Overlay crop not available"}
+        board_crop = crop_result.board_crop
 
-    Re-loads the frame and re-detects overlay + grid (~40ms overhead),
-    then runs ``classify_squares`` to produce FEN (~500ms+ on CPU).
-    """
-    frame_path = _resolve_frame_path(video_id, frame_name)
-    if frame_path is None:
-        return {"status": "error", "warning": "Frame not found on disk"}
-
-    frame = cv2.imread(str(frame_path))
-    if frame is None:
-        return {"status": "error", "warning": "Could not read frame"}
-
-    det = detect_overlay_runtime(frame)
-    if not det.found or det.bbox is None:
-        return {"status": "error", "warning": "Overlay not detected"}
-
-    bx, by, bw, bh = det.bbox
-    fh, fw = frame.shape[:2]
-    crop = frame[max(0, by):min(fh, by + bh), max(0, bx):min(fw, bx + bw)]
-    if crop.size == 0:
-        return {"status": "error", "warning": "Empty crop"}
-
-    grid = detect_grid(crop)
-    if grid is None:
-        return {"status": "error", "warning": "Grid detection failed"}
-
+    t_classify = time.monotonic()
     try:
-        squares = grid.crop_squares(crop)
-        class_grid = classify_squares(squares)
-        fen = _build_fen_from_class_grid(class_grid)
+        fen = _read_board_crop_fen(board_crop)
     except Exception as e:
         return {"status": "error", "warning": str(e)}
 
-    piece_count = sum(c != 0 for row in class_grid for c in row)
+    piece_classify_ms = round((time.monotonic() - t_classify) * 1000, 1)
+    piece_count = _piece_count_from_fen(fen)
     if piece_count < 2:
-        return {"status": "error", "warning": "Too few pieces detected"}
+        return {
+            "status": "error",
+            "warning": "Too few pieces detected",
+            "piece_classify_ms": piece_classify_ms,
+        }
 
-    result: dict = {"predicted_fen": fen}
+    result: dict = {
+        "predicted_fen": fen,
+        "piece_classify_ms": piece_classify_ms,
+    }
 
     if not _is_valid_fen_placement(fen):
         result["status"] = "warning"
@@ -678,12 +775,7 @@ def classify_overlay_fen(video_id: str, frame_name: str) -> dict:
 
 
 def save_confirmed_frame_extractions(confirmations: list[dict]) -> dict:
-    """Save user-confirmed frame overlay extractions to val_real/.
-
-    Each confirmation should have: video_id, frame_name, fen.
-    Re-reads the frame from disk, re-detects overlay, and saves the
-    grid-tightened crop as ``f_{video_id}_{frame_name}_{fen_hyphenated}.jpg``.
-    """
+    """Save user-confirmed frame overlay extractions to val_real/."""
     REAL_OVERLAY_TEST_DIR.mkdir(parents=True, exist_ok=True)
 
     saved = 0
@@ -693,38 +785,22 @@ def save_confirmed_frame_extractions(confirmations: list[dict]) -> dict:
         video_id = conf.get("video_id", "")
         frame_name = conf.get("frame_name", "")
         fen = conf.get("fen", "")
+        image_b64 = conf.get("image_b64")
         label = f"{video_id}:{frame_name}"
 
-        frame_path = _resolve_frame_path(video_id, frame_name)
-        if frame_path is None:
-            errors.append(f"{label}: frame not found on disk")
-            continue
+        if image_b64:
+            try:
+                board_crop = _decode_image_b64(image_b64)
+            except ValueError as e:
+                errors.append(f"{label}: {e}")
+                continue
+        else:
+            crop_result = _load_board_crop_for_video_frame(video_id, frame_name)
+            if crop_result is None:
+                errors.append(f"{label}: overlay crop not available")
+                continue
+            board_crop = crop_result.board_crop
 
-        frame = cv2.imread(str(frame_path))
-        if frame is None:
-            errors.append(f"{label}: could not read frame")
-            continue
-
-        det = detect_overlay_runtime(frame)
-        if not det.found or det.bbox is None:
-            errors.append(f"{label}: overlay not detected")
-            continue
-
-        bx, by, bw, bh = det.bbox
-        fh, fw = frame.shape[:2]
-        crop = frame[max(0, by):min(fh, by + bh), max(0, bx):min(fw, bx + bw)]
-        if crop.size == 0:
-            errors.append(f"{label}: empty crop")
-            continue
-
-        grid = detect_grid(crop)
-        if grid is None:
-            errors.append(f"{label}: grid detection failed")
-            continue
-
-        gx1, gx2 = grid.v_lines[0], grid.v_lines[-1]
-        gy1, gy2 = grid.h_lines[0], grid.h_lines[-1]
-        board_crop = crop[gy1:gy2, gx1:gx2]
         if board_crop.size == 0:
             errors.append(f"{label}: empty board crop")
             continue

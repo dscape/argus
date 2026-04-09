@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 import chess
 import cv2
@@ -18,7 +20,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from pipeline.overlay.grid_detector import find_board_in_frame
+from pipeline.overlay.grid_detector import GridResult, find_board_in_frame
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +79,18 @@ class PieceClassifier(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: (B, 3, 224, 224) → logits (B, 13)."""
-        with torch.no_grad():
+        with torch.inference_mode():
             features = self.encoder.forward_pooled(x)  # (B, 768)
         return self.head(features)
+
+
+@dataclass(frozen=True)
+class BoardRead:
+    """Classified board state for a known grid."""
+
+    fen: str
+    class_grid: list[list[int]]
+    flipped: bool
 
 
 # ---------------------------------------------------------------------------
@@ -87,22 +98,21 @@ class PieceClassifier(nn.Module):
 # ---------------------------------------------------------------------------
 
 
-def preprocess_squares_batch(squares: list[list[np.ndarray]]) -> torch.Tensor:
-    """Convert an 8×8 grid of BGR square crops to a (64, 3, 224, 224) tensor.
-
-    Batches all conversions and applies normalisation in one vectorised pass.
-    """
+def preprocess_square_crops(square_crops: Sequence[np.ndarray]) -> torch.Tensor:
+    """Convert BGR square crops to a normalised ``(N, 3, 224, 224)`` tensor."""
     resized: list[np.ndarray] = []
-    for r in range(8):
-        for c in range(8):
-            rgb = cv2.cvtColor(squares[r][c], cv2.COLOR_BGR2RGB)
-            resized.append(cv2.resize(rgb, (INPUT_SIZE, INPUT_SIZE)))
+    for crop in square_crops:
+        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        resized.append(cv2.resize(rgb, (INPUT_SIZE, INPUT_SIZE), interpolation=cv2.INTER_LINEAR))
 
-    # (64, 224, 224, 3) uint8 → (64, 3, 224, 224) float32
-    arr = np.stack(resized)  # (64, H, W, 3)
+    arr = np.stack(resized)
     tensor = torch.from_numpy(arr).float().permute(0, 3, 1, 2) / 255.0
-    tensor = (tensor - _NORM_MEAN) / _NORM_STD
-    return tensor
+    return (tensor - _NORM_MEAN) / _NORM_STD
+
+
+def preprocess_squares_batch(squares: list[list[np.ndarray]]) -> torch.Tensor:
+    """Convert an 8×8 grid of BGR square crops to a ``(64, 3, 224, 224)`` tensor."""
+    return preprocess_square_crops([squares[r][c] for r in range(8) for c in range(8)])
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +133,6 @@ def _get_model(device: str = "cpu") -> PieceClassifier:
     if weights_path.exists():
         state = torch.load(weights_path, map_location=device, weights_only=True)
         model.head.load_state_dict(state["head"])
-        # Log version if metadata exists
         meta_path = WEIGHTS_DIR / "metadata.json"
         if meta_path.exists():
             with open(meta_path) as f:
@@ -146,23 +155,36 @@ def _get_model(device: str = "cpu") -> PieceClassifier:
     return model
 
 
+def classify_square_crops(
+    square_crops: Sequence[np.ndarray],
+    device: str = "cpu",
+) -> list[int]:
+    """Classify a batch of square crops and return class ids."""
+    if not square_crops:
+        return []
+
+    model = _get_model(device)
+    input_tensor = preprocess_square_crops(square_crops).to(device)
+
+    with torch.inference_mode():
+        logits = model(input_tensor)
+    return logits.argmax(dim=1).cpu().tolist()
+
+
 def classify_squares(
     squares: list[list[np.ndarray]],
     device: str = "cpu",
 ) -> list[list[int]]:
     """Classify all 64 squares. Returns 8×8 grid of class indices (0–12)."""
-    model = _get_model(device)
-    input_tensor = preprocess_squares_batch(squares).to(device)
-
-    with torch.no_grad():
-        logits = model(input_tensor)  # (64, 13)
-    preds = logits.argmax(dim=1).cpu().tolist()
-
+    preds = classify_square_crops(
+        [squares[r][c] for r in range(8) for c in range(8)],
+        device=device,
+    )
     return [preds[r * 8 : (r + 1) * 8] for r in range(8)]
 
 
 # ---------------------------------------------------------------------------
-# Orientation detection
+# Orientation detection / FEN conversion
 # ---------------------------------------------------------------------------
 
 
@@ -207,29 +229,15 @@ def _detect_orientation(class_grid: list[list[int]]) -> bool:
     return _score(True) > _score(False)
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
-def read_fen_with_grid(
-    frame: np.ndarray,
-    grid: GridResult,
-    device: str = "cpu",
+def class_grid_to_fen(
+    class_grid: list[list[int]],
+    *,
+    flipped: bool | None = None,
     detect_orientation: bool = True,
-) -> str:
-    """Classify pieces given a known grid.  Returns piece-placement FEN.
-
-    Unlike :func:`read_fen_from_frame` this never returns ``None`` — the
-    caller provides a pre-validated grid.
-
-    Set *detect_orientation* to ``False`` when the board orientation is
-    known (e.g. chess-positions boards are always white-at-bottom).
-    """
-    squares = grid.crop_squares(frame)
-    class_grid = classify_squares(squares, device=device)
-
-    flipped = _detect_orientation(class_grid) if detect_orientation else False
+) -> tuple[str, bool]:
+    """Convert a classified 8×8 grid into piece-placement FEN."""
+    if flipped is None:
+        flipped = _detect_orientation(class_grid) if detect_orientation else False
 
     board = chess.Board(fen=None)
     for r in range(8):
@@ -243,7 +251,43 @@ def read_fen_with_grid(
                 sq = chess.square(7 - c, r)
             board.set_piece_at(sq, piece)
 
-    return board.board_fen()
+    return board.board_fen(), flipped
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def read_board_with_grid(
+    frame: np.ndarray,
+    grid: GridResult,
+    device: str = "cpu",
+    detect_orientation: bool = True,
+) -> BoardRead:
+    """Classify pieces given a known grid."""
+    squares = grid.crop_squares(frame)
+    class_grid = classify_squares(squares, device=device)
+    fen, flipped = class_grid_to_fen(
+        class_grid,
+        detect_orientation=detect_orientation,
+    )
+    return BoardRead(fen=fen, class_grid=class_grid, flipped=flipped)
+
+
+def read_fen_with_grid(
+    frame: np.ndarray,
+    grid: GridResult,
+    device: str = "cpu",
+    detect_orientation: bool = True,
+) -> str:
+    """Classify pieces given a known grid. Returns piece-placement FEN."""
+    return read_board_with_grid(
+        frame,
+        grid,
+        device=device,
+        detect_orientation=detect_orientation,
+    ).fen
 
 
 def read_fen_from_frame(

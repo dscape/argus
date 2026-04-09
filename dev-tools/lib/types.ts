@@ -489,4 +489,6 @@ export interface AutoCalibrateResponse {
   proposal: AutoCalibrateProposal | null;
   applied: boolean;
   preview_frame_b64: string | null;
+  failure_reason: string | null;
+  detected_overlay_bbox: [number, number, number, number] | null;
 }

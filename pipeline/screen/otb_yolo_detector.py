@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 MODEL_CODE_VERSION = "v1"
 WEIGHTS_DIR = PROJECT_ROOT / "weights" / "otb_yolo"
 DEFAULT_WEIGHTS_PATH = WEIGHTS_DIR / "best.pt"
+_RETRY_IMGSZS = (1280,)
 
 
 @lru_cache(maxsize=4)
@@ -45,18 +46,60 @@ def detect_otb_yolo(
     imgsz: int = 640,
     device: str = "auto",
 ) -> OTBDetection:
-    """Run YOLO detection and return the best OTB-board bbox, if any."""
-    from pipeline.screen.dual_region_detector import OTBDetection
+    """Run YOLO detection and return the best OTB-board bbox, if any.
 
+    The default 640px input can miss small, perspective OTB boards in wide
+    1080p shots. Retry once at a higher resolution on misses so calibration can
+    recover those clips without paying the larger cost on every frame.
+    """
     h, w = frame.shape[:2]
     resolution = (w, h)
 
     model = _load_model(str(_resolve_weights_path(weights_path)))
+    resolved_device = _resolve_device(device)
+
+    for candidate_imgsz in _candidate_imgszs(imgsz):
+        detection = _predict_otb_bbox(
+            model,
+            frame,
+            conf=conf,
+            imgsz=candidate_imgsz,
+            device=resolved_device,
+            resolution=resolution,
+        )
+        if detection.found:
+            return detection
+
+    from pipeline.screen.dual_region_detector import OTBDetection
+
+    return OTBDetection(found=False, frame_resolution=resolution)
+
+
+def _candidate_imgszs(imgsz: int) -> tuple[int, ...]:
+    candidates = [imgsz]
+    for retry_imgsz in _RETRY_IMGSZS:
+        if retry_imgsz > imgsz:
+            candidates.append(retry_imgsz)
+    return tuple(candidates)
+
+
+def _predict_otb_bbox(
+    model,
+    frame: np.ndarray,
+    *,
+    conf: float,
+    imgsz: int,
+    device: str,
+    resolution: tuple[int, int],
+):
+    from pipeline.screen.dual_region_detector import OTBDetection
+
+    h, w = frame.shape[:2]
     result = model.predict(
         source=frame,
         conf=conf,
         imgsz=imgsz,
-        device=_resolve_device(device),
+        device=device,
         max_det=1,
         verbose=False,
     )[0]

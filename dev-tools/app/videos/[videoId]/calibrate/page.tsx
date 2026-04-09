@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { toast } from "sonner";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import {
   videoFrameUrl,
@@ -12,6 +11,40 @@ import type { VideoClip, AutoCalibrateResponse } from "@/lib/types";
 import { BboxDrawer, type Bbox } from "@/components/videos/BboxDrawer";
 import { fmtTime } from "@/lib/format";
 import { useVideoWorkbench } from "../_context";
+
+function hasMeaningfulBbox(bbox: [number, number, number, number] | null | undefined): boolean {
+  if (!bbox) return false;
+  const [x, y, w, h] = bbox;
+  if (w <= 0 || h <= 0) return false;
+  return !(x === 0 && y === 0 && w === 100 && h === 100);
+}
+
+function toEditorBbox(bbox: [number, number, number, number] | null | undefined): Bbox | null {
+  if (!hasMeaningfulBbox(bbox)) return null;
+  if (!bbox) return null;
+  return { x: bbox[0], y: bbox[1], w: bbox[2], h: bbox[3] };
+}
+
+function formatBbox(label: string, bbox: Bbox | null, colorClass: string): JSX.Element {
+  return bbox ? (
+    <span className={`text-xs ${colorClass}`}>
+      {label}: {bbox.x},{bbox.y} {bbox.w}x{bbox.h}
+    </span>
+  ) : (
+    <span className="text-xs text-muted-foreground">{label}: not set</span>
+  );
+}
+
+function autoCalibrateErrorMessage(result: AutoCalibrateResponse): string {
+  switch (result.failure_reason) {
+    case "overlay_not_found":
+      return "Auto-calibration could not find the 2D overlay in this clip.";
+    case "camera_not_found":
+      return "Auto-calibration found the overlay but could not find the physical OTB board. Draw a tight blue box around the board and save.";
+    default:
+      return "Auto-calibration could not detect both the overlay and OTB board in this clip.";
+  }
+}
 
 export default function CalibratePage() {
   const { video, session, activeClips: clips, setClips, refreshClips, downloadStatus } = useVideoWorkbench();
@@ -33,10 +66,12 @@ export default function CalibratePage() {
     const clip = clips[idx];
     if (!clip) return;
     setSelectedIdx(idx);
-    setOverlayBbox({ x: clip.overlay_bbox[0], y: clip.overlay_bbox[1], w: clip.overlay_bbox[2], h: clip.overlay_bbox[3] });
-    setCameraBbox({ x: clip.camera_bbox[0], y: clip.camera_bbox[1], w: clip.camera_bbox[2], h: clip.camera_bbox[3] });
+    setOverlayBbox(toEditorBbox(clip.overlay_bbox));
+    setCameraBbox(toEditorBbox(clip.camera_bbox));
     setBoardTheme(clip.board_theme);
     setAutoCalPreview(null);
+    setError(null);
+    setSuccess(null);
     if (session && session.fps > 0) {
       setFrameIdx(Math.round(clip.start_time * session.fps));
     }
@@ -45,6 +80,21 @@ export default function CalibratePage() {
   useEffect(() => {
     if (clips.length > 0 && selectedIdx === null) selectClip(0);
   }, [clips, selectedIdx, selectClip]);
+
+  useEffect(() => {
+    if (selectedIdx === null || !session || session.fps <= 0) return;
+    const clip = clips[selectedIdx];
+    if (!clip) return;
+
+    const clipStartFrame = Math.round(clip.start_time * session.fps);
+    const clipEndFrame = clip.end_time != null
+      ? Math.round(clip.end_time * session.fps)
+      : session.total_frames - 1;
+
+    if (frameIdx < clipStartFrame || frameIdx > clipEndFrame) {
+      setFrameIdx(clipStartFrame);
+    }
+  }, [clips, frameIdx, selectedIdx, session]);
 
   const handleSaveClip = async () => {
     if (selectedIdx === null || !overlayBbox || !cameraBbox || !video) return;
@@ -78,14 +128,28 @@ export default function CalibratePage() {
       const result = await autoCalibrateClip(video.video_id, clipId);
       setAutoCalPreview(result);
       if (result.proposal) {
+        setClips((prev) => prev.map((clip) => (
+          clip.id === clipId
+            ? {
+                ...clip,
+                overlay_bbox: result.proposal!.overlay_bbox,
+                camera_bbox: result.proposal!.camera_bbox,
+                ref_resolution: result.proposal!.ref_resolution,
+                board_flipped: result.proposal!.board_flipped,
+                board_theme: result.proposal!.board_theme,
+              }
+            : clip
+        )));
+        if (selectedIdx !== null && clips[selectedIdx]?.id === clipId) {
+          setOverlayBbox(toEditorBbox(result.proposal.overlay_bbox));
+          setCameraBbox(toEditorBbox(result.proposal.camera_bbox));
+          setBoardTheme(result.proposal.board_theme);
+        }
         await refreshClips();
-        const updated = clips;
-        const idx = updated.findIndex((c) => c.id === clipId);
-        if (idx >= 0) selectClip(idx);
         setSuccess("Auto-calibrated");
         setTimeout(() => setSuccess(null), 3000);
       } else {
-        setError("Auto-calibration could not detect both the overlay and OTB board in this clip");
+        setError(autoCalibrateErrorMessage(result));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Auto-calibration failed");
@@ -108,7 +172,6 @@ export default function CalibratePage() {
       }
     }
     await refreshClips();
-    if (clips.length > 0) selectClip(0);
     setAutoCalAllRunning(false);
     setSuccess(`Auto-calibrated ${calibrated}/${clips.length} clips`);
     setTimeout(() => setSuccess(null), 5000);
@@ -168,7 +231,7 @@ export default function CalibratePage() {
             </div>
             <div className="text-[10px] text-muted-foreground">
               {c.overlay_bbox[2]}x{c.overlay_bbox[3]} overlay
-              {c.camera_bbox[2] > 100 && ` | ${c.camera_bbox[2]}x${c.camera_bbox[3]} cam`}
+              {hasMeaningfulBbox(c.camera_bbox) && ` | ${c.camera_bbox[2]}x${c.camera_bbox[3]} cam`}
             </div>
           </div>
         ))}
@@ -243,8 +306,9 @@ export default function CalibratePage() {
               >
                 OTB Board (blue)
               </button>
-              {overlayBbox && <span className="text-xs text-green-600">Overlay: {overlayBbox.x},{overlayBbox.y} {overlayBbox.w}x{overlayBbox.h}</span>}
-              {cameraBbox && <span className="text-xs text-blue-600">OTB Board: {cameraBbox.x},{cameraBbox.y} {cameraBbox.w}x{cameraBbox.h}</span>}
+              {formatBbox("Overlay", overlayBbox, "text-green-600")}
+              {formatBbox("OTB Board", cameraBbox, "text-blue-600")}
+              <span className="text-xs text-muted-foreground">Draw a tight blue box around the physical board only.</span>
             </div>
 
             <BboxDrawer
@@ -263,7 +327,11 @@ export default function CalibratePage() {
               <div className="space-y-3 border rounded-lg p-3">
                 <h4 className="text-xs font-medium text-muted-foreground">Auto-Calibration Preview</h4>
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1">Green = Overlay, Red = OTB board</p>
+                  <p className="text-xs text-muted-foreground mb-1">
+                    {autoCalPreview.proposal
+                      ? "Green = Overlay, Blue = OTB board"
+                      : "Green = detected overlay. If blue is missing, draw the OTB board manually and save."}
+                  </p>
                   <img
                     src={`data:image/jpeg;base64,${autoCalPreview.preview_frame_b64}`}
                     alt="Proposal"

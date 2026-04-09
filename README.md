@@ -208,7 +208,7 @@ python -m pipeline overlay-yolo-train        # Train detector; validate every ch
 python -m pipeline auto-calibrate --channel @NewChannel --apply
 
 make download          # Fetch approved videos via yt-dlp
-make generate-clips    # Overlay FEN reading + move detection → .pt training clips
+make generate-clips    # Overlay FEN reading + change-gated move detection → .pt training clips
 ```
 
 ## Quick Start: Dev Tools
@@ -338,7 +338,8 @@ graph TD
 | Module | What it does |
 |--------|-------------|
 | `scanner.py` | Runtime entry points `runtime_overlay_check()` and `detect_overlay_runtime()` use the committed YOLO detector. Legacy heuristic `fast_overlay_check()` / `detect_overlay_fast()` remain in the file for training-label tooling and detector bootstrapping. |
-| `piece_classifier.py` | DINOv2-based per-square piece classifier (99.83% accuracy). Classifies 64 squares in a single batch. |
+| `piece_classifier.py` | DINOv2-based per-square piece classifier (99.83% accuracy). Handles full-board reads and partial square reclassification for locked overlays. |
+| `sequence_reader.py` | Locks board geometry once, computes cheap per-square deltas, skips unchanged frames, and only re-reads candidate move transitions or periodic resync frames. |
 | `grid_detector.py` | Detects the 8x8 board grid using Sobel edge projection with HoughLinesP fallback. Handles borders and coordinate labels. |
 | `yolo_detector.py` | Loads the committed default YOLO overlay detector weights from `weights/overlay_yolo/`. |
 | `yolo_dataset.py` | Exports bbox training labels from `data/videos/ground_truth.json` and fixture labels into a YOLO dataset. |
@@ -346,7 +347,7 @@ graph TD
 | `overlay_move_detector.py` | Compares FENs across frames with a stability window. Uses python-chess to find the legal move transforming old FEN to new FEN. Detects game resets and hard cuts (>4 squares changed = board switch). Assigns per-move confidence scores. |
 | `calibration.py` | Stores per-channel layout configs: overlay crop, camera crop, reference resolution, board flip, board theme. Persisted in `configs/annotate/overlay_layouts.yaml`. |
 | `auto_calibration.py` | Auto-proposes calibration from YouTube thumbnails: detects board theme (color sampling), orientation (piece distribution), and camera region (largest non-overlay area). |
-| `overlay_clip_generator.py` | Combines camera crops with overlay-detected moves to produce `.pt` files. Includes broadcast delay compensation, per-move confidence scores. |
+| `overlay_clip_generator.py` | Combines camera crops with overlay-detected moves to produce `.pt` files. Uses locked-grid change gating, broadcast delay compensation, per-move confidence scores, and emits PGN/timing metadata alongside frame tensors. |
 | `diagnostics.py` | `test_image()`, `test_reader()`, `inspect_clip()` — inspection and debugging tools. |
 
 ### Screen Module Components
@@ -836,7 +837,7 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 | `calibrate` | — | Set overlay layout calibration for a channel | `--channel` (required), `--overlay x,y,w,h`, `--camera x,y,w,h`, `--resolution WxH`, `--flipped`, `--theme` |
 | `auto-calibrate` | — | Auto-propose calibration from screening data | `--channel` (required), `--video-id ID`, `--apply` |
 | `analyze-video` | — | Analyze a local video into PGN + annotated output | `VIDEO`, `--reader overlay\|hybrid`, `--scene none\|vlm`, `--fps`, `--device`, `--output` |
-| `generate-clips` | `make generate-clips` | Generate .pt training clips (with hard cut detection) | `--channel @Handle`, `--limit N` |
+| `generate-clips` | `make generate-clips` | Generate .pt training clips (with hard cut detection) | `--channel @Handle`, `--video-id ID`, `--limit N`, `--min-moves N` |
 
 ### Pipeline Domain — AI Screening
 
