@@ -3,6 +3,7 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 from api.services.data import clip_service
 
@@ -17,6 +18,26 @@ async def load_clip(clip_file: UploadFile = File(...)):
         clip_service.create_session,
         file_bytes,
         clip_file.filename or "clip.pt",
+    )
+    return {"session_id": session_id}
+
+
+class LoadFromPathRequest(BaseModel):
+    filepath: str
+
+
+@router.post("/load-from-path")
+async def load_clip_from_path(body: LoadFromPathRequest):
+    """Load a .pt clip from a server-side file path."""
+    import os
+    if not os.path.exists(body.filepath):
+        raise HTTPException(404, f"File not found: {body.filepath}")
+    with open(body.filepath, "rb") as f:
+        file_bytes = f.read()
+    session_id = await run_in_threadpool(
+        clip_service.create_session,
+        file_bytes,
+        os.path.basename(body.filepath),
     )
     return {"session_id": session_id}
 

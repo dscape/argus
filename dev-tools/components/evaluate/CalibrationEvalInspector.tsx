@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   LineChart,
   Line,
@@ -19,8 +20,16 @@ import {
   createCalibrationEvalSession,
   listCalibrationEvalSessions,
   updateCalibrationEvalPins,
+  getModelVersions,
+  calibrationSessionImageUrl,
   type CalibrationEvalSessionSummary,
 } from "@/lib/api";
+
+function imgSrc(val: string, sessionId: string | null): string {
+  if (val.length > 200) return `data:image/jpeg;base64,${val}`;
+  if (sessionId) return calibrationSessionImageUrl(sessionId, val);
+  return `data:image/jpeg;base64,${val}`;
+}
 
 interface EvalPoint {
   id: number;
@@ -83,12 +92,17 @@ export default function CalibrationEvalInspector({
     CalibrationEvalSessionSummary[]
   >([]);
   const [showSessionList, setShowSessionList] = useState(false);
+  const [modelVersion, setModelVersion] = useState<string | null>(null);
   const inspectedClipIds = useRef<Set<number>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const sessionListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchHistory();
+    getModelVersions().then((v) => {
+      const parts = [v.overlay_yolo, v.overlay, v.otb_yolo].filter(Boolean);
+      setModelVersion(parts.length > 0 ? parts.join(" / ") : null);
+    });
   }, []);
 
   useEffect(() => {
@@ -283,7 +297,7 @@ export default function CalibrationEvalInspector({
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       const msg = e instanceof Error ? e.message : "Unknown error";
-      alert(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -362,6 +376,11 @@ export default function CalibrationEvalInspector({
         >
           {loading ? "Inspecting..." : "Sample & Inspect"}
         </button>
+        {modelVersion && (
+          <span className="text-xs text-muted-foreground font-mono">
+            model: {modelVersion}
+          </span>
+        )}
 
         <div className="flex-1" />
 
@@ -439,9 +458,17 @@ export default function CalibrationEvalInspector({
         <div className="space-y-1">
           <div className="flex justify-between text-xs text-muted-foreground">
             <span>Inspecting clips...</span>
-            <span>
-              {progress.current}/{progress.total}
-            </span>
+            <div className="flex items-center gap-2">
+              <span>
+                {progress.current}/{progress.total}
+              </span>
+              <button
+                onClick={() => abortRef.current?.abort()}
+                className="px-2 py-0.5 rounded bg-destructive text-destructive-foreground text-xs hover:bg-destructive/90"
+              >
+                Stop
+              </button>
+            </div>
           </div>
           <div className="h-2 bg-muted rounded overflow-hidden">
             <div
@@ -454,12 +481,12 @@ export default function CalibrationEvalInspector({
         </div>
       )}
 
-      {/* Chart: accuracy over time */}
+      {/* Charts: accuracy + performance side-by-side */}
       {chartData.length >= 1 && (
-        <div className="grid gap-4 grid-cols-1">
+        <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
           <div className="border rounded-lg p-3">
             <h3 className="text-sm font-medium mb-2">
-              Calibration accuracy over time
+              Accuracy over time
             </h3>
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
@@ -501,6 +528,42 @@ export default function CalibrationEvalInspector({
                 <Line
                   type="monotone"
                   dataKey="accuracy"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                  activeDot={{ r: 5 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="border rounded-lg p-3">
+            <h3 className="text-sm font-medium mb-2">
+              Performance over time
+            </h3>
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                  width={40}
+                />
+                <Tooltip
+                  formatter={(value) => [`${value} clips/batch`, "Throughput"]}
+                  labelFormatter={(label, payload) => {
+                    const d = payload?.[0]?.payload;
+                    return `${label} (n=${d?.sample_size ?? "?"})`;
+                  }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="sample_size"
+                  name="Clips per batch"
                   stroke="currentColor"
                   strokeWidth={2}
                   dot={{ r: 3 }}
@@ -587,7 +650,7 @@ export default function CalibrationEvalInspector({
                       >
                         {r.frames?.[0]?.frame_b64 ? (
                           <img
-                            src={`data:image/jpeg;base64,${r.frames[0].frame_b64}`}
+                            src={imgSrc(r.frames[0].frame_b64, sessionId)}
                             alt={`clip ${r.clip_id}`}
                             className="w-full h-full object-cover"
                             loading="lazy"
@@ -599,23 +662,17 @@ export default function CalibrationEvalInspector({
                         )}
                         <div
                           className={`absolute inset-0 ${
-                            iou >= 0.8
-                              ? "bg-green-500/25"
-                              : iou >= 0.5
-                              ? "bg-yellow-500/25"
-                              : "bg-red-500/35"
+                            !needsPin ? "bg-green-500/25" : "bg-red-500/35"
                           }`}
                         />
                         <span
                           className={`absolute top-0 left-0 text-[9px] leading-none px-0.5 py-px ${
-                            iou >= 0.8
+                            !needsPin
                               ? "bg-green-500/80 text-white"
-                              : iou >= 0.5
-                              ? "bg-yellow-500/80 text-white"
                               : "bg-red-500/80 text-white"
                           }`}
                         >
-                          {(iou * 100).toFixed(0)}
+                          {!needsPin ? "\u2713" : "\u2717"}
                         </span>
                       </button>
                     );
@@ -731,7 +788,7 @@ function CalibrationResultCard({
       {middleFrame?.frame_b64 && (
         <div className="relative">
           <img
-            src={`data:image/jpeg;base64,${middleFrame.frame_b64}`}
+            src={imgSrc(middleFrame.frame_b64, sessionId)}
             alt={`clip ${r.clip_id} annotated frame`}
             className="w-full"
           />
@@ -754,7 +811,7 @@ function CalibrationResultCard({
         <div className="px-3 py-2 border-b">
           <p className="text-[10px] text-muted-foreground mb-1">Overlay crop</p>
           <img
-            src={`data:image/jpeg;base64,${middleFrame.crop_b64}`}
+            src={imgSrc(middleFrame.crop_b64, sessionId)}
             alt="overlay crop"
             className="max-h-32 rounded border"
           />

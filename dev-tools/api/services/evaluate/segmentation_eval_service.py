@@ -11,11 +11,13 @@ import logging
 import random
 import time
 import uuid
+from pathlib import Path
 
 import chess
 import cv2
 import numpy as np
 from pipeline.db.connection import get_conn
+from pipeline.paths import PROJECT_ROOT
 from pipeline.overlay.grid_detector import detect_grid
 from pipeline.overlay.piece_classifier import CLASS_TO_PIECE, classify_squares
 from pipeline.overlay.scanner import detect_overlay_runtime, runtime_overlay_check
@@ -23,8 +25,27 @@ from pipeline.overlay.segmenter import segment_video_layouts
 
 logger = logging.getLogger(__name__)
 
+_SESSION_IMAGES_DIR = PROJECT_ROOT / "data" / "eval_sessions"
+
 
 # ── Helpers ────────────────────────────────────────────────
+
+
+def _save_session_image(session_id: str, name: str, b64_data: str) -> str:
+    """Save a base64 image to disk and return the filename."""
+    out_dir = _SESSION_IMAGES_DIR / f"seg_{session_id}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{name}.jpg"
+    (out_dir / filename).write_bytes(base64.b64decode(b64_data))
+    return filename
+
+
+def get_session_image_path(session_id: str, filename: str) -> Path | None:
+    """Resolve a session image file path."""
+    if ".." in filename or "/" in filename:
+        return None
+    path = _SESSION_IMAGES_DIR / f"seg_{session_id}" / filename
+    return path if path.exists() else None
 
 
 def _get_video_path(video_id: str) -> str | None:
@@ -72,7 +93,7 @@ def _validate_segment_frame(
       The stored bbox already tells us where the board should be; we just
       verify it with the grid detector (fast, ~20ms) rather than re-scanning.
     - Otherwise, fall back to detect_overlay_runtime (the default YOLO detector).
-    - DINOv2 piece classification only runs when *run_piece_classify=True*
+    - Square classification only runs when *run_piece_classify=True*
       (disabled for non-middle frames to avoid running it on all 5 per segment).
     """
     thumb = _frame_to_base64(frame)
@@ -301,9 +322,9 @@ def inspect_segmentation(video_id: str) -> dict:
 
     all_tasks: list[dict] = []
 
-    # DINOv2 budget: limit piece classification to at most 1 segment per video.
-    # DINOv2 takes 3–4s per call on CPU; running it once per video is sufficient
-    # for the eval metric while keeping the overall eval time manageable.
+    # Classification budget: limit piece classification to at most 1 segment per video.
+    # Even with the tiny ONNX model, one segment per video is enough for this eval metric
+    # and keeps the overall eval time predictable.
     piece_classify_budget = 1
 
     for i, seg in enumerate(segments):
@@ -313,7 +334,7 @@ def inspect_segmentation(video_id: str) -> dict:
         # 5 evenly-spaced frames at 0%, 25%, 50%, 75%, 100%
         for k in range(5):
             t = seg.start_time + dur * k / 4
-            # Only allow DINOv2 for the middle frame of the first segment.
+            # Only allow classification for the middle frame of the first segment.
             is_mid = k == 2 and piece_classify_budget > 0
             if is_mid:
                 piece_classify_budget -= 1
@@ -507,11 +528,11 @@ def inspect_segmentation(video_id: str) -> dict:
         if total_gap_frames > 0
         else 1.0
     )
-    # Per-segment piece readability: fraction of segments where the DINOv2-evaluated
-    # middle frame produced a valid FEN.  This is meaningful even with a budget cap
-    # (1 DINOv2 call per video) because we always evaluate exactly the middle frame
+    # Per-segment piece readability: fraction of segments where the evaluated
+    # middle frame produced a valid FEN. This is meaningful even with a budget cap
+    # (1 classifier call per video) because we always evaluate exactly the middle frame
     # of the first segment, so the ratio reflects real classification success rather
-    # than being diluted by frames that never ran DINOv2.
+    # than being diluted by frames that never ran piece classification.
     segments_with_piece_eval = sum(
         1 for seg in segment_results if seg.get("piece_eval_ran")
     )
@@ -644,16 +665,49 @@ def create_segmentation_eval_session(
     """Create and persist a segmentation eval session."""
     session_id = uuid.uuid4().hex[:12]
 
-    # Strip heavy image data for storage
+    # Save images to disk and replace base64 with filenames
     lightweight = []
-    for r in results:
+    for ri, r in enumerate(results):
         entry = dict(r)
-        # Strip thumbnails from segments within each video result
+        vid = entry.get("video_id", f"v{ri}")
         if "segments" in entry:
-            entry["segments"] = [
-                {k: v for k, v in seg.items() if k != "thumbnail_b64"}
-                for seg in entry["segments"]
-            ]
+            saved_segs = []
+            for si, seg in enumerate(entry["segments"]):
+                seg = dict(seg)
+                if seg.get("thumbnail_b64"):
+                    seg["thumbnail_b64"] = _save_session_image(
+                        session_id, f"{vid}_seg{si}", seg["thumbnail_b64"]
+                    )
+                # Also save frame thumbnails within segments
+                if "frames" in seg:
+                    saved_frames = []
+                    for fi, fr in enumerate(seg["frames"]):
+                        fr = dict(fr)
+                        if fr.get("thumbnail_b64"):
+                            fr["thumbnail_b64"] = _save_session_image(
+                                session_id, f"{vid}_seg{si}_f{fi}", fr["thumbnail_b64"]
+                            )
+                        saved_frames.append(fr)
+                    seg["frames"] = saved_frames
+                saved_segs.append(seg)
+            entry["segments"] = saved_segs
+        # Also handle gap frame thumbnails
+        if "gaps" in entry:
+            saved_gaps = []
+            for gi, gap in enumerate(entry["gaps"]):
+                gap = dict(gap)
+                if "frames" in gap:
+                    saved_frames = []
+                    for fi, fr in enumerate(gap["frames"]):
+                        fr = dict(fr)
+                        if fr.get("thumbnail_b64"):
+                            fr["thumbnail_b64"] = _save_session_image(
+                                session_id, f"{vid}_gap{gi}_f{fi}", fr["thumbnail_b64"]
+                            )
+                        saved_frames.append(fr)
+                    gap["frames"] = saved_frames
+                saved_gaps.append(gap)
+            entry["gaps"] = saved_gaps
         lightweight.append(entry)
 
     with get_conn() as conn:

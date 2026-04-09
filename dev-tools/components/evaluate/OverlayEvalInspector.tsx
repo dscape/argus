@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   LineChart,
   Line,
@@ -17,6 +18,7 @@ import {
   createOverlayEvalSession,
   listOverlayEvalSessions,
   updateOverlayEvalPins,
+  getModelVersions,
   type OverlayEvalResult,
   type OverlayEvalSession,
 } from "@/lib/api";
@@ -88,6 +90,7 @@ export default function OverlayEvalInspector({
   );
   const [showSessionList, setShowSessionList] = useState(false);
   const [emptyMessage, setEmptyMessage] = useState<string | null>(null);
+  const [modelVersion, setModelVersion] = useState<string | null>(null);
 
   // Save/reject/edit state
   const [editedFens, setEditedFens] = useState<Record<string, string>>({});
@@ -100,6 +103,10 @@ export default function OverlayEvalInspector({
 
   useEffect(() => {
     fetchHistory();
+    getModelVersions().then((v) => {
+      const parts = [v.overlay_yolo, v.overlay].filter(Boolean);
+      setModelVersion(parts.length > 0 ? parts.join(" / ") : null);
+    });
   }, []);
 
   useEffect(() => {
@@ -196,12 +203,12 @@ export default function OverlayEvalInspector({
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       if (data.errors?.length > 0) {
-        alert(data.errors.join("\n"));
+        toast.error(data.errors.join("\n"));
       } else {
         setSaved((prev) => new Set(prev).add(key));
       }
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to save");
+      toast.error(e instanceof Error ? e.message : "Failed to save");
     } finally {
       setSavingId(null);
     }
@@ -453,7 +460,7 @@ export default function OverlayEvalInspector({
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       const msg = e instanceof Error ? e.message : "Unknown error";
-      alert(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -521,6 +528,11 @@ export default function OverlayEvalInspector({
         >
           {loading ? "Inspecting..." : "Sample & Inspect"}
         </button>
+        {modelVersion && (
+          <span className="text-xs text-muted-foreground font-mono">
+            model: {modelVersion}
+          </span>
+        )}
 
         <div className="flex-1" />
 
@@ -601,9 +613,17 @@ export default function OverlayEvalInspector({
         <div className="space-y-1">
           <div className="flex justify-between text-xs text-muted-foreground">
             <span>Inspecting overlays...</span>
-            <span>
-              {progress.current}/{progress.total}
-            </span>
+            <div className="flex items-center gap-2">
+              <span>
+                {progress.current}/{progress.total}
+              </span>
+              <button
+                onClick={() => abortRef.current?.abort()}
+                className="px-2 py-0.5 rounded bg-destructive text-destructive-foreground text-xs hover:bg-destructive/90"
+              >
+                Stop
+              </button>
+            </div>
           </div>
           <div className="h-2 bg-muted rounded overflow-hidden">
             <div
@@ -623,7 +643,7 @@ export default function OverlayEvalInspector({
         >
           <div className="border rounded-lg p-3">
             <h3 className="text-sm font-medium mb-2">
-              Detection rate over time
+              Correctness over time
             </h3>
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
@@ -643,7 +663,7 @@ export default function OverlayEvalInspector({
                 <Tooltip
                   formatter={(value, name) => [
                     `${value}%`,
-                    name === "accuracy" ? "Detection rate" : "FEN success rate",
+                    name === "accuracy" ? "Detection rate" : "FEN correctness",
                   ]}
                   labelFormatter={(label, payload) => {
                     const d = payload?.[0]?.payload;
@@ -668,10 +688,20 @@ export default function OverlayEvalInspector({
                 <Line
                   type="monotone"
                   dataKey="accuracy"
+                  name="Detection rate"
                   stroke="currentColor"
                   strokeWidth={2}
                   dot={{ r: 3 }}
                   activeDot={{ r: 5 }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="fen_success_rate"
+                  name="FEN correctness"
+                  stroke="#22c55e"
+                  strokeWidth={1.5}
+                  dot={{ r: 2 }}
+                  strokeDasharray="4 4"
                 />
               </LineChart>
             </ResponsiveContainer>

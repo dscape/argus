@@ -11,11 +11,13 @@ import json
 import logging
 import time
 import uuid
+from pathlib import Path
 
 import chess
 import cv2
 import numpy as np
 from pipeline.db.connection import get_conn
+from pipeline.paths import PROJECT_ROOT
 from pipeline.overlay.auto_calibration import (
     _grid_scan_frames,
     compute_camera_bbox,
@@ -28,8 +30,27 @@ from pipeline.overlay.scanner import OverlayDetection, detect_overlay_runtime
 
 logger = logging.getLogger(__name__)
 
+_SESSION_IMAGES_DIR = PROJECT_ROOT / "data" / "eval_sessions"
+
 
 # -- Helpers -----------------------------------------------------------------
+
+
+def _save_session_image(session_id: str, name: str, b64_data: str) -> str:
+    """Save a base64 image to disk and return the filename."""
+    out_dir = _SESSION_IMAGES_DIR / f"cal_{session_id}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{name}.jpg"
+    (out_dir / filename).write_bytes(base64.b64decode(b64_data))
+    return filename
+
+
+def get_session_image_path(session_id: str, filename: str) -> Path | None:
+    """Resolve a session image file path."""
+    if ".." in filename or "/" in filename:
+        return None
+    path = _SESSION_IMAGES_DIR / f"cal_{session_id}" / filename
+    return path if path.exists() else None
 
 
 def _get_video_path(video_id: str) -> str | None:
@@ -497,20 +518,34 @@ def create_calibration_eval_session(
     """Create and persist a calibration eval session."""
     session_id = uuid.uuid4().hex[:12]
 
-    # Strip heavy base64 image data before storing in DB
+    # Save images to disk and replace base64 with filenames
     lightweight = []
-    for r in results:
+    for ri, r in enumerate(results):
         entry = dict(r)
-        # Strip from top-level
-        entry.pop("frame_b64", None)
-        entry.pop("crop_b64", None)
-        # Strip from nested validation.frames
+        clip = entry.get("clip_id", f"c{ri}")
+        if entry.get("frame_b64"):
+            entry["frame_b64"] = _save_session_image(
+                session_id, f"{clip}_frame", entry["frame_b64"]
+            )
+        if entry.get("crop_b64"):
+            entry["crop_b64"] = _save_session_image(
+                session_id, f"{clip}_crop", entry["crop_b64"]
+            )
+        # Also save from nested validation.frames
         if "validation" in entry and "frames" in entry["validation"]:
-            clean_frames = []
-            for fr in entry["validation"]["frames"]:
-                clean_fr = {k: v for k, v in fr.items() if k not in ("frame_b64", "crop_b64")}
-                clean_frames.append(clean_fr)
-            entry["validation"]["frames"] = clean_frames
+            saved_frames = []
+            for fi, fr in enumerate(entry["validation"]["frames"]):
+                fr = dict(fr)
+                if fr.get("frame_b64"):
+                    fr["frame_b64"] = _save_session_image(
+                        session_id, f"{clip}_vf{fi}_frame", fr["frame_b64"]
+                    )
+                if fr.get("crop_b64"):
+                    fr["crop_b64"] = _save_session_image(
+                        session_id, f"{clip}_vf{fi}_crop", fr["crop_b64"]
+                    )
+                saved_frames.append(fr)
+            entry["validation"]["frames"] = saved_frames
         lightweight.append(entry)
 
     with get_conn() as conn:

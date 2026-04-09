@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   LineChart,
   Line,
@@ -20,8 +21,16 @@ import {
   createSegmentationEvalSession,
   listSegmentationEvalSessions,
   updateSegmentationEvalPins,
+  getModelVersions,
+  segmentationSessionImageUrl,
   type SegmentEvalSessionSummary,
 } from "@/lib/api";
+
+function thumbSrc(val: string, sessionId: string | null): string {
+  if (val.length > 200) return `data:image/jpeg;base64,${val}`;
+  if (sessionId) return segmentationSessionImageUrl(sessionId, val);
+  return `data:image/jpeg;base64,${val}`;
+}
 
 interface EvalPoint {
   id: number;
@@ -160,12 +169,17 @@ export default function SegmentationEvalInspector({
   const [showSessionList, setShowSessionList] = useState(false);
   // Sort pinned by gap_consistency ascending (worst first) when true
   const [sortByGapWorst, setSortByGapWorst] = useState(false);
+  const [modelVersion, setModelVersion] = useState<string | null>(null);
   const inspectedVideos = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const sessionListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchHistory();
+    getModelVersions().then((v) => {
+      const parts = [v.overlay_yolo, v.otb_yolo].filter(Boolean);
+      setModelVersion(parts.length > 0 ? parts.join(" / ") : null);
+    });
   }, []);
 
   useEffect(() => {
@@ -356,7 +370,7 @@ export default function SegmentationEvalInspector({
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       const msg = e instanceof Error ? e.message : "Unknown error";
-      alert(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -518,7 +532,7 @@ export default function SegmentationEvalInspector({
                 <div key={i} className="flex-shrink-0 text-center">
                   {f.thumbnail_b64 ? (
                     <img
-                      src={`data:image/jpeg;base64,${f.thumbnail_b64}`}
+                      src={thumbSrc(f.thumbnail_b64, sessionId)}
                       alt={`t=${f.time}s`}
                       className="h-20 w-auto rounded border object-cover"
                     />
@@ -771,6 +785,11 @@ export default function SegmentationEvalInspector({
         >
           {loading ? "Inspecting..." : "Sample & Inspect"}
         </button>
+        {modelVersion && (
+          <span className="text-xs text-muted-foreground font-mono">
+            model: {modelVersion}
+          </span>
+        )}
 
         <div className="flex-1" />
 
@@ -845,9 +864,17 @@ export default function SegmentationEvalInspector({
         <div className="space-y-1">
           <div className="flex justify-between text-xs text-muted-foreground">
             <span>Inspecting segmentations...</span>
-            <span>
-              {progress.current}/{progress.total}
-            </span>
+            <div className="flex items-center gap-2">
+              <span>
+                {progress.current}/{progress.total}
+              </span>
+              <button
+                onClick={() => abortRef.current?.abort()}
+                className="px-2 py-0.5 rounded bg-destructive text-destructive-foreground text-xs hover:bg-destructive/90"
+              >
+                Stop
+              </button>
+            </div>
           </div>
           <div className="h-2 bg-muted rounded overflow-hidden">
             <div
@@ -860,107 +887,97 @@ export default function SegmentationEvalInspector({
         </div>
       )}
 
-      {/* Chart: accuracy over time (consistent with Screening and Overlay tabs) */}
+      {/* Charts: accuracy + performance side-by-side */}
       {chartData.length >= 1 && (
-        <div className="border rounded-lg p-3">
-          <h3 className="text-sm font-medium mb-2">Accuracy over time</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 10 }}
-                tickLine={false}
-              />
-              <YAxis
-                domain={[0, 100]}
-                tick={{ fontSize: 10 }}
-                tickLine={false}
-                tickFormatter={(v) => `${v}%`}
-                width={40}
-              />
-              <Tooltip
-                formatter={(value, name) => [
-                  `${Number(value).toFixed(1)}%`,
-                  name === "accuracy"
-                    ? "Balanced accuracy"
-                    : name === "gap_consistency"
-                      ? "Gap consistency"
-                      : name === "segment_consistency"
-                        ? "Seg consistency"
-                        : name === "piece_readability"
-                          ? "Piece readability"
-                          : String(name),
-                ]}
-                labelFormatter={(label, payload) => {
-                  const d = payload?.[0]?.payload;
-                  return `${label}${d?.notes ? ` \u2014 ${d.notes}` : ""} (n=${d?.sample_size ?? "?"})`;
-                }}
-              />
-              {hasSecondaryLines && <Legend iconSize={8} />}
-              {versionLines.map((v) => (
-                <ReferenceLine
-                  key={v.idx}
-                  x={v.date}
-                  stroke="currentColor"
-                  strokeDasharray="4 4"
-                  strokeOpacity={0.4}
-                  label={{
-                    value: v.notes!.split(":")[0].trim(),
-                    position: "top",
-                    fontSize: 10,
-                    fontWeight: "bold",
+        <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
+          <div className="border rounded-lg p-3">
+            <h3 className="text-sm font-medium mb-2">Accuracy over time</h3>
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                />
+                <YAxis
+                  domain={[0, 100]}
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                  tickFormatter={(v) => `${v}%`}
+                  width={40}
+                />
+                <Tooltip
+                  formatter={(value) => [`${Number(value).toFixed(1)}%`, "Accuracy"]}
+                  labelFormatter={(label, payload) => {
+                    const d = payload?.[0]?.payload;
+                    return `${label}${d?.notes ? ` \u2014 ${d.notes}` : ""} (n=${d?.sample_size ?? "?"})`;
                   }}
                 />
-              ))}
-              {/* Primary: balanced accuracy */}
-              <Line
-                type="monotone"
-                dataKey="accuracy"
-                name="Balanced accuracy"
-                stroke="hsl(var(--foreground))"
-                strokeWidth={2}
-                dot={{ r: 3 }}
-                activeDot={{ r: 5 }}
-                connectNulls
-              />
-              {/* Secondary lines from per_class (shown when available) */}
-              {hasSecondaryLines && (
-                <>
-                  <Line
-                    type="monotone"
-                    dataKey="gap_consistency"
-                    name="Gap consistency"
-                    stroke="#ef4444"
-                    strokeWidth={1.5}
-                    strokeDasharray="4 2"
-                    dot={{ r: 2 }}
-                    connectNulls
+                {versionLines.map((v) => (
+                  <ReferenceLine
+                    key={v.idx}
+                    x={v.date}
+                    stroke="currentColor"
+                    strokeDasharray="4 4"
+                    strokeOpacity={0.4}
+                    label={{
+                      value: v.notes!.split(":")[0].trim(),
+                      position: "top",
+                      fontSize: 10,
+                      fontWeight: "bold",
+                    }}
                   />
-                  <Line
-                    type="monotone"
-                    dataKey="segment_consistency"
-                    name="Seg consistency"
-                    stroke="#22c55e"
-                    strokeWidth={1.5}
-                    strokeDasharray="4 2"
-                    dot={{ r: 2 }}
-                    connectNulls
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="piece_readability"
-                    name="Piece readability"
-                    stroke="#3b82f6"
-                    strokeWidth={1.5}
-                    strokeDasharray="4 2"
-                    dot={{ r: 2 }}
-                    connectNulls
-                  />
-                </>
-              )}
-            </LineChart>
-          </ResponsiveContainer>
+                ))}
+                <Line
+                  type="monotone"
+                  dataKey="accuracy"
+                  name="Accuracy"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                  activeDot={{ r: 5 }}
+                  connectNulls
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="border rounded-lg p-3">
+            <h3 className="text-sm font-medium mb-2">Performance over time</h3>
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                  tickFormatter={(v) => `${v}`}
+                  width={40}
+                />
+                <Tooltip
+                  formatter={(value) => [`${value} vid/batch`, "Throughput"]}
+                  labelFormatter={(label, payload) => {
+                    const d = payload?.[0]?.payload;
+                    return `${label} (n=${d?.sample_size ?? "?"})`;
+                  }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="sample_size"
+                  name="Videos per batch"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                  activeDot={{ r: 5 }}
+                  connectNulls
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       )}
 
@@ -1063,6 +1080,7 @@ export default function SegmentationEvalInspector({
                     const lowCons =
                       r.segment_consistency < 0.8 || r.gap_consistency < 0.8;
                     const isOk = !hasFN && !lowCons;
+                    const thumb = r.segments?.[0]?.thumbnail_b64;
 
                     return (
                       <button
@@ -1073,21 +1091,33 @@ export default function SegmentationEvalInspector({
                             : toggleExpand(r.video_id)
                         }
                         title={`${r.video_id}\n${r.segments.length} segments, ${r.gaps.length} gaps\nseg: ${(r.segment_consistency * 100).toFixed(0)}% gap: ${(r.gap_consistency * 100).toFixed(0)}%`}
-                        className={`relative px-2 py-1.5 rounded border text-xs font-mono overflow-hidden flex-shrink-0 transition-all hover:ring-2 hover:ring-foreground/30 ${
-                          isOk
-                            ? "bg-green-500/10 border-green-500/30"
-                            : "bg-red-500/10 border-red-500/30"
-                        }`}
+                        className="relative w-16 h-16 rounded border overflow-hidden flex-shrink-0 transition-all hover:ring-2 hover:ring-foreground/30"
                       >
-                        <span className="truncate max-w-[80px] inline-block">
-                          {r.video_id.slice(0, 8)}
-                        </span>
+                        {thumb ? (
+                          <img
+                            src={thumbSrc(thumb, sessionId)}
+                            alt={r.video_id}
+                            className="w-full h-full object-cover"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-muted flex items-center justify-center text-[10px] text-muted-foreground">
+                            {r.video_id.slice(0, 6)}
+                          </div>
+                        )}
+                        <div
+                          className={`absolute inset-0 ${
+                            isOk ? "bg-green-500/25" : "bg-red-500/35"
+                          }`}
+                        />
                         <span
-                          className={`ml-1 ${
-                            isOk ? "text-green-600" : "text-red-600"
+                          className={`absolute top-0 left-0 text-[9px] leading-none px-0.5 py-px ${
+                            isOk
+                              ? "bg-green-500/80 text-white"
+                              : "bg-red-500/80 text-white"
                           }`}
                         >
-                          {(r.segment_consistency * 100).toFixed(0)}%
+                          {isOk ? "\u2713" : "\u2717"}
                         </span>
                       </button>
                     );

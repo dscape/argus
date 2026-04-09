@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   LineChart,
   Line,
@@ -20,6 +21,7 @@ import {
   listOverlayTestSessions,
   updateOverlaySessionPins,
   overlayBoardImageUrl,
+  getModelVersions,
   type OverlayTestResult,
   type OverlayTestSession,
 } from "@/lib/api";
@@ -87,12 +89,14 @@ export default function FenInspector({
   );
   const [showSessionList, setShowSessionList] = useState(false);
   const [emptyMessage, setEmptyMessage] = useState<string | null>(null);
+  const [modelVersion, setModelVersion] = useState<string | null>(null);
   const inspectedFiles = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const sessionListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchHistory();
+    getModelVersions().then((v) => setModelVersion(v.overlay ?? null));
   }, []);
 
   useEffect(() => {
@@ -264,7 +268,7 @@ export default function FenInspector({
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       const msg = e instanceof Error ? e.message : "Unknown error";
-      alert(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -333,6 +337,11 @@ export default function FenInspector({
         >
           {loading ? "Inspecting..." : "Sample & Inspect"}
         </button>
+        {modelVersion && (
+          <span className="text-xs text-muted-foreground font-mono">
+            model: {modelVersion}
+          </span>
+        )}
 
         <div className="flex-1" />
 
@@ -413,9 +422,17 @@ export default function FenInspector({
         <div className="space-y-1">
           <div className="flex justify-between text-xs text-muted-foreground">
             <span>Inspecting boards...</span>
-            <span>
-              {progress.current}/{progress.total}
-            </span>
+            <div className="flex items-center gap-2">
+              <span>
+                {progress.current}/{progress.total}
+              </span>
+              <button
+                onClick={() => abortRef.current?.abort()}
+                className="px-2 py-0.5 rounded bg-destructive text-destructive-foreground text-xs hover:bg-destructive/90"
+              >
+                Stop
+              </button>
+            </div>
           </div>
           <div className="h-2 bg-muted rounded overflow-hidden">
             <div

@@ -60,6 +60,37 @@ class UpdatePinsRequest(BaseModel):
     pin_state: dict
 
 
+# ── Model versions ──────────────────────────────────────────
+
+
+@router.get("/model-versions")
+async def get_model_versions():
+    """Return version strings for all models from their metadata.json files."""
+    import json
+    import os
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    root = os.path.dirname(root)  # project root
+
+    models = {
+        "screening": os.path.join(root, "weights", "screening", "metadata.json"),
+        "overlay": os.path.join(root, "weights", "overlay", "metadata.json"),
+        "overlay_yolo": os.path.join(root, "weights", "overlay_yolo", "metadata.json"),
+        "otb_yolo": os.path.join(root, "weights", "otb_yolo", "metadata.json"),
+    }
+    versions: dict[str, str | None] = {}
+    for name, path in models.items():
+        try:
+            if os.path.exists(path):
+                with open(path) as f:
+                    versions[name] = json.load(f).get("version")
+            else:
+                versions[name] = None
+        except Exception:
+            versions[name] = None
+    return versions
+
+
 # ── AI Screening ────────────────────────────────────────────
 
 
@@ -390,7 +421,7 @@ class ClassifyFenRequest(BaseModel):
 
 @router.post("/overlay-test/extract-fen")
 async def classify_overlay_fen(body: ClassifyFenRequest):
-    """Slow phase: run DINOv2 piece classification to produce FEN.
+    """Slow phase: run square classification to produce FEN.
 
     Called after extract-detect returns a result with status 'detected'.
     """
@@ -617,6 +648,15 @@ async def update_segmentation_eval_pins(session_id: str, body: UpdatePinsRequest
     return result
 
 
+@router.get("/segmentation-eval/session-image/{session_id}/{filename}")
+async def get_segmentation_session_image(session_id: str, filename: str):
+    """Serve a saved segmentation eval session image."""
+    path = segmentation_eval_service.get_session_image_path(session_id, filename)
+    if path is None:
+        raise HTTPException(404, "Image not found")
+    return FileResponse(path, media_type="image/jpeg")
+
+
 # ── Calibration Evaluation ─────────────────────────────────
 
 
@@ -735,3 +775,12 @@ async def update_calibration_eval_pins(session_id: str, body: UpdatePinsRequest)
     if "error" in result:
         raise HTTPException(404, result["error"])
     return result
+
+
+@router.get("/calibration-eval/session-image/{session_id}/{filename}")
+async def get_calibration_session_image(session_id: str, filename: str):
+    """Serve a saved calibration eval session image."""
+    path = calibration_eval_service.get_session_image_path(session_id, filename)
+    if path is None:
+        raise HTTPException(404, "Image not found")
+    return FileResponse(path, media_type="image/jpeg")

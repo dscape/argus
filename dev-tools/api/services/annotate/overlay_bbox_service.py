@@ -149,8 +149,14 @@ def _invalidate_frame_cache() -> None:
     _frame_cache = None
 
 
-def list_frames() -> list[dict]:
-    """List training-label frames with target fixtures prioritized first."""
+def list_frames(
+    offset: int = 0,
+    limit: int = 100,
+) -> dict:
+    """List training-label frames with target fixtures prioritized first.
+
+    Returns paginated results with total count.
+    """
     gt = _load_ground_truth()
     paths = _discover_frame_paths()
     target_keys, target_issues = _load_annotation_targets()
@@ -172,6 +178,14 @@ def list_frames() -> list[dict]:
                 ),
                 "bbox": (
                     annotation.get("bbox")
+                    if annotation else None
+                ),
+                "has_otb": (
+                    annotation.get("has_otb")
+                    if annotation else None
+                ),
+                "otb_bbox": (
+                    annotation.get("otb_bbox")
                     if annotation else None
                 ),
                 "is_target": key in target_index,
@@ -200,7 +214,10 @@ def list_frames() -> list[dict]:
         reverse=True,
     )
 
-    return target_unannotated + target_annotated + other_unannotated + other_annotated
+    all_frames = target_unannotated + target_annotated + other_unannotated + other_annotated
+    total = len(all_frames)
+    page = all_frames[offset : offset + limit]
+    return {"frames": page, "total": total}
 
 
 def _read_image_size(path: Path) -> tuple[int, int] | None:
@@ -333,11 +350,36 @@ def auto_detect_bbox(frame_path: Path) -> dict:
     }
 
 
+def auto_detect_otb(frame_path: Path) -> dict:
+    """Detect OTB (real/physical) board using the YOLO OTB detector."""
+    frame = cv2.imread(str(frame_path))
+    if frame is None:
+        return {"error": "Could not read frame"}
+
+    from pipeline.screen.otb_yolo_detector import detect_otb_yolo
+
+    detection = detect_otb_yolo(frame)
+    if not detection.found or detection.bbox is None:
+        return {
+            "detected": False,
+            "bbox": None,
+            "confidence": round(detection.confidence, 4),
+        }
+
+    return {
+        "detected": True,
+        "bbox": list(detection.bbox),
+        "confidence": round(detection.confidence, 4),
+    }
+
+
 def save_annotation(
     frame_key: str,
     has_overlay: bool,
     bbox: list[int] | None,
     notes: str = "",
+    has_otb: bool | None = None,
+    otb_bbox: list[int] | None = None,
 ) -> dict:
     """Save or update a YOLO-training annotation."""
     gt = _load_ground_truth()
@@ -350,10 +392,15 @@ def save_annotation(
     img = cv2.imread(str(path))
     fh, fw = img.shape[:2] if img is not None else (0, 0)
 
+    # Preserve existing OTB fields if not provided in this save
+    existing = gt.get(frame_key, {})
+
     entry: dict = {
         "image": f"{video_id}/{label}.jpg",
         "has_overlay": has_overlay,
         "bbox": bbox,
+        "has_otb": has_otb if has_otb is not None else existing.get("has_otb"),
+        "otb_bbox": otb_bbox if otb_bbox is not None else existing.get("otb_bbox"),
         "frame_width": fw,
         "frame_height": fh,
         "annotated_at": datetime.now(timezone.utc).isoformat(),

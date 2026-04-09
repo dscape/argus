@@ -220,7 +220,7 @@ def read_overlay_at_frame(
     overlay_crop_b64 = _encode_crop_b64(frame, calibration.overlay)
     camera_crop_b64 = _encode_crop_b64(frame, calibration.camera)
 
-    # Read FEN using DINOv2 piece classifier with auto grid detection
+    # Read FEN using the tiny ONNX square classifier with auto grid detection
     ox, oy, ow, oh = calibration.overlay
     overlay_img = frame[oy : oy + oh, ox : ox + ow]
 
@@ -547,6 +547,110 @@ def generate_clips(session_id: str, clip_id: int | None = None) -> dict:
         })
 
     return {"clips": clips, "total_clips": len(clips)}
+
+
+# ── Generate clips (background job) ───────────────────────────
+
+_generate_jobs: dict[str, dict] = {}
+_generate_jobs_lock = threading.Lock()
+
+
+def start_generate_clips_job(
+    session_id: str,
+    clip_id: int | None = None,
+) -> dict:
+    """Start clip generation in a background thread."""
+    session = _sessions.get(session_id)
+    if session is None:
+        raise ValueError("Session not found")
+
+    clip_data = None
+    if clip_id is not None:
+        clip_data, calibration = _get_clip_calibration(clip_id)
+    else:
+        calibration = session.get("calibration")
+    if calibration is None:
+        raise ValueError("No calibration for this session — calibrate first")
+
+    job_id = uuid.uuid4().hex[:12]
+    with _generate_jobs_lock:
+        _generate_jobs[job_id] = {
+            "job_id": job_id,
+            "session_id": session_id,
+            "status": "running",
+            "clips": [],
+            "error": None,
+        }
+
+    thread = threading.Thread(
+        target=_run_generate_clips,
+        args=(job_id, session, calibration, clip_data),
+        daemon=True,
+    )
+    thread.start()
+    return get_generate_clips_job(job_id)
+
+
+def get_generate_clips_job(job_id: str) -> dict | None:
+    with _generate_jobs_lock:
+        job = _generate_jobs.get(job_id)
+        if job is None:
+            return None
+        return dict(job)
+
+
+def _run_generate_clips(
+    job_id: str,
+    session: dict,
+    calibration: dict,
+    clip_data: dict | None,
+) -> None:
+    from pipeline.overlay.overlay_clip_generator import OverlayClipGenerator
+
+    try:
+        video_path = session["video_path"]
+        video_id = os.path.splitext(os.path.basename(video_path))[0]
+
+        output_suffix = ""
+        start_time = None
+        end_time = None
+        if clip_data is not None:
+            output_suffix = f"_clip{clip_data['clip_index']}"
+            start_time = clip_data["start_time"]
+            end_time = clip_data["end_time"]
+
+        generator = OverlayClipGenerator()
+        results = generator.generate_clips(
+            video_path, calibration, video_id=video_id + output_suffix,
+            start_time=start_time, end_time=end_time,
+        )
+
+        clips = []
+        for r in results:
+            clip_info = {
+                "filepath": r["filepath"],
+                "num_frames": r["num_frames"],
+                "num_moves": r["num_moves"],
+                "game_index": r["game_index"],
+                "pgn_moves": r.get("pgn_moves", ""),
+            }
+            clips.append(clip_info)
+            with _generate_jobs_lock:
+                job = _generate_jobs.get(job_id)
+                if job:
+                    job["clips"] = list(clips)
+
+        with _generate_jobs_lock:
+            job = _generate_jobs.get(job_id)
+            if job:
+                job["status"] = "done"
+                job["clips"] = clips
+    except Exception as e:
+        with _generate_jobs_lock:
+            job = _generate_jobs.get(job_id)
+            if job:
+                job["status"] = "failed"
+                job["error"] = str(e)
 
 
 def delete_session(session_id: str):

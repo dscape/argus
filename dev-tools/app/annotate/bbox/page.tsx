@@ -12,6 +12,8 @@ interface FrameEntry {
   annotated: boolean;
   has_overlay: boolean | null;
   bbox: number[] | null;
+  has_otb?: boolean | null;
+  otb_bbox?: number[] | null;
   is_target?: boolean;
   target_issue?: string | null;
 }
@@ -31,10 +33,20 @@ interface AutoDetectResult {
   has_pattern?: boolean;
 }
 
+interface OtbDetectResult {
+  detected: boolean;
+  bbox: number[] | null;
+  confidence: number;
+}
+
 type AutoDetectStatus = "idle" | "running" | "found" | "not_found" | "error";
+
+const PAGE_SIZE = 100;
 
 export default function OverlayBboxPage() {
   const [frames, setFrames] = useState<FrameEntry[]>([]);
+  const [totalFrames, setTotalFrames] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [currentBbox, setCurrentBbox] = useState<number[] | null>(null);
   const [refinedScore, setRefinedScore] = useState<number | null>(null);
@@ -42,9 +54,16 @@ export default function OverlayBboxPage() {
   const [autoDetectStatus, setAutoDetectStatus] =
     useState<AutoDetectStatus>("idle");
   const [autoDetectScore, setAutoDetectScore] = useState<number | null>(null);
+  // OTB state
+  const [otbBbox, setOtbBbox] = useState<number[] | null>(null);
+  const [otbDetectStatus, setOtbDetectStatus] =
+    useState<AutoDetectStatus>("idle");
+  const [otbConfidence, setOtbConfidence] = useState<number | null>(null);
+  const [hasOtb, setHasOtb] = useState(false);
+
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(
-    null
+    null,
   );
   const [drawCurrent, setDrawCurrent] = useState<{
     x: number;
@@ -56,19 +75,51 @@ export default function OverlayBboxPage() {
   const imgRef = useRef<HTMLImageElement | null>(null);
   const autoDetectRequestRef = useRef(0);
   const [imgLoaded, setImgLoaded] = useState(false);
+  const imgCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const sidebarRef = useRef<HTMLDivElement>(null);
 
   const selected = frames.find((f) => f.key === selectedKey) ?? null;
 
-  const fetchFrames = useCallback(async (): Promise<FrameEntry[]> => {
-    const res = await fetch("/api/overlay-bbox/frames");
-    const data = await res.json();
-    setFrames(data.frames);
-    return data.frames as FrameEntry[];
-  }, []);
+  const fetchFrames = useCallback(
+    async (offset = 0, append = false): Promise<FrameEntry[]> => {
+      const res = await fetch(
+        `/api/overlay-bbox/frames?offset=${offset}&limit=${PAGE_SIZE}`,
+      );
+      const data = await res.json();
+      const newFrames = data.frames as FrameEntry[];
+      setTotalFrames(data.total);
+      if (append) {
+        setFrames((prev) => [...prev, ...newFrames]);
+      } else {
+        setFrames(newFrames);
+      }
+      return newFrames;
+    },
+    [],
+  );
 
   useEffect(() => {
     fetchFrames();
   }, [fetchFrames]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || frames.length >= totalFrames) return;
+    setLoadingMore(true);
+    try {
+      await fetchFrames(frames.length, true);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [fetchFrames, frames.length, totalFrames, loadingMore]);
+
+  // Infinite scroll handler for sidebar
+  const handleSidebarScroll = useCallback(() => {
+    const el = sidebarRef.current;
+    if (!el) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 100) {
+      loadMore();
+    }
+  }, [loadMore]);
 
   useEffect(() => {
     if (frames.length === 0) {
@@ -92,62 +143,132 @@ export default function OverlayBboxPage() {
     setHasPattern(null);
     setAutoDetectStatus("idle");
     setAutoDetectScore(null);
+    setOtbBbox(null);
+    setOtbDetectStatus("idle");
+    setOtbConfidence(null);
+    setHasOtb(false);
 
     const frame = frames.find((entry) => entry.key === selectedKey);
     const [videoId, label] = selectedKey.split("/");
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = async () => {
+    const imgUrl = `/api/overlay-bbox/frame-image/${videoId}/${label}`;
+
+    // Check image cache
+    const cached = imgCacheRef.current.get(imgUrl);
+
+    const onImageReady = async (img: HTMLImageElement) => {
       if (cancelled) return;
       imgRef.current = img;
       setImgLoaded(true);
 
+      // Load saved OTB state
+      if (frame?.has_otb) {
+        setHasOtb(true);
+        if (frame.otb_bbox) setOtbBbox(frame.otb_bbox);
+      }
+
       // If already annotated, load the saved bbox
       if (frame?.bbox) {
         setCurrentBbox(frame.bbox);
+        // Still run OTB detection if not yet annotated for OTB
+        if (frame.has_otb == null) {
+          runOtbDetect(selectedKey, requestId, cancelled);
+        }
         return;
       }
       if (frame?.annotated) return;
 
+      // Run both detections in parallel
       setAutoDetectStatus("running");
+      setOtbDetectStatus("running");
+
+      // Overlay detection
+      (async () => {
+        try {
+          const res = await fetch("/api/overlay-bbox/auto-detect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ frame_key: selectedKey }),
+          });
+          if (!res.ok)
+            throw new Error(`Auto-detect failed with status ${res.status}`);
+
+          const data: AutoDetectResult = await res.json();
+          if (cancelled || requestId !== autoDetectRequestRef.current) return;
+
+          if (data.detected && data.bbox) {
+            setCurrentBbox(data.bbox);
+            setAutoDetectStatus("found");
+            setAutoDetectScore(data.score);
+            setRefinedScore(data.grid_score ?? null);
+            setHasPattern(data.has_pattern ?? null);
+            return;
+          }
+          setAutoDetectStatus("not_found");
+        } catch (err) {
+          if (cancelled) return;
+          console.error("Auto-detect failed:", err);
+          setAutoDetectStatus("error");
+        }
+      })();
+
+      // OTB detection
+      runOtbDetect(selectedKey, requestId, cancelled);
+    };
+
+    const runOtbDetect = async (
+      fk: string,
+      rid: number,
+      wasCancelled: boolean,
+    ) => {
+      setOtbDetectStatus("running");
       try {
-        const res = await fetch("/api/overlay-bbox/auto-detect", {
+        const res = await fetch("/api/overlay-bbox/auto-detect-otb", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ frame_key: selectedKey }),
+          body: JSON.stringify({ frame_key: fk }),
         });
-        if (!res.ok) {
-          throw new Error(`Auto-detect failed with status ${res.status}`);
-        }
+        if (!res.ok) throw new Error(`OTB detect failed: ${res.status}`);
 
-        const data: AutoDetectResult = await res.json();
-        if (cancelled || requestId !== autoDetectRequestRef.current) return;
+        const data: OtbDetectResult = await res.json();
+        if (wasCancelled || rid !== autoDetectRequestRef.current) return;
 
         if (data.detected && data.bbox) {
-          setCurrentBbox(data.bbox);
-          setAutoDetectStatus("found");
-          setAutoDetectScore(data.score);
-          setRefinedScore(data.grid_score ?? null);
-          setHasPattern(data.has_pattern ?? null);
+          setOtbBbox(data.bbox);
+          setOtbConfidence(data.confidence);
+          setOtbDetectStatus("found");
+          setHasOtb(true);
           return;
         }
-
-        setAutoDetectStatus("not_found");
-      } catch (err) {
-        if (cancelled) return;
-        console.error("Auto-detect failed:", err);
-        setAutoDetectStatus("error");
+        setOtbDetectStatus("not_found");
+      } catch {
+        if (wasCancelled) return;
+        setOtbDetectStatus("error");
       }
     };
-    img.onerror = () => {
-      if (cancelled) return;
-      setImgLoaded(false);
-    };
-    img.src = `/api/overlay-bbox/frame-image/${videoId}/${label}`;
+
+    if (cached) {
+      onImageReady(cached);
+    } else {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        imgCacheRef.current.set(imgUrl, img);
+        // Keep cache bounded
+        if (imgCacheRef.current.size > 50) {
+          const first = imgCacheRef.current.keys().next().value;
+          if (first) imgCacheRef.current.delete(first);
+        }
+        onImageReady(img);
+      };
+      img.onerror = () => {
+        if (cancelled) return;
+        setImgLoaded(false);
+      };
+      img.src = imgUrl;
+    }
+
     return () => {
       cancelled = true;
-      img.onload = null;
-      img.onerror = null;
     };
   }, [selectedKey, frames]);
 
@@ -166,7 +287,23 @@ export default function OverlayBboxPage() {
 
     ctx.drawImage(img, 0, 0);
 
-    // Draw current bbox
+    // Draw OTB bbox (blue, behind overlay)
+    if (otbBbox && hasOtb) {
+      const [x, y, w, h] = otbBbox;
+      ctx.strokeStyle = "#3b82f6";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([8, 4]);
+      ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(59, 130, 246, 0.08)";
+      ctx.fillRect(x, y, w, h);
+      // Label
+      ctx.font = "bold 14px sans-serif";
+      ctx.fillStyle = "#3b82f6";
+      ctx.fillText("OTB", x + 4, y - 6);
+    }
+
+    // Draw current overlay bbox (green)
     if (currentBbox) {
       const [x, y, w, h] = currentBbox;
       ctx.strokeStyle = "#22c55e";
@@ -190,11 +327,11 @@ export default function OverlayBboxPage() {
       ctx.fillStyle = "rgba(239, 68, 68, 0.1)";
       ctx.fillRect(x, y, w, h);
     }
-  }, [imgLoaded, currentBbox, isDrawing, drawStart, drawCurrent]);
+  }, [imgLoaded, currentBbox, otbBbox, hasOtb, isDrawing, drawStart, drawCurrent]);
 
   const canvasToImage = (
     clientX: number,
-    clientY: number
+    clientY: number,
   ): { x: number; y: number } | null => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
@@ -278,14 +415,17 @@ export default function OverlayBboxPage() {
         return;
       }
 
-      if (previousKey && updatedFrames.some((frame) => frame.key === previousKey)) {
+      if (
+        previousKey &&
+        updatedFrames.some((frame) => frame.key === previousKey)
+      ) {
         setSelectedKey(previousKey);
         return;
       }
 
       setSelectedKey(updatedFrames[0]?.key ?? null);
     },
-    []
+    [],
   );
 
   const handleSave = async () => {
@@ -300,6 +440,8 @@ export default function OverlayBboxPage() {
           frame_key: selectedKey,
           has_overlay: true,
           bbox: currentBbox,
+          has_otb: hasOtb,
+          otb_bbox: hasOtb ? otbBbox : null,
         }),
       });
       const updatedFrames = await fetchFrames();
@@ -321,6 +463,8 @@ export default function OverlayBboxPage() {
           frame_key: selectedKey,
           has_overlay: false,
           bbox: null,
+          has_otb: hasOtb,
+          otb_bbox: hasOtb ? otbBbox : null,
         }),
       });
       const updatedFrames = await fetchFrames();
@@ -339,6 +483,8 @@ export default function OverlayBboxPage() {
     setCurrentBbox(null);
     setRefinedScore(null);
     setHasPattern(null);
+    setOtbBbox(null);
+    setHasOtb(false);
     await fetchFrames();
   };
 
@@ -359,10 +505,14 @@ export default function OverlayBboxPage() {
   return (
     <div className="flex gap-4 h-[calc(100vh-180px)]">
       {/* Sidebar */}
-      <div className="w-64 shrink-0 border rounded-lg overflow-y-auto">
+      <div
+        ref={sidebarRef}
+        onScroll={handleSidebarScroll}
+        className="w-64 shrink-0 border rounded-lg overflow-y-auto"
+      >
         <div className="p-3 border-b bg-muted/50 space-y-1">
           <div className="text-sm font-medium">
-            Frames ({annotatedCount}/{frames.length} annotated)
+            Frames ({annotatedCount}/{totalFrames} annotated)
           </div>
           {remainingTargetCount > 0 && (
             <div className="text-xs text-amber-700">
@@ -384,6 +534,11 @@ export default function OverlayBboxPage() {
                 target
               </span>
             )}
+            {f.has_otb && (
+              <span className="text-[10px] px-1 py-0.5 rounded bg-blue-100 text-blue-700 shrink-0">
+                OTB
+              </span>
+            )}
             {f.annotated &&
               (f.has_overlay ? (
                 <Check className="w-4 h-4 text-green-500 shrink-0" />
@@ -392,6 +547,17 @@ export default function OverlayBboxPage() {
               ))}
           </button>
         ))}
+        {frames.length < totalFrames && (
+          <button
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="w-full py-2 text-xs text-muted-foreground hover:bg-muted/50 border-b"
+          >
+            {loadingMore
+              ? "Loading..."
+              : `Load more (${frames.length}/${totalFrames})`}
+          </button>
+        )}
       </div>
 
       {/* Main area */}
@@ -426,81 +592,124 @@ export default function OverlayBboxPage() {
                 </div>
               )}
               <div className="flex items-center gap-3 flex-wrap">
-              {currentBbox && (
-                <div className="text-xs font-mono text-muted-foreground">
-                  bbox: [{currentBbox.join(", ")}]
-                  {refinedScore !== null && (
-                    <span className="ml-2">
-                      score: {refinedScore}
-                      {hasPattern !== null && (
-                        <span
-                          className={
-                            hasPattern ? "text-green-500" : "text-red-500"
-                          }
-                        >
-                          {" "}
-                          {hasPattern ? "pattern" : "no pattern"}
-                        </span>
-                      )}
-                    </span>
-                  )}
-                </div>
-              )}
-              {autoDetectStatus === "running" && (
-                <div className="text-xs text-muted-foreground">
-                  Detecting overlay...
-                </div>
-              )}
-              {autoDetectStatus === "found" && autoDetectScore !== null && (
-                <div className="text-xs text-muted-foreground">
-                  Auto-detected candidate (YOLO score: {autoDetectScore.toFixed(4)})
-                </div>
-              )}
-              {autoDetectStatus === "not_found" && (
-                <div className="text-xs text-amber-700">
-                  Auto-detect found nothing. Draw a bbox if this frame still has an overlay.
-                </div>
-              )}
-              {autoDetectStatus === "error" && (
-                <div className="text-xs text-red-600">
-                  Auto-detect failed. Draw a bbox manually.
-                </div>
-              )}
-              {refining && (
-                <div className="text-xs text-muted-foreground">Refining...</div>
-              )}
-              <div className="flex-1" />
-              <button
-                onClick={handleClear}
-                className="px-3 py-1.5 text-xs border rounded hover:bg-muted transition-colors"
-              >
-                Clear
-              </button>
-              <button
-                onClick={handleNoOverlay}
-                disabled={saving}
-                className="px-3 py-1.5 text-xs border rounded hover:bg-red-50 text-red-600 border-red-200 transition-colors"
-              >
-                <X className="w-3 h-3 inline mr-1" />
-                No Overlay
-              </button>
-              {selected?.annotated && (
+                {currentBbox && (
+                  <div className="text-xs font-mono text-muted-foreground">
+                    bbox: [{currentBbox.join(", ")}]
+                    {refinedScore !== null && (
+                      <span className="ml-2">
+                        score: {refinedScore}
+                        {hasPattern !== null && (
+                          <span
+                            className={
+                              hasPattern ? "text-green-500" : "text-red-500"
+                            }
+                          >
+                            {" "}
+                            {hasPattern ? "pattern" : "no pattern"}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {autoDetectStatus === "running" && (
+                  <div className="text-xs text-muted-foreground">
+                    Detecting overlay...
+                  </div>
+                )}
+                {autoDetectStatus === "found" && autoDetectScore !== null && (
+                  <div className="text-xs text-muted-foreground">
+                    Auto-detected candidate (YOLO score:{" "}
+                    {autoDetectScore.toFixed(4)})
+                  </div>
+                )}
+                {autoDetectStatus === "not_found" && (
+                  <div className="text-xs text-amber-700">
+                    Auto-detect found nothing. Draw a bbox if this frame still
+                    has an overlay.
+                  </div>
+                )}
+                {autoDetectStatus === "error" && (
+                  <div className="text-xs text-red-600">
+                    Auto-detect failed. Draw a bbox manually.
+                  </div>
+                )}
+                {refining && (
+                  <div className="text-xs text-muted-foreground">
+                    Refining...
+                  </div>
+                )}
+              </div>
+
+              {/* OTB controls */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={hasOtb}
+                    onChange={(e) => {
+                      setHasOtb(e.target.checked);
+                      if (!e.target.checked) setOtbBbox(null);
+                    }}
+                    className="rounded border-blue-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-blue-700 font-medium">OTB Board</span>
+                </label>
+                {otbDetectStatus === "running" && (
+                  <span className="text-xs text-muted-foreground">
+                    Detecting OTB...
+                  </span>
+                )}
+                {otbDetectStatus === "found" && otbConfidence !== null && (
+                  <span className="text-xs text-blue-600">
+                    OTB detected (conf: {otbConfidence.toFixed(4)})
+                  </span>
+                )}
+                {otbDetectStatus === "not_found" && (
+                  <span className="text-xs text-muted-foreground">
+                    No OTB board detected
+                  </span>
+                )}
+                {hasOtb && otbBbox && (
+                  <span className="text-xs font-mono text-blue-600">
+                    otb: [{otbBbox.join(", ")}]
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="flex-1" />
                 <button
-                  onClick={handleDelete}
+                  onClick={handleClear}
+                  className="px-3 py-1.5 text-xs border rounded hover:bg-muted transition-colors"
+                >
+                  Clear
+                </button>
+                <button
+                  onClick={handleNoOverlay}
+                  disabled={saving}
                   className="px-3 py-1.5 text-xs border rounded hover:bg-red-50 text-red-600 border-red-200 transition-colors"
                 >
-                  <Trash2 className="w-3 h-3 inline mr-1" />
-                  Remove
+                  <X className="w-3 h-3 inline mr-1" />
+                  No Overlay
                 </button>
-              )}
-              <button
-                onClick={handleSave}
-                disabled={!currentBbox || saving}
-                className="px-3 py-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 transition-colors"
-              >
-                <Check className="w-3 h-3 inline mr-1" />
-                Save
-              </button>
+                {selected?.annotated && (
+                  <button
+                    onClick={handleDelete}
+                    className="px-3 py-1.5 text-xs border rounded hover:bg-red-50 text-red-600 border-red-200 transition-colors"
+                  >
+                    <Trash2 className="w-3 h-3 inline mr-1" />
+                    Remove
+                  </button>
+                )}
+                <button
+                  onClick={handleSave}
+                  disabled={!currentBbox || saving}
+                  className="px-3 py-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 transition-colors"
+                >
+                  <Check className="w-3 h-3 inline mr-1" />
+                  Save
+                </button>
               </div>
             </div>
           </>

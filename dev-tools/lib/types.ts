@@ -62,6 +62,7 @@ export interface ClipInspectResponse {
   replay_error: string | null;
   final_fen: string | null;
   avg_legal_moves: number | null;
+  metadata?: Record<string, string | number | boolean | null>;
 }
 
 // Video annotator
@@ -324,6 +325,56 @@ export interface GenerationStatus {
   num_clips?: number;
   completed?: number;
   output_dir?: string;
+  error?: string | null;
+}
+
+export interface RealVideoInventoryRow {
+  video_id: string;
+  video_path: string;
+  file_size_mb: number;
+  modified_ts: number;
+  title: string | null;
+  channel_handle: string | null;
+  published_at: string | null;
+  screening_status: string | null;
+  layout_type: string | null;
+  existing_clip_count: number;
+  db_clip_count: number;
+  has_channel_calibration: boolean;
+  ready: boolean;
+  blocker: string | null;
+}
+
+export interface RealDataOverview {
+  clips_dir: string;
+  clip_stats: SyntheticStatsResponse;
+  source_video_count: number;
+  local_video_count: number;
+  ready_video_count: number;
+  processed_video_count: number;
+  blocked_video_count: number;
+  videos: RealVideoInventoryRow[];
+}
+
+export interface RealVideoProcessingResult {
+  video_id: string;
+  title: string | null;
+  status: "generated" | "no_clips" | "failed";
+  generated_clip_count: number;
+  error: string | null;
+}
+
+export interface RealVideoProcessingStatus {
+  status: "idle" | "running" | "done" | "failed" | "stopped" | "no_job_running";
+  job_id?: string;
+  requested_limit?: number;
+  completed_videos?: number;
+  total_videos?: number;
+  generated_clips?: number;
+  current_video_id?: string | null;
+  current_video_title?: string | null;
+  clips_dir?: string;
+  results?: RealVideoProcessingResult[];
   error?: string | null;
 }
 

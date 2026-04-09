@@ -75,7 +75,8 @@ def test_list_frames_prioritizes_targets_and_includes_fullres_only(tmp_path, mon
         )
     )
 
-    frames = overlay_bbox_service.list_frames()
+    result = overlay_bbox_service.list_frames()
+    frames = result["frames"]
 
     assert [frame["key"] for frame in frames[:2]] == ["alpha/25pct", "beta/25pct"]
     assert frames[0]["is_target"] is True

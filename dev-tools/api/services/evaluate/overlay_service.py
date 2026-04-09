@@ -21,7 +21,7 @@ def encode_image_b64(img: np.ndarray, fmt: str = ".png") -> str:
 
 
 def _read_board(overlay_crop: np.ndarray) -> chess.Board | None:
-    """Read board using DINOv2 piece classifier with auto grid detection."""
+    """Read board using the tiny ONNX square classifier with auto grid detection."""
     from pipeline.overlay.grid_detector import detect_grid
     from pipeline.overlay.piece_classifier import read_fen_with_grid
 

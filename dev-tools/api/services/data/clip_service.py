@@ -151,6 +151,26 @@ def inspect(session_id: str) -> dict:
         legal_masks = clip["legal_masks"]
         avg_legal = float(legal_masks.float().sum(dim=1).mean().item())
 
+    metadata: dict[str, Any] = {}
+    for key in [
+        "initial_board_fen",
+        "pgn_moves",
+        "source_video_id",
+        "source_channel_handle",
+    ]:
+        value = clip.get(key)
+        if isinstance(value, (str, bool, int, float)) or value is None:
+            metadata[key] = value
+    for key in [
+        "segment_start_time_seconds",
+        "segment_end_time_seconds",
+        "sampled_video_fps",
+        "num_moves",
+    ]:
+        value = clip.get(key)
+        if isinstance(value, (bool, int, float)) or value is None:
+            metadata[key] = value
+
     return {
         "file_size_mb": round(os.path.getsize(path) / 1024 / 1024, 2),
         "tensors": tensors,
@@ -164,6 +184,7 @@ def inspect(session_id: str) -> dict:
         "replay_error": replay_error,
         "final_fen": final_fen,
         "avg_legal_moves": avg_legal,
+        "metadata": metadata,
     }
 
 

@@ -1,31 +1,59 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { loadClip, getClipInfo, clipFrameUrl } from "@/lib/api";
-import type { GeneratedClip, ClipInspectResponse } from "@/lib/types";
+import {
+  listGeneratedClips,
+  getClipInfo,
+  clipFrameUrl,
+  saveClipToTraining,
+} from "@/lib/api";
+import type { ClipInspectResponse } from "@/lib/types";
 import { useVideoWorkbench } from "../_context";
 
-export default function InspectPage() {
-  const { video } = useVideoWorkbench();
-  const [clips] = useState<GeneratedClip[]>([]);
-  const [inspecting, setInspecting] = useState<number | null>(null);
-  const [clipInfo, setClipInfo] = useState<Map<number, ClipInspectResponse>>(new Map());
-  const [clipSessions, setClipSessions] = useState<Map<number, string>>(new Map());
-  const [frameIndices, setFrameIndices] = useState<Map<number, number>>(new Map());
+interface GeneratedClipFile {
+  filepath: string;
+  filename: string;
+}
 
-  const handleInspectClip = async (clip: GeneratedClip) => {
-    setInspecting(clip.game_index);
+export default function InspectPage() {
+  const { session, video } = useVideoWorkbench();
+  const [clips, setClips] = useState<GeneratedClipFile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [inspecting, setInspecting] = useState<string | null>(null);
+  const [clipInfo, setClipInfo] = useState<Map<string, ClipInspectResponse>>(new Map());
+  const [clipSessions, setClipSessions] = useState<Map<string, string>>(new Map());
+  const [frameIndices, setFrameIndices] = useState<Map<string, number>>(new Map());
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saved, setSaved] = useState<Set<string>>(new Set());
+
+  // Load generated clips when session is available
+  useEffect(() => {
+    if (!session) return;
+    setLoading(true);
+    listGeneratedClips(session.session_id)
+      .then(({ clips: c }) => setClips(c))
+      .catch((e) => toast.error(e instanceof Error ? e.message : "Failed to list clips"))
+      .finally(() => setLoading(false));
+  }, [session]);
+
+  const handleInspect = async (clip: GeneratedClipFile) => {
+    if (!session) return;
+    setInspecting(clip.filename);
     try {
-      const response = await fetch(clip.filepath);
-      const blob = await response.blob();
-      const file = new File([blob], clip.filepath.split("/").pop() || "clip.pt");
-      const { session_id } = await loadClip(file);
-      setClipSessions((prev) => new Map(prev).set(clip.game_index, session_id));
+      // Load clip via server-side path
+      const res = await fetch("/api/clips/load-from-path", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filepath: clip.filepath }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const { session_id } = await res.json();
+      setClipSessions((prev) => new Map(prev).set(clip.filename, session_id));
 
       const info = await getClipInfo(session_id);
       if (info.replay_error) toast.error(info.replay_error);
-      setClipInfo((prev) => new Map(prev).set(clip.game_index, info));
+      setClipInfo((prev) => new Map(prev).set(clip.filename, info));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to inspect clip");
     } finally {
@@ -33,34 +61,69 @@ export default function InspectPage() {
     }
   };
 
+  const handleSave = async (clip: GeneratedClipFile) => {
+    if (!session) return;
+    setSaving(clip.filename);
+    try {
+      await saveClipToTraining(session.session_id, clip.filepath);
+      setSaved((prev) => new Set(prev).add(clip.filename));
+      toast.success(`Saved ${clip.filename} to training data`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save clip");
+    } finally {
+      setSaving(null);
+    }
+  };
+
   if (!video) return null;
+
+  if (!session) {
+    return <p className="text-sm text-muted-foreground pt-2">Opening video session...</p>;
+  }
 
   return (
     <div className="space-y-4 pt-2 max-w-4xl">
       <p className="text-sm text-muted-foreground">
-        Generate clips first (Step 6), then inspect them here to verify training data quality.
+        Inspect generated clips and save confirmed ones to training data.
       </p>
 
-      {clips.length === 0 && (
-        <p className="text-xs text-muted-foreground">No clips to inspect yet. Run clip generation first.</p>
+      {loading && (
+        <p className="text-xs text-muted-foreground">Scanning for generated clips...</p>
+      )}
+
+      {!loading && clips.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          No clips found for this video. Run clip generation first (Step 6).
+        </p>
       )}
 
       {clips.map((clip) => {
-        const info = clipInfo.get(clip.game_index);
-        const sessionId = clipSessions.get(clip.game_index);
-        const currentFrame = frameIndices.get(clip.game_index) ?? 0;
+        const info = clipInfo.get(clip.filename);
+        const sessionId = clipSessions.get(clip.filename);
+        const currentFrame = frameIndices.get(clip.filename) ?? 0;
+        const isSaved = saved.has(clip.filename);
 
         return (
-          <div key={clip.game_index} className="border rounded-lg p-3 space-y-2">
+          <div key={clip.filename} className="border rounded-lg p-3 space-y-2">
             <div className="flex items-center gap-3">
-              <span className="text-sm font-medium">Game {clip.game_index + 1}</span>
-              <span className="text-xs text-muted-foreground">{clip.num_moves} moves, {clip.num_frames} frames</span>
+              <span className="text-sm font-medium font-mono">{clip.filename}</span>
               <button
-                onClick={() => handleInspectClip(clip)}
-                disabled={inspecting === clip.game_index}
+                onClick={() => handleInspect(clip)}
+                disabled={inspecting === clip.filename}
                 className="text-xs text-primary hover:underline"
               >
-                {inspecting === clip.game_index ? "Loading..." : "Inspect"}
+                {inspecting === clip.filename ? "Loading..." : info ? "Re-inspect" : "Inspect"}
+              </button>
+              <button
+                onClick={() => handleSave(clip)}
+                disabled={saving === clip.filename || isSaved}
+                className={`text-xs px-2 py-0.5 rounded ${
+                  isSaved
+                    ? "bg-green-500/20 text-green-700"
+                    : "bg-primary/10 text-primary hover:bg-primary/20"
+                } disabled:opacity-50`}
+              >
+                {isSaved ? "Saved" : saving === clip.filename ? "Saving..." : "Save to training"}
               </button>
             </div>
 
@@ -74,7 +137,7 @@ export default function InspectPage() {
                     </span>
                   </div>
                   <div><span className="text-muted-foreground">Moves:</span> {info.total_moves}</div>
-                  <div><span className="text-muted-foreground">No-move frames:</span> {info.no_move_frames}</div>
+                  <div><span className="text-muted-foreground">Frames:</span> {info.num_frames}</div>
                   <div><span className="text-muted-foreground">Avg legal:</span> {info.avg_legal_moves?.toFixed(1)}</div>
                 </div>
 
@@ -84,7 +147,7 @@ export default function InspectPage() {
                     min={0}
                     max={info.num_frames - 1}
                     value={currentFrame}
-                    onChange={(e) => setFrameIndices((prev) => new Map(prev).set(clip.game_index, Number(e.target.value)))}
+                    onChange={(e) => setFrameIndices((prev) => new Map(prev).set(clip.filename, Number(e.target.value)))}
                     className="w-full"
                   />
                   <div className="flex gap-3">
@@ -93,11 +156,13 @@ export default function InspectPage() {
                       alt={`Frame ${currentFrame}`}
                       className="w-56 rounded border"
                     />
-                    <div className="text-xs space-y-1">
-                      <div>Frame {currentFrame} / {info.num_frames}</div>
+                    <div className="space-y-2">
+                      <div className="text-xs">Frame {currentFrame} / {info.num_frames}</div>
                       {info.moves.filter((m) => m.frame_index === currentFrame).map((m) => (
-                        <div key={m.frame_index} className="font-medium text-primary">
-                          Move: {m.san || m.uci}
+                        <div key={m.frame_index}>
+                          <div className="text-xs font-medium text-primary">
+                            Move: {m.san || m.uci}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -108,7 +173,6 @@ export default function InspectPage() {
           </div>
         );
       })}
-
     </div>
   );
 }

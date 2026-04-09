@@ -15,9 +15,9 @@ router = APIRouter()
 
 
 @router.get("/frames")
-def list_frames():
-    """List all frames with annotation status."""
-    return {"frames": overlay_bbox_service.list_frames()}
+def list_frames(offset: int = 0, limit: int = 100):
+    """List frames with annotation status (paginated)."""
+    return overlay_bbox_service.list_frames(offset=offset, limit=limit)
 
 
 @router.get("/frame-image/{video_id}/{label}")
@@ -68,11 +68,26 @@ async def refine_bbox(body: RefineInput):
     return result
 
 
+@router.post("/auto-detect-otb")
+async def auto_detect_otb(body: AutoDetectInput):
+    """Detect OTB (real/physical) board in a frame."""
+    video_id, label = body.frame_key.split("/", 1)
+    path = overlay_bbox_service.get_frame_path(video_id, label)
+    if path is None:
+        raise HTTPException(404, f"Frame not found: {body.frame_key}")
+    result = await run_in_threadpool(overlay_bbox_service.auto_detect_otb, path)
+    if "error" in result:
+        raise HTTPException(500, result["error"])
+    return result
+
+
 class AnnotateInput(BaseModel):
     frame_key: str
     has_overlay: bool
     bbox: list[int] | None = None
     notes: str = ""
+    has_otb: bool | None = None
+    otb_bbox: list[int] | None = None
 
 
 @router.post("/annotate")
@@ -82,8 +97,11 @@ def save_annotation(body: AnnotateInput):
         raise HTTPException(400, "bbox required when has_overlay is true")
     if body.bbox is not None and len(body.bbox) != 4:
         raise HTTPException(400, "bbox must have 4 elements [x, y, w, h]")
+    if body.otb_bbox is not None and len(body.otb_bbox) != 4:
+        raise HTTPException(400, "otb_bbox must have 4 elements [x, y, w, h]")
     result = overlay_bbox_service.save_annotation(
-        body.frame_key, body.has_overlay, body.bbox, body.notes
+        body.frame_key, body.has_overlay, body.bbox, body.notes,
+        has_otb=body.has_otb, otb_bbox=body.otb_bbox,
     )
     if "error" in result:
         raise HTTPException(400, result["error"])

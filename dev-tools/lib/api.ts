@@ -19,9 +19,12 @@ import type {
   VideoClip,
   DownloadStatus,
   DownloadResult,
+  GeneratedClip,
   GenerateClipsResponse,
   AiScreenResult,
   GenerationStatus,
+  RealDataOverview,
+  RealVideoProcessingStatus,
   AutoSegmentResponse,
   AutoCalibrateResponse,
 } from "./types";
@@ -578,6 +581,51 @@ export async function generateClips(
   return res.json();
 }
 
+export async function startGenerateClipsJob(
+  sessionId: string,
+  clipId?: number
+): Promise<{ job_id: string; status: string; clips: GeneratedClip[]; error: string | null }> {
+  const body: Record<string, unknown> = {};
+  if (clipId !== undefined) body.clip_id = clipId;
+  const res = await fetch(`/api/video/${sessionId}/generate-clips/jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getGenerateClipsJobStatus(
+  sessionId: string,
+  jobId: string
+): Promise<{ job_id: string; status: string; clips: GeneratedClip[]; error: string | null }> {
+  const res = await fetch(`/api/video/${sessionId}/generate-clips/jobs/${jobId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listGeneratedClips(
+  sessionId: string
+): Promise<{ clips: { filepath: string; filename: string }[] }> {
+  const res = await fetch(`/api/video/${sessionId}/generated-clips`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function saveClipToTraining(
+  sessionId: string,
+  filepath: string
+): Promise<{ saved: string }> {
+  const res = await fetch(`/api/video/${sessionId}/generated-clips/save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filepath }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ── Inspection ──────────────────────────────────────────────
 
 export async function inspectVideo(
@@ -799,6 +847,20 @@ export function overlayBoardImageUrl(filename: string): string {
   return `/api/models/overlay-test/board-image/${encodeURIComponent(filename)}`;
 }
 
+export function segmentationSessionImageUrl(
+  sessionId: string,
+  filename: string,
+): string {
+  return `/api/models/segmentation-eval/session-image/${sessionId}/${encodeURIComponent(filename)}`;
+}
+
+export function calibrationSessionImageUrl(
+  sessionId: string,
+  filename: string,
+): string {
+  return `/api/models/calibration-eval/session-image/${sessionId}/${encodeURIComponent(filename)}`;
+}
+
 // ── Overlay Detection Evaluation Sessions ─────────────────
 
 export interface OverlayEvalResult {
@@ -984,6 +1046,59 @@ export async function getGenerationStatus(): Promise<GenerationStatus> {
 export async function stopGeneration(): Promise<GenerationStatus> {
   const res = await fetch("/api/synthetic/generate/stop", { method: "POST" });
   if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── Real-footage data inventory ────────────────────────────
+
+export async function getRealDataOverview(params?: {
+  clipsDir?: string;
+  limit?: number;
+}): Promise<RealDataOverview> {
+  const search = new URLSearchParams();
+  if (params?.clipsDir) search.set("clips_dir", params.clipsDir);
+  if (params?.limit !== undefined) search.set("limit", String(params.limit));
+  const qs = search.toString();
+  const res = await fetch(`/api/real-data/overview${qs ? `?${qs}` : ""}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function startRealVideoProcessing(params?: {
+  limit?: number;
+  clipsDir?: string;
+  minMoves?: number;
+}): Promise<RealVideoProcessingStatus> {
+  const res = await fetch("/api/real-data/process", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      limit: params?.limit ?? 10,
+      clips_dir: params?.clipsDir,
+      min_moves: params?.minMoves,
+    }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getRealVideoProcessingStatus(): Promise<RealVideoProcessingStatus> {
+  const res = await fetch("/api/real-data/process/status");
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function stopRealVideoProcessing(): Promise<RealVideoProcessingStatus> {
+  const res = await fetch("/api/real-data/process/stop", { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── Model Versions ──────────────────────────────────────────
+
+export async function getModelVersions(): Promise<Record<string, string | null>> {
+  const res = await fetch("/api/models/model-versions");
+  if (!res.ok) return {};
   return res.json();
 }
 

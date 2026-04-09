@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   LineChart,
   Line,
@@ -289,7 +290,7 @@ export default function AiScreeningInspector({
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       const msg = e instanceof Error ? e.message : "Unknown error";
-      alert(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -441,9 +442,17 @@ export default function AiScreeningInspector({
         <div className="space-y-1">
           <div className="flex justify-between text-xs text-muted-foreground">
             <span>Inspecting videos...</span>
-            <span>
-              {progress.current}/{progress.total}
-            </span>
+            <div className="flex items-center gap-2">
+              <span>
+                {progress.current}/{progress.total}
+              </span>
+              <button
+                onClick={() => abortRef.current?.abort()}
+                className="px-2 py-0.5 rounded bg-destructive text-destructive-foreground text-xs hover:bg-destructive/90"
+              >
+                Stop
+              </button>
+            </div>
           </div>
           <div className="h-2 bg-muted rounded overflow-hidden">
             <div
