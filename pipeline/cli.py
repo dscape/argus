@@ -466,6 +466,60 @@ def cmd_real_data_process(args):
     print(f"Generated {generated_clips} clip(s) into {clips_dir}")
 
 
+def cmd_reference_pgn_benchmark(args):
+    """Compare generated real-video clips against a reference PGN."""
+    import json
+    from pathlib import Path
+
+    from pipeline.overlay.reference_pgn_benchmark import benchmark_reference_game
+
+    pgn_path = Path(args.pgn)
+    video_id = args.video_id or pgn_path.stem
+    result = benchmark_reference_game(
+        pgn_path,
+        video_id=video_id,
+        clips_dir=args.clips_dir,
+    )
+
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
+    print(f"Video:           {result['video_id']}")
+    print(f"Reference PGN:   {result['white']} vs {result['black']} ({result['result']})")
+    print(f"Reference plies: {result['reference_plies']}")
+    print(
+        f"Coverage:        {result['coverage_plies']}/{result['reference_plies']} "
+        f"({result['coverage_ratio']:.1%})"
+    )
+    print("")
+    print("Clips:")
+    for clip in result["clips"]:
+        clip_name = Path(clip["clip_path"]).name
+        exact = ", ".join(str(offset) for offset in clip["exact_match_offsets"]) or "-"
+        prefix_start = clip["longest_prefix_start_ply"]
+        prefix = (
+            f"{prefix_start}+{clip['longest_prefix_plies']}"
+            if prefix_start is not None
+            else f"-{clip['longest_prefix_plies']}"
+        )
+        print(
+            f"  {clip_name}  plies={clip['clip_plies']}  "
+            f"start={clip['segment_start_time_seconds']:.1f}s  exact={exact}  prefix={prefix}"
+        )
+
+    print("")
+    print("Coverage runs:")
+    for run in result["coverage_runs"]:
+        print(f"  {run['start_ply']}-{run['end_ply']} ({run['plies']} plies)")
+
+    if result["gaps"]:
+        print("")
+        print("Gaps:")
+        for gap in result["gaps"]:
+            print(f"  {gap['start_ply']}-{gap['end_ply']} ({gap['plies']} plies)")
+
+
 def cmd_inspect(args):
     """Inspect videos by extracting frames and detecting overlay + OTB."""
     from pipeline.db.connection import get_conn
@@ -1352,6 +1406,35 @@ def main():
         help="Ignore local videos larger than this size",
     )
 
+    # reference-pgn-benchmark
+    p = subparsers.add_parser(
+        "reference-pgn-benchmark",
+        help="Compare generated real-video clips against a reference PGN",
+    )
+    p.add_argument(
+        "--pgn",
+        type=str,
+        required=True,
+        help="Path to a reference PGN file",
+    )
+    p.add_argument(
+        "--video-id",
+        type=str,
+        default=None,
+        help="Video id whose clip_overlay_<video_id>*.pt files should be benchmarked",
+    )
+    p.add_argument(
+        "--clips-dir",
+        type=str,
+        default="data/argus/train_real",
+        help="Directory containing generated real clip_*.pt files",
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the benchmark result as JSON",
+    )
+
     # overlay-test
     p = subparsers.add_parser("overlay-test", help="Test overlay pipeline on a screenshot")
     p.add_argument("--image", type=str, required=True, help="Path to screenshot image")
@@ -1755,6 +1838,7 @@ def main():
         "split-clips": cmd_split_clips,
         "real-data-overview": cmd_real_data_overview,
         "real-data-process": cmd_real_data_process,
+        "reference-pgn-benchmark": cmd_reference_pgn_benchmark,
         "overlay-test": cmd_overlay_test,
         "overlay-test-reader": cmd_overlay_test_reader,
         "overlay-yolo-export": cmd_overlay_yolo_export,

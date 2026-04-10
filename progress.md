@@ -241,6 +241,77 @@
   - `make lint` ✅
   - `make test` ✅ (`492 passed, 22 skipped`)
 
+## Reference-PGN benchmark follow-up (American Cup Blitz 2026)
+
+- Goal of this follow-up: use known PGNs to measure **precision vs recall** of the real-video move-extraction path, instead of judging clips only by internal replay validity.
+- Local search for `/dev/outprep` / `outprep` artifacts found nothing useful for these videos, so the reference source used here is the public Chess.com master-game pages.
+- Saved raw reference payloads and decoded PGNs under `outputs/reference/chesscom/` for:
+  - `e4lGbQp4pU4` → `https://www.chess.com/games/view/18340134`
+  - `7RaBQag34Hk` → `https://www.chess.com/games/view/18340040`
+  - `2wWUKmCBr6A` → `https://www.chess.com/games/view/18339976`
+- Important benchmark insight:
+  - every generated clip that survived replay validation matched an **exact contiguous subsequence** of the real reference PGN
+  - that means the current split-on-illegal strategy is giving us **high precision on kept spans**
+  - the dominant failure mode is **recall / continuity loss**, not hallucinated moves inside saved clips
+- Three-game benchmark results:
+  - `e4lGbQp4pU4` (**Heimann–Caruana**, reference `80` plies)
+    - extracted exact spans: plies `2-6`, `10-14`, `24-36`, `38-44`, `58-66`, `68-76`
+    - total coverage: `48/80` plies (`60.0%`)
+    - missed windows: `0-1`, `7-9`, `15-23`, `37`, `45-57`, `67`, `77-79`
+    - interpretation: early opening detection is still fragile even after the crop fixes, but the kept middle/endgame spans are accurate
+  - `7RaBQag34Hk` (**Lodici–Caruana**, reference `109` plies)
+    - extracted exact spans: `4-8`, `16-23`, `28-43`, `62-66`, `70-75`, `78-87`
+    - total coverage: `50/109` plies (`45.9%`)
+    - note: this clip starts mid-game (`detect_moves()` logs that the first readable FEN is already non-starting), so the missing first few plies are partly source-video truncation, not pure detector failure
+  - `2wWUKmCBr6A` (**Woodward–So**, reference `86` plies)
+    - extracted exact spans: `0-9`, `12-29`
+    - total coverage: `28/86` plies (`32.6%`)
+    - missed windows: `10-11`, `30-85`
+    - interpretation: opening precision is good, but continuity collapses badly in the later middlegame
+- Cross-game conclusion:
+  - the current pipeline is already good enough to produce **trustworthy training subclips** from real footage when it stays locked on the position
+  - the main blocker to turning one real game into one near-complete `.pt` example is **bridging through isolated overlay misreads and layout jitter without segmenting away the rest of the game**
+  - camera-crop padding improved training-frame quality, but it did **not** materially improve PGN coverage; move recall is governed mainly by overlay-board read continuity
+
+## Plan from the benchmark
+
+1. Treat the three American Cup Blitz games above as a standing **reference benchmark set** for this branch.
+2. For every overlay-read / move-detection change, measure:
+   - exact-span coverage against reference PGN
+   - number of saved segments
+   - whether any saved segment stops being an exact contiguous reference match
+3. Prioritize fixes that improve **coverage** while preserving the current **exact-span precision**.
+4. Focus next on continuity failures, in this order:
+   - opening-phase misses right after clip start
+   - single-frame illegal jumps that split otherwise healthy middlegame spans
+   - late-game drift after captures / piece imbalances / low-material positions
+5. Keep using public-PGN games to tune the pipeline, because they let us distinguish:
+   - true source-video truncation
+   - acceptable segment splits
+   - actual detector/reader regressions
+
+## Reference benchmark tooling follow-up
+
+- Added a reusable CLI command:
+  - `python -m pipeline.cli reference-pgn-benchmark --pgn <path> --video-id <id> [--json]`
+- Added `pipeline/overlay/reference_pgn_benchmark.py` so reference-PGN coverage checks are now repeatable instead of ad-hoc notebook/shell work.
+- The command computes:
+  - exact contiguous clip-to-PGN matches
+  - longest prefix matches for non-exact clips
+  - total exact coverage ratio
+  - coverage runs and uncovered gaps
+- Saved current benchmark JSON snapshots under `outputs/reference/benchmarks/` for:
+  - `e4lGbQp4pU4.json`
+  - `7RaBQag34Hk.json`
+  - `2wWUKmCBr6A.json`
+- Added regression coverage:
+  - `tests/pipeline/test_reference_pgn_benchmark.py`
+  - CLI coverage in `tests/pipeline/test_cli_commands.py`
+- Validation after adding the benchmark tooling:
+  - `make typecheck` ✅
+  - `make lint` ✅
+  - `make test` ✅ (`495 passed, 22 skipped`)
+
 ## Active dependency-unblocking plan
 
 1. Audit the `39` downloaded local videos under `200MB` and determine, for each one, why it is or is not currently convertible into training clips.

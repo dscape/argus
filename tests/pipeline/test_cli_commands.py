@@ -324,6 +324,88 @@ class TestRealDataProcessCommand:
         ]
 
 
+class TestReferencePgnBenchmarkCommand:
+    """Test the reference-pgn-benchmark CLI command."""
+
+    def test_prints_summary(self, monkeypatch, capsys):
+        import pipeline.overlay.reference_pgn_benchmark as reference_pgn_benchmark
+
+        monkeypatch.setattr(
+            reference_pgn_benchmark,
+            "benchmark_reference_game",
+            lambda pgn_path, video_id, clips_dir: {
+                "video_id": video_id,
+                "white": "White",
+                "black": "Black",
+                "result": "1-0",
+                "reference_plies": 10,
+                "coverage_plies": 6,
+                "coverage_ratio": 0.6,
+                "coverage_runs": [{"start_ply": 2, "end_ply": 7, "plies": 6}],
+                "gaps": [{"start_ply": 0, "end_ply": 1, "plies": 2}],
+                "clips": [
+                    {
+                        "clip_path": "data/argus/train_real/clip_overlay_demo123_0.pt",
+                        "segment_start_time_seconds": 12.0,
+                        "segment_end_time_seconds": 30.0,
+                        "clip_plies": 6,
+                        "exact_match_offsets": [2],
+                        "longest_prefix_start_ply": 2,
+                        "longest_prefix_plies": 6,
+                    }
+                ],
+            },
+        )
+
+        cli.cmd_reference_pgn_benchmark(
+            SimpleNamespace(
+                pgn="outputs/reference/chesscom/demo123.pgn",
+                video_id="demo123",
+                clips_dir="data/argus/train_real",
+                json=False,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "Video:           demo123" in out
+        assert "Coverage:        6/10 (60.0%)" in out
+        assert "clip_overlay_demo123_0.pt" in out
+        assert "2-7 (6 plies)" in out
+
+    def test_json_output(self, monkeypatch, capsys):
+        import pipeline.overlay.reference_pgn_benchmark as reference_pgn_benchmark
+
+        monkeypatch.setattr(
+            reference_pgn_benchmark,
+            "benchmark_reference_game",
+            lambda pgn_path, video_id, clips_dir: {
+                "video_id": video_id,
+                "coverage_ratio": 0.5,
+                "coverage_runs": [],
+                "gaps": [],
+                "clips": [],
+                "white": "White",
+                "black": "Black",
+                "result": "1/2-1/2",
+                "reference_plies": 0,
+                "coverage_plies": 0,
+            },
+        )
+
+        cli.cmd_reference_pgn_benchmark(
+            SimpleNamespace(
+                pgn="outputs/reference/chesscom/demo123.pgn",
+                video_id="demo123",
+                clips_dir="data/argus/train_real",
+                json=True,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert '"video_id": "demo123"' in out
+        assert '"coverage_ratio": 0.5' in out
+
+
 class TestInspectCalibrationCommand:
     """Test the inspect-calibration CLI command."""
 
