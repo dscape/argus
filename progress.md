@@ -312,14 +312,72 @@
   - `make lint` ✅
   - `make test` ✅ (`495 passed, 22 skipped`)
 
+## CLI-first segmentation + dataset scale-up follow-up
+
+- Added CLI-first helpers for the dev-tools-only segmentation/calibration path:
+  - `python -m pipeline.cli auto-segment-video --video-id <id> [--replace-existing]`
+  - `python -m pipeline.cli auto-calibrate-clip --video-id <id> --clip-id <id>`
+- Added `pipeline/overlay/clip_workflow.py` so clip segmentation + clip auto-calibration are callable from the pipeline CLI instead of only through the FastAPI layer.
+- `dev-tools/api/services/videos/segment_service.py` now delegates to the shared pipeline workflow instead of owning a separate implementation.
+- Added CLI regression coverage in `tests/pipeline/test_cli_commands.py` for both new commands.
+- Used the existing real-data batch processor to scale the local real dataset well past the initial 3-video benchmark set:
+  - command runs:
+    - `PYTHONPATH=dev-tools .venv/bin/python3 -m pipeline.cli -v real-data-process --limit 5 --min-moves 5`
+    - `PYTHONPATH=dev-tools .venv/bin/python3 -m pipeline.cli -v real-data-process --limit 20 --min-moves 5`
+  - current overview (`real-data-overview --limit 5000`):
+    - local videos under `200MB`: `41`
+    - processed source videos with clips: `11`
+    - still ready but clipless after attempts: `9`
+    - blocked: `21` (`16` missing calibration, `5` not approved)
+- Current generated real dataset in `data/argus/train_real/`:
+  - `39` clips from `11` source videos
+  - all `39` clips verified to include PGN moves, initial FEN, timestamps, and frame tensors
+- New source videos successfully converted into replay-valid `.pt` clips on this branch:
+  - `O8ZwstOxG_A`
+  - `h2WrtkfwRl8`
+  - `EEZo0uDh4AY`
+  - `hryRA0-fqm0`
+  - `vkoTN5DxRS0`
+  - `psrPAoHr4wA`
+  - `9h4IE1G99OE`
+  - `GGzMsJZf0OM`
+- Rebuilt the train/val split from the expanded real dataset:
+  - `python -m pipeline.cli split-clips --clips-dir data/argus/train_real --out-dir data/argus/training_dataset`
+  - result: `31` train clips / `8` val clips
+- Fresh smoke training on the expanded real dataset:
+  - command:
+    - `.venv/bin/python3 scripts/train.py data=real_clips data.clip_length=64 training.epochs=2 training.batch_size=2 training.gradient_accumulation=1 training.wandb.enabled=false training.checkpoint.save_every=2 output_dir=outputs/2026-04-10/real_clips_11videos_smoke`
+  - result:
+    - epoch 1 train `move` loss `3.4122`, `move_acc=0.0424`
+    - epoch 2 train `move` loss `3.0080`, `move_acc=0.2859`
+    - validation after epoch 2: `move_accuracy=0.0698`, `move_detection_f1=0.0000`, `val_loss=3.3722`
+- Fresh evaluation of that checkpoint on the `8` real validation clips:
+  - `scripts/evaluate.py --checkpoint outputs/2026-04-10/real_clips_11videos_smoke/checkpoint_epoch0002.pt --data-dir data/argus/training_dataset/val --clip-length 64 --max-clips 8 --batch-size 2 --device cpu`
+  - result:
+    - `move_accuracy=0.0793`
+    - `move_detection_f1=0.0000`
+    - `avg_pgn_edit_distance=1.0000`
+    - `avg_prefix_accuracy=0.0000`
+- Interpretation:
+  - the expanded real dataset is now materially larger and meets the "process at least 5 local videos end-to-end" bar comfortably (`11` videos)
+  - model optimization on this data is still not good enough; move detection / full-PGN reconstruction remains the limiting inference problem
+  - the dataset bottleneck is reduced, but the next quality bottleneck is still real-video move-read continuity and clip yield on the remaining ready videos
+- CLI-first unblock spot check on a previously `missing_calibration` video:
+  - `RyXsGZckLHQ` auto-segmented successfully to DB clip `73`
+  - `auto-calibrate-clip` applied:
+    - overlay `[34, 208, 789, 786]`
+    - camera `[1201, 617, 367, 180]`
+  - follow-up `generate-clips --video-id RyXsGZckLHQ --min-moves 5` still produced `0` clips
+  - conclusion: for that video, missing calibration was only the first blocker; the remaining blocker is move-detection continuity / no sufficiently long legal spans
+
 ## Active dependency-unblocking plan
 
-1. Audit the `39` downloaded local videos under `200MB` and determine, for each one, why it is or is not currently convertible into training clips.
-   - expected failure modes: no approval row, no channel calibration, no clip-level calibration, overlay read instability, no legal move segment found
+1. Audit the remaining `9` ready local videos that still produce no clips and classify the exact dominant failure mode for each one.
+   - current likely buckets: source clip too short, repeated hard cuts, mid-game pickup with no long legal span, overlay read instability on non-STL layouts
 2. Improve the pipeline/tooling so this audit is fast and repeatable from the CLI.
-3. Use the fixed pipeline to process as many eligible local videos as possible into `.pt` clips.
-4. Rebuild `data/argus/training_dataset/` once the clip count is materially larger.
-5. Only after that, run fresh training/eval on the expanded real dataset.
+3. Focus code work on increasing clip yield / continuity for those remaining ready videos without regressing the exact-match benchmark spans.
+4. Rebuild `data/argus/training_dataset/` after each materially successful clip-yield change.
+5. Re-run small real-data training/eval checks after each meaningful data expansion or continuity fix.
 
 # Validation of progress tasks
 
