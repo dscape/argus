@@ -406,6 +406,118 @@ class TestReferencePgnBenchmarkCommand:
         assert '"coverage_ratio": 0.5' in out
 
 
+class TestAutoSegmentVideoCommand:
+    """Test the auto-segment-video CLI command."""
+
+    def test_prints_summary(self, monkeypatch, capsys):
+        import pipeline.overlay.clip_workflow as clip_workflow
+
+        monkeypatch.setattr(
+            clip_workflow,
+            "auto_segment_video",
+            lambda video_id, sample_interval_sec, replace_existing: {
+                "segments": [
+                    {
+                        "clip_id": 12,
+                        "start_time": 5.0,
+                        "end_time": 42.5,
+                        "score": 0.91,
+                        "overlay_bbox": [10, 20, 300, 300],
+                    }
+                ],
+                "gaps": [{"start_time": 0.0, "end_time": 5.0}],
+                "video_resolution": [1920, 1080],
+                "total_frames_sampled": 48,
+                "processing_time_sec": 2.3,
+            },
+        )
+
+        cli.cmd_auto_segment_video(
+            SimpleNamespace(
+                video_id="demo123",
+                sample_interval_sec=30.0,
+                replace_existing=False,
+                json=False,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "Video:            demo123" in out
+        assert "Segments created: 1" in out
+        assert "clip_id=12" in out
+        assert "overlay=[10, 20, 300, 300]" in out
+
+
+class TestAutoCalibrateClipCommand:
+    """Test the auto-calibrate-clip CLI command."""
+
+    def test_prints_applied_summary(self, monkeypatch, capsys):
+        import pipeline.overlay.clip_workflow as clip_workflow
+
+        monkeypatch.setattr(
+            clip_workflow,
+            "auto_calibrate_clip",
+            lambda video_id, clip_id: {
+                "clip_id": clip_id,
+                "applied": True,
+                "proposal": {
+                    "overlay_bbox": [1, 2, 3, 4],
+                    "camera_bbox": [5, 6, 7, 8],
+                    "board_theme": "lichess_default",
+                    "theme_confidence": 0.98,
+                    "board_flipped": False,
+                    "orientation_confidence": 0.95,
+                    "ref_resolution": [1920, 1080],
+                },
+                "failure_reason": None,
+                "detected_overlay_bbox": [1, 2, 3, 4],
+                "preview_frame_b64": None,
+            },
+        )
+
+        cli.cmd_auto_calibrate_clip(
+            SimpleNamespace(
+                video_id="demo123",
+                clip_id=55,
+                json=False,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "Clip:             55" in out
+        assert "Applied:          True" in out
+        assert "Overlay bbox:     [1, 2, 3, 4]" in out
+        assert "Camera bbox:      [5, 6, 7, 8]" in out
+
+    def test_prints_failure_summary(self, monkeypatch, capsys):
+        import pipeline.overlay.clip_workflow as clip_workflow
+
+        monkeypatch.setattr(
+            clip_workflow,
+            "auto_calibrate_clip",
+            lambda video_id, clip_id: {
+                "clip_id": clip_id,
+                "applied": False,
+                "proposal": None,
+                "failure_reason": "overlay_not_found",
+                "detected_overlay_bbox": None,
+                "preview_frame_b64": None,
+            },
+        )
+
+        cli.cmd_auto_calibrate_clip(
+            SimpleNamespace(
+                video_id="demo123",
+                clip_id=55,
+                json=False,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "Applied:          False" in out
+        assert "Failure reason:   overlay_not_found" in out
+
+
 class TestInspectCalibrationCommand:
     """Test the inspect-calibration CLI command."""
 

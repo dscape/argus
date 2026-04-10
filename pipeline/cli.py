@@ -926,6 +926,75 @@ def cmd_auto_calibrate(args):
         print("\n  Run with --apply to save this calibration.")
 
 
+def cmd_auto_segment_video(args):
+    """Auto-segment one downloaded video into DB clip rows."""
+    import json
+
+    from pipeline.overlay.clip_workflow import auto_segment_video
+
+    result = auto_segment_video(
+        args.video_id,
+        sample_interval_sec=args.sample_interval_sec,
+        replace_existing=args.replace_existing,
+    )
+
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
+    if result.get("error"):
+        print(result["error"])
+        return
+
+    print(f"Video:            {args.video_id}")
+    print(f"Segments created: {len(result['segments'])}")
+    print(f"Gaps found:       {len(result['gaps'])}")
+    print(f"Resolution:       {tuple(result['video_resolution'])}")
+    print(f"Frames sampled:   {result['total_frames_sampled']}")
+    print(f"Processing time:  {result['processing_time_sec']}s")
+    if result["segments"]:
+        print("")
+        print("Segments:")
+        for segment in result["segments"]:
+            print(
+                f"  clip_id={segment['clip_id']}  {segment['start_time']:.1f}-{segment['end_time']:.1f}s  "
+                f"score={segment['score']:.3f}  overlay={segment['overlay_bbox']}"
+            )
+
+
+def cmd_auto_calibrate_clip(args):
+    """Auto-calibrate one DB clip from real frames and apply it."""
+    import json
+
+    from pipeline.overlay.clip_workflow import auto_calibrate_clip
+
+    result = auto_calibrate_clip(args.video_id, args.clip_id)
+
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
+    print(f"Clip:             {result['clip_id']}")
+    print(f"Applied:          {result['applied']}")
+    if result["proposal"] is None:
+        print(f"Failure reason:   {result['failure_reason'] or '-'}")
+        print(f"Overlay detected: {result['detected_overlay_bbox']}")
+        return
+
+    proposal = result["proposal"]
+    print(f"Overlay bbox:     {proposal['overlay_bbox']}")
+    print(f"Camera bbox:      {proposal['camera_bbox']}")
+    print(
+        f"Theme:            {proposal['board_theme']} "
+        f"({proposal['theme_confidence']:.3f})"
+    )
+    print(
+        f"Board flipped:    {proposal['board_flipped']} "
+        f"({proposal['orientation_confidence']:.3f})"
+    )
+    print(f"Ref resolution:   {proposal['ref_resolution']}")
+
+
 def cmd_smoke_test(args):
     """Run quick smoke tests (no DB required)."""
     import chess
@@ -1733,6 +1802,42 @@ def main():
         help="Save the proposed calibration (otherwise just print)",
     )
 
+    # auto-segment-video
+    p = subparsers.add_parser(
+        "auto-segment-video",
+        help="Auto-segment one downloaded video into DB clip rows",
+    )
+    p.add_argument("--video-id", type=str, required=True, help="Video id to segment")
+    p.add_argument(
+        "--sample-interval-sec",
+        type=float,
+        default=30.0,
+        help="Layout-segmentation sampling interval in seconds",
+    )
+    p.add_argument(
+        "--replace-existing",
+        action="store_true",
+        help="Replace existing DB clip rows for this video before segmenting",
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the segmentation result as JSON",
+    )
+
+    # auto-calibrate-clip
+    p = subparsers.add_parser(
+        "auto-calibrate-clip",
+        help="Auto-calibrate one DB clip from real frames and apply it",
+    )
+    p.add_argument("--video-id", type=str, required=True, help="Owning video id")
+    p.add_argument("--clip-id", type=int, required=True, help="Clip id from video_clips")
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the calibration result as JSON",
+    )
+
     # smoke-test
     subparsers.add_parser("smoke-test", help="Run quick smoke tests (no DB required)")
 
@@ -1853,6 +1958,8 @@ def main():
         "ai-retrain": cmd_ai_retrain,
         "ai-profile": cmd_ai_profile,
         "auto-calibrate": cmd_auto_calibrate,
+        "auto-segment-video": cmd_auto_segment_video,
+        "auto-calibrate-clip": cmd_auto_calibrate_clip,
         "smoke-test": cmd_smoke_test,
         "inspect-calibration": cmd_inspect_calibration,
         "ai-extract-status": cmd_ai_extract_status,
