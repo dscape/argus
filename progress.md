@@ -210,6 +210,36 @@
   - `make typecheck` ✅
   - `make test` ✅ (`477 passed, 22 skipped`)
 
+## Single-video real-clip validation follow-up (`e4lGbQp4pU4`)
+
+- Target video used for end-to-end validation: `e4lGbQp4pU4` — **Mark Heimann vs. Fabiano Caruana | The American Cup Blitz**.
+- Local clip-level calibration fixes applied while iterating on this video:
+  - overlay bbox trimmed from `[63, 6, 1045, 1074]` to `[63, 16, 1040, 1049]` to remove coordinate-label gutter that was polluting edge-square reads
+  - camera bbox padded from `[1321, 878, 394, 179]` to `[1300, 835, 440, 220]` so tall back-rank pieces are no longer clipped in generated board crops
+- Root cause for the `.pt` generation failure was not the camera crop. The real blocker was move-detection continuity:
+  - `detect_moves()` intentionally resynced across illegal FEN jumps, but `OverlayClipGenerator` treated the whole mixed segment as replay-consistent and then dropped it when a later move became illegal during clip assembly
+  - added `split_on_illegal=True` support to `pipeline.overlay.overlay_move_detector.detect_moves()` and now call it from `OverlayClipGenerator.generate_clips()` so replay-consistent spans become separate training clips instead of poisoning the whole segment
+  - regression coverage added in `tests/pipeline/test_overlay_move_detector.py`
+- Manual spot checks on this video after the overlay-bbox trim:
+  - sampled frame `712` now reads the exact overlay FEN visible on-screen: `rnbqkbnr/pp3ppp/2p1p3/3p4/4P3/3P1NP1/PPP2P1P/RNBQKB1R`
+  - saved camera-crop inspections under `outputs/inspect/e4lGbQp4pU4/` show the padded bbox keeps the full physical pieces in frame
+- Fresh generation result after the fix:
+  - command: `PYTHONPATH=dev-tools .venv/bin/python3 -m pipeline.cli -v generate-clips --video-id e4lGbQp4pU4 --min-moves 5`
+  - output: `6` replay-valid clips in `data/argus/train_real/clip_overlay_e4lGbQp4pU4_clip70_*.pt`
+  - representative clip: `clip_overlay_e4lGbQp4pU4_clip70_4.pt`
+    - `13` moves, `204` frames
+    - PGN: `f4 exf4 gxf4 Nxe4 Nxg6 hxg6 Bxe4 Nf6 Bg2 Bc5 Qe2 Be6 Kh1`
+    - replay-valid from stored `initial_board_fen`
+    - extracted frame spot checks in `outputs/inspect/e4lGbQp4pU4/clip70_4_frames/` look visually correct and no longer clip the physical pieces
+- Clip-inspector follow-up uncovered and fixed a separate dev-tools validation bug:
+  - `api.services.data.clip_service.inspect()` ignored `initial_board_fen` unless the clip had legacy `fens`, so valid mid-game real clips were falsely shown as invalid in `/data/real`
+  - added `pipeline.overlay.replay.build_replay_board()` to infer side-to-move from the first move UCI and reused it in clip generation, CLI diagnostics, and dev-tools clip inspection
+  - regenerated `e4lGbQp4pU4` clips now expose `initial_side_to_move` metadata and inspect as replay-valid through the API/UI path as well
+  - browser/API-equivalent spot check now reports `clip_overlay_e4lGbQp4pU4_clip70_4.pt` as `replay_valid=true`
+- Validation after the code change:
+  - `make typecheck` ✅
+  - `make lint` ✅
+  - `make test` ✅ (`492 passed, 22 skipped`)
 
 ## Active dependency-unblocking plan
 

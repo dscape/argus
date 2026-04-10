@@ -13,6 +13,8 @@ import chess
 import cv2
 import numpy as np
 
+from pipeline.overlay.replay import build_replay_board
+
 logger = logging.getLogger(__name__)
 
 
@@ -246,10 +248,11 @@ def inspect_clip(
 
             # ── Replay validation ──
             print("Game replay validation:")
-            board = chess.Board()
             initial_board_fen = clip.get("initial_board_fen")
             if isinstance(initial_board_fen, str):
-                board.set_board_fen(initial_board_fen)
+                board = build_replay_board(initial_board_fen, moves_list[0][1])
+            else:
+                board = chess.Board()
             valid = True
             for i, (t, uci, _) in enumerate(moves_list):
                 try:

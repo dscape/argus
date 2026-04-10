@@ -105,6 +105,7 @@ def detect_moves(
     fps: float,
     start_time: float = 0.0,
     stability_window: int = STABILITY_WINDOW,
+    split_on_illegal: bool = False,
 ) -> list[GameSegment]:
     """Detect moves from a sequence of board FENs.
 
@@ -114,6 +115,8 @@ def detect_moves(
         fps: Frames per second of the sampled sequence.
         start_time: Start time offset in seconds.
         stability_window: Frames of identical FEN before accepting a position.
+        split_on_illegal: If true, end the current segment and start a new one
+            whenever a position jump cannot be explained by a legal move.
 
     Returns:
         List of GameSegments (one per game in multi-game streams).
@@ -241,11 +244,22 @@ def detect_moves(
         else:
             # No legal move found. Could be a misread or a position we
             # can't track (e.g., the overlay jumped to a different position
-            # during analysis/review). Log and try to resync.
+            # during analysis/review). Log and either resync in-place or
+            # split the segment so downstream training clip generation keeps
+            # only replay-consistent spans.
             logger.warning(
                 f"No legal move found at frame {frame_idx}: "
                 f"{stable_fen} -> {current_fen}"
             )
+            if split_on_illegal:
+                current_segment.end_frame = frame_idx
+                current_segment.end_time = timestamp
+                if current_segment.moves:
+                    segments.append(current_segment)
+                current_segment = GameSegment(
+                    start_frame=frame_idx,
+                    start_time=timestamp,
+                )
             # Try to resync by setting the board to the new position
             try:
                 board = chess.Board()
@@ -253,6 +267,8 @@ def detect_moves(
                 # We lose track of whose turn it is, so this is best-effort
             except ValueError:
                 pass
+            if split_on_illegal:
+                ply = 0
 
         stable_fen = current_fen
         stable_count = 1

@@ -10,6 +10,8 @@ import cv2
 import numpy as np
 import torch
 
+from pipeline.overlay.replay import build_replay_board
+
 # Session storage: session_id -> {"clip": dict, "path": str}
 _sessions: dict[str, dict[str, Any]] = {}
 
@@ -119,14 +121,15 @@ def inspect(session_id: str) -> dict:
 
         # Replay validation
         if moves and vocab:
-            # Use the stored starting FEN (frame 0, before any moves)
-            # so we replay from the correct mid-game position instead
-            # of the standard starting position.
-            fens = clip.get("fens")
-            if fens and len(fens) > 0:
-                board = chess.Board(fens[0])
+            initial_board_fen = clip.get("initial_board_fen")
+            if isinstance(initial_board_fen, str):
+                board = build_replay_board(initial_board_fen, moves[0]["uci"])
             else:
-                board = chess.Board()
+                fens = clip.get("fens")
+                if fens and len(fens) > 0:
+                    board = chess.Board(fens[0])
+                else:
+                    board = chess.Board()
             replay_valid = True
             for i, m in enumerate(moves):
                 try:
@@ -154,6 +157,7 @@ def inspect(session_id: str) -> dict:
     metadata: dict[str, Any] = {}
     for key in [
         "initial_board_fen",
+        "initial_side_to_move",
         "pgn_moves",
         "source_video_id",
         "source_channel_handle",

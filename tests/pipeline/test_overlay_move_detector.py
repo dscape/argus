@@ -178,6 +178,40 @@ class TestDetectMoves:
         assert segments[0].num_moves == len(game1_moves)
         assert segments[1].num_moves == len(game2_moves)
 
+    def test_split_on_illegal_starts_new_segment(self):
+        """Illegal position jumps should split segments when requested."""
+        board = chess.Board()
+        start = board.board_fen()
+        board.push(chess.Move.from_uci("e2e4"))
+        after_e4 = board.board_fen()
+        board.push(chess.Move.from_uci("c7c5"))
+        board.push(chess.Move.from_uci("g1f3"))
+        jumped = board.board_fen()
+
+        resynced = chess.Board()
+        resynced.set_board_fen(jumped)
+        resynced.turn = chess.WHITE
+        resynced.push(chess.Move.from_uci("d2d4"))
+        after_d4 = resynced.board_fen()
+
+        fens = []
+        indices = []
+        idx = 0
+        for fen in [start, after_e4, jumped, after_d4]:
+            for _ in range(3):
+                fens.append(fen)
+                indices.append(idx)
+                idx += 1
+
+        merged = detect_moves(fens, indices, fps=2.0)
+        assert len(merged) == 1
+        assert [move.move_uci for move in merged[0].moves] == ["e2e4", "d2d4"]
+
+        split = detect_moves(fens, indices, fps=2.0, split_on_illegal=True)
+        assert len(split) == 2
+        assert [move.move_uci for move in split[0].moves] == ["e2e4"]
+        assert [move.move_uci for move in split[1].moves] == ["d2d4"]
+
     def test_empty_fens(self):
         """Handle empty FEN list gracefully."""
         segments = detect_moves([], [], fps=2.0)

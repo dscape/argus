@@ -18,6 +18,7 @@ import torch
 from pipeline.overlay.calibration import LayoutCalibration, get_calibration
 from pipeline.overlay.grid_detector import detect_grid
 from pipeline.overlay.overlay_move_detector import GameSegment, detect_moves
+from pipeline.overlay.replay import build_replay_board
 from pipeline.overlay.sequence_reader import LockedOverlaySequenceReader
 
 logger = logging.getLogger(__name__)
@@ -181,6 +182,7 @@ class OverlayClipGenerator:
             frame_indices=frame_indices,
             fps=fps,
             start_time=clip_start_time,
+            split_on_illegal=True,
         )
 
         if not segments:
@@ -311,8 +313,11 @@ class OverlayClipGenerator:
         initial_board_fen = (
             segment.moves[0].fen_before if segment.moves else chess.STARTING_BOARD_FEN
         )
+        initial_move_uci = segment.moves[0].move_uci if segment.moves else None
+        initial_board = build_replay_board(initial_board_fen, initial_move_uci)
         clip_metadata = {
             "initial_board_fen": initial_board_fen,
+            "initial_side_to_move": "w" if initial_board.turn == chess.WHITE else "b",
             "pgn_moves": segment.pgn_moves,
             "num_moves": segment.num_moves,
             "move_ucis": [move.move_uci for move in segment.moves],
@@ -348,8 +353,7 @@ class OverlayClipGenerator:
             move_frame_map[adjusted_idx] = move
 
         # Replay the game to generate legal masks
-        board = chess.Board()
-        board.set_board_fen(initial_board_fen)
+        board = initial_board.copy(stack=False)
 
         for i, frame_idx in enumerate(segment_frame_indices):
             # Generate legal mask for current position

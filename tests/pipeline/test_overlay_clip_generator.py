@@ -324,6 +324,40 @@ class TestBuildTrainingClip:
 
         assert extracted_moves == ["g1f3", "b8c6"]
 
+    @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
+    def test_midgame_segment_infers_black_to_move_from_first_move(self, generator):
+        board = chess.Board()
+        board.push(chess.Move.from_uci("e2e4"))
+
+        segment, frame_indices = _make_game_segment_from_board(
+            board,
+            ["e7e5", "g1f3"],
+            frames_per_move=3,
+        )
+        camera_crops = _make_camera_crops(len(frame_indices))
+
+        clip = generator._build_training_clip(
+            camera_crops=camera_crops,
+            frame_indices=frame_indices,
+            segment=segment,
+            fps=30.0,
+        )
+
+        assert clip is not None
+        assert clip["initial_board_fen"] == board.board_fen()
+        assert clip["initial_side_to_move"] == "b"
+
+        detect = clip["detect_targets"]
+        targets = clip["move_targets"]
+        move_frames = (detect == 1.0).nonzero(as_tuple=True)[0]
+        extracted_moves = []
+        for frame_t in move_frames:
+            idx = targets[frame_t].item()
+            if idx != NO_MOVE_IDX:
+                extracted_moves.append(VOCAB.index_to_uci(idx))
+
+        assert extracted_moves == ["e7e5", "g1f3"]
+
     def test_short_segment_skipped(self, generator):
         """Segments with < 5 frames should return None."""
         segment, frame_indices = _make_game_segment(["e2e4"], frames_per_move=1)
