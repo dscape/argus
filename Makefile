@@ -1,5 +1,5 @@
 .PHONY: install dev test lint typecheck format train eval datagen infer train-pieces clean \
-       db-up db-down db-backup db-restore pipeline-install seed-channels crawl screen inspect download generate-clips split-clips pipeline-stats \
+       db-up db-down db-backup db-restore pipeline-install seed-channels crawl screen inspect download generate-clips split-clips real-data-overview real-data-process pipeline-stats \
        dev-tools dev-tools-down blender-server blender-server-stop ensure-overlay-data \
        up down preview \
        docker-ai-extract docker-ai-train docker-ai-eval docker-ai-screen docker-ai-retrain \
@@ -108,6 +108,12 @@ generate-clips: check-runtime-assets
 
 split-clips:
 	$(PYTHON) -m pipeline.cli split-clips $(ARGS)
+
+real-data-overview:
+	$(PYTHON) -m pipeline.cli real-data-overview $(ARGS)
+
+real-data-process: check-runtime-assets
+	$(PYTHON) -m pipeline.cli real-data-process $(ARGS)
 
 pipeline-stats:
 	$(PYTHON) -m pipeline.cli stats

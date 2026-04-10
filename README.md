@@ -852,6 +852,8 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 | `analyze-video` | — | Analyze a local video into PGN + annotated output | `VIDEO`, `--reader overlay\|hybrid`, `--scene none\|vlm`, `--fps`, `--device`, `--output` |
 | `generate-clips` | `make generate-clips` | Generate .pt training clips (with hard cut detection) | `--channel @Handle`, `--video-id ID`, `--limit N`, `--min-moves N` |
 | `split-clips` | `make split-clips` | Create a video-disjoint train/val dataset from generated clips | `--clips-dir DIR`, `--out-dir DIR`, `--val-fraction FLOAT`, `--seed N`, `--copy` |
+| `real-data-overview` | `make real-data-overview` | Audit local downloaded videos and report why each one is or is not ready for clip generation | `--clips-dir DIR`, `--limit N`, `--max-file-size-mb FLOAT`, `--json` |
+| `real-data-process` | `make real-data-process` | Generate clips from the top ready local real videos | `--clips-dir DIR`, `--limit N`, `--min-moves N`, `--max-file-size-mb FLOAT` |
 
 ### Pipeline Domain — AI Screening
 

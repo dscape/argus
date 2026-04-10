@@ -50,7 +50,10 @@ export default function OverlayEvalCard({
   const fenLoading = result.fen_loading ?? false;
   const isWarning = result.status === "warning";
   const isNoOverlay = result.status === "no_overlay";
-  const locked = isSaved || isRejected;
+  const detectorFound = result.detector_found !== false;
+  const isDetectorMiss = !detectorFound && !!result.image_b64;
+  const savedState = result.already_saved || isSaved;
+  const locked = savedState || isRejected;
 
   function copyFen() {
     if (!currentFen) return;
@@ -60,23 +63,27 @@ export default function OverlayEvalCard({
     });
   }
 
-  const statusLabel = isNoOverlay
-    ? "\u2717 No Overlay"
-    : isWarning
-      ? `\u26A0 ${result.warning ?? "Warning"}`
-      : result.predicted_fen
-        ? "\u2713 OK"
-        : "\u2026 Detecting";
+  const statusLabel = fenLoading
+    ? "\u2026 Extracting FEN"
+    : isNoOverlay
+      ? "\u2717 No Overlay"
+      : isDetectorMiss
+        ? "\u26A0 Detector Miss"
+        : isWarning
+          ? "\u26A0 Review"
+          : result.predicted_fen
+            ? "\u2713 FEN Extracted"
+            : "\u2713 Overlay Detected";
 
   const statusColor = isNoOverlay
     ? "text-red-600"
-    : isWarning
+    : isDetectorMiss || isWarning
       ? "text-yellow-600"
       : "text-green-600";
 
   return (
     <div
-      className={`border rounded-lg p-3 space-y-3 ${isRejected ? "opacity-40" : ""} ${isSaved ? "border-green-400" : ""} ${isWarning && !isSaved ? "border-yellow-400" : ""}`}
+      className={`border rounded-lg p-3 space-y-3 ${isRejected ? "opacity-40" : ""} ${savedState ? "border-green-400" : ""} ${(isWarning || isDetectorMiss) && !savedState ? "border-yellow-400" : ""}`}
     >
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
@@ -108,7 +115,7 @@ export default function OverlayEvalCard({
             >
               {result.video_id}
             </a>
-            {isSaved && (
+            {savedState && (
               <span className="text-[10px] px-1 py-0.5 rounded bg-green-100 text-green-700 font-medium">
                 Saved
               </span>
@@ -165,15 +172,20 @@ export default function OverlayEvalCard({
         </div>
       </div>
 
-      {/* FEN display */}
+      {/* Warning / FEN display */}
+      {result.warning && (
+        <div className="text-xs px-2 py-1 rounded bg-yellow-50 text-yellow-800 border border-yellow-200">
+          {result.warning}
+        </div>
+      )}
       {currentFen && (
         <div className="flex items-center gap-2 flex-wrap">
           <span
             className={`text-xs px-2 py-0.5 rounded ${
-              isWarning
-                ? "bg-yellow-100 text-yellow-700"
-                : isNoOverlay
-                  ? "bg-red-100 text-red-700"
+              isNoOverlay
+                ? "bg-red-100 text-red-700"
+                : isDetectorMiss || isWarning
+                  ? "bg-yellow-100 text-yellow-700"
                   : "bg-green-100 text-green-700"
             }`}
           >
@@ -249,7 +261,7 @@ export default function OverlayEvalCard({
         {onReject && (
           <button
             onClick={onReject}
-            disabled={isSaved}
+            disabled={savedState}
             className={`p-1 rounded border ${
               isRejected
                 ? "bg-red-100 text-red-700 border-red-300"

@@ -32,7 +32,11 @@ interface EvalPoint {
   accuracy: number;
   sample_size: number;
   notes: string | null;
-  per_class: { piece_accuracy?: number; images_per_minute?: number } | null;
+  per_class: {
+    piece_accuracy?: number;
+    images_per_minute?: number;
+    piece_classify_ms_avg?: number;
+  } | null;
 }
 
 interface FenInspectorProps {
@@ -116,7 +120,7 @@ export default function FenInspector({
   async function fetchHistory() {
     try {
       const res = await fetch(
-        "/api/models/evaluations?model_name=piece_classifier",
+        "/api/models/evaluations?model_name=overlay",
       );
       if (res.ok) {
         const data = await res.json();
@@ -225,6 +229,8 @@ export default function FenInspector({
         const accuracy = matches / total;
         const avgPieceAccuracy =
           collected.reduce((s, r) => s + (r.piece_accuracy ?? 0), 0) / total;
+        const avgPieceClassifyMs =
+          collected.reduce((s, r) => s + (r.piece_classify_ms ?? 0), 0) / total;
         const elapsedMin = (performance.now() - batchStartTime) / 60000;
         const imagesPerMinute =
           elapsedMin > 0 ? Math.round(total / elapsedMin) : null;
@@ -237,6 +243,8 @@ export default function FenInspector({
             sample_size: total,
             piece_accuracy: avgPieceAccuracy,
             images_per_minute: imagesPerMinute,
+            piece_classify_ms_avg: avgPieceClassifyMs,
+            notes: modelVersion ?? undefined,
           }),
         });
         let evaluationId: number | null = null;
@@ -304,11 +312,14 @@ export default function FenInspector({
       ? Math.round(ev.per_class.piece_accuracy * 1000) / 10
       : null,
     images_per_minute: ev.per_class?.images_per_minute ?? null,
+    piece_classify_ms_avg: ev.per_class?.piece_classify_ms_avg ?? null,
     notes: ev.notes,
     sample_size: ev.sample_size,
   }));
 
-  const hasPerformanceData = chartData.some((d) => d.images_per_minute != null);
+  const hasPerformanceData = chartData.some(
+    (d) => d.piece_classify_ms_avg != null || d.images_per_minute != null,
+  );
 
   const versionLines = chartData
     .map((d, i) => ({ ...d, idx: i }))
@@ -508,11 +519,13 @@ export default function FenInspector({
           {hasPerformanceData && (
             <div className="border rounded-lg p-3">
               <h3 className="text-sm font-medium mb-2">
-                Performance over time
+                Classifier latency over time
               </h3>
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart
-                  data={chartData.filter((d) => d.images_per_minute != null)}
+                  data={chartData.filter(
+                    (d) => d.piece_classify_ms_avg != null || d.images_per_minute != null,
+                  )}
                 >
                   <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
                   <XAxis
@@ -527,20 +540,38 @@ export default function FenInspector({
                     width={40}
                   />
                   <Tooltip
-                    formatter={(value) => [`${value} img/min`, "Throughput"]}
+                    formatter={(value, name) => [
+                      name === "piece_classify_ms_avg"
+                        ? `${value} ms`
+                        : `${value} img/min`,
+                      name === "piece_classify_ms_avg"
+                        ? "Piece classify avg"
+                        : "Throughput",
+                    ]}
                     labelFormatter={(label, payload) => {
                       const d = payload?.[0]?.payload;
                       return `${label} (n=${d?.sample_size ?? "?"})`;
                     }}
                   />
-                  <Line
-                    type="monotone"
-                    dataKey="images_per_minute"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                    dot={{ r: 3 }}
-                    activeDot={{ r: 5 }}
-                  />
+                  {chartData.some((d) => d.piece_classify_ms_avg != null) ? (
+                    <Line
+                      type="monotone"
+                      dataKey="piece_classify_ms_avg"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      dot={{ r: 3 }}
+                      activeDot={{ r: 5 }}
+                    />
+                  ) : (
+                    <Line
+                      type="monotone"
+                      dataKey="images_per_minute"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      dot={{ r: 3 }}
+                      activeDot={{ r: 5 }}
+                    />
+                  )}
                 </LineChart>
               </ResponsiveContainer>
             </div>

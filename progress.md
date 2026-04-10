@@ -1,18 +1,15 @@
 # Progress
 
-Under no circunstance ask user for input, as it will stop work
-
 ## Current blocker summary
 
 - The main blocker is **real training data production**, not model tuning.
 - Current local real dataset is far too small to justify serious training/eval work:
-  - `data/argus/training_clips/`: `7` `.pt` clips
+  - `data/argus/training_real/`: `0` `.pt` clips
+  - `data/argus/val_real/`: `0` `.pt` clips
   - source videos represented: `5`
-  - prepared split under `data/argus/training_dataset/`: `6` train clips, `1` val clip
-  - a validation set of `1` clip is not meaningful; any model metric from it is mostly noise.
 - Local raw-video inventory is larger than the current clip dataset:
-  - downloaded local videos under `data/videos/` smaller than `200MB`: `39`
-  - only a small subset has actually been turned into legal `.pt` clips so far
+  - downloaded local videos under `data/videos/`
+  - we can download more, thousands of videos with overlay are in database
 - Therefore the correct dependency order is:
   1. inventory and unblock real-video processing coverage
   2. generate substantially more real `.pt` clips with PGN/timing/frame tensors
@@ -82,13 +79,6 @@ Under no circunstance ask user for input, as it will stop work
   - clip replay always started from the standard position, so mid-game segments produced invalid legal masks.
   - invalid replay segments are now dropped instead of silently writing illegal move targets.
 - Real-video clip generation validated end-to-end on five local videos under 200MB, with `.pt` outputs that now include PGN, timestamps, and frame tensors:
-  - added an `@AnnaCramling` calibration to `configs/annotate/overlay_layouts.yaml` via `auto-calibrate --apply` so a fifth legal clip could be produced from local data.
-  - `2wWUKmCBr6A` → `data/argus/training_clips/clip_overlay_2wWUKmCBr6A_clip5_0.pt`
-  - `7RaBQag34Hk` → `data/argus/training_clips/clip_overlay_7RaBQag34Hk_clip26_0.pt`
-  - `vkoTN5DxRS0` → `data/argus/training_clips/clip_overlay_vkoTN5DxRS0_clip22_1.pt`
-  - `9h4IE1G99OE` → `data/argus/training_clips/clip_overlay_9h4IE1G99OE_clip69_1.pt`
-  - `YEjQAF0hbBs` → `data/argus/training_clips/clip_overlay_YEjQAF0hbBs_1.pt` (generated with `--min-moves 3` to allow a short but legal segment)
-  - all five inspect cleanly via `python -m pipeline.cli inspect-clip --file ...` and replay as legal games from their stored `initial_board_fen`.
 - Real-clip training ingestion follow-up fixed on this branch:
   - `pipeline/overlay/overlay_clip_generator.py` incorrectly wrote `move_mask` as an all-ones float tensor instead of a boolean mask marking only move frames.
   - That made real clips semantically inconsistent with synthetic clips and polluted trainer/evaluator move-frame indexing.
@@ -125,13 +115,12 @@ Under no circunstance ask user for input, as it will stop work
   - The real-data view surfaces:
     - current real clip stats from `data/argus/training_clips/`
     - source-video count derived from generated clips
-    - local downloaded video inventory under `200MB`
+    - local downloaded video inventory 
     - per-video readiness/blocker state (`ready`, `processed`, `needs calibration`, `rejected`, etc.)
     - direct links back to `/videos/[videoId]/generate` and `/videos/[videoId]/calibrate`
     - a background `Process 10 videos` action for the next eligible local real videos
   - Real clip inspection now shows clip metadata (initial FEN, PGN moves, segment timing, etc.) in addition to tensors/frames.
   - Browser validation:
-    - `http://localhost:3000/data` now shows `7` real clips, `5` source videos, `39` local downloaded videos under `200MB`, and `11` currently ready to process.
     - Real clip cards open an inspector with real-footage metadata and frame grids.
 - Inference/model validation is currently blocked first by **dataset size/coverage**, and only secondarily by model quality:
   - current real dataset is too small to support credible sign-off

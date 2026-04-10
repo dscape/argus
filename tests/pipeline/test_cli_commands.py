@@ -196,6 +196,134 @@ class TestSplitClipsCommand:
         assert "Val clips:   1" in out
 
 
+class TestRealDataOverviewCommand:
+    """Test the real-data-overview CLI command."""
+
+    def test_prints_summary_and_blockers(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            cli,
+            "_get_real_data_overview",
+            lambda clips_dir, max_file_size_mb=200.0, limit=100: {
+                "clips_dir": "/tmp/train_real",
+                "local_video_count": 3,
+                "ready_video_count": 1,
+                "processed_video_count": 1,
+                "blocked_video_count": 1,
+                "source_video_count": 1,
+                "videos": [
+                    {
+                        "video_id": "READYVIDEO1",
+                        "title": "Ready video",
+                        "channel_handle": "@ready",
+                        "db_clip_count": 0,
+                        "existing_clip_count": 0,
+                        "ready": True,
+                        "blocker": None,
+                        "published_at": None,
+                    },
+                    {
+                        "video_id": "BLOCKVIDEO1",
+                        "title": "Blocked video",
+                        "channel_handle": "@blocked",
+                        "db_clip_count": 0,
+                        "existing_clip_count": 0,
+                        "ready": False,
+                        "blocker": "missing_calibration",
+                        "published_at": None,
+                    },
+                    {
+                        "video_id": "DONEVIDEO11",
+                        "title": "Done video",
+                        "channel_handle": "@done",
+                        "db_clip_count": 1,
+                        "existing_clip_count": 2,
+                        "ready": False,
+                        "blocker": "already_processed",
+                        "published_at": None,
+                    },
+                ],
+            },
+        )
+
+        cli.cmd_real_data_overview(
+            SimpleNamespace(
+                clips_dir="data/argus/train_real",
+                limit=100,
+                max_file_size_mb=200.0,
+                json=False,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "Local videos:     3" in out
+        assert "Ready videos:     1" in out
+        assert "missing_calibration: 1" in out
+        assert "READYVIDEO1  [ready]" in out
+
+
+class TestRealDataProcessCommand:
+    """Test the real-data-process CLI command."""
+
+    def test_processes_top_ready_videos(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            cli,
+            "_get_real_data_overview",
+            lambda clips_dir, max_file_size_mb=200.0, limit=5000: {
+                "videos": [
+                    {
+                        "video_id": "READYVIDEO1",
+                        "video_path": "/tmp/READYVIDEO1.mp4",
+                        "channel_handle": "@ready",
+                        "ready": True,
+                    },
+                    {
+                        "video_id": "READYVIDEO2",
+                        "video_path": "/tmp/READYVIDEO2.mp4",
+                        "channel_handle": "@ready",
+                        "ready": True,
+                    },
+                    {
+                        "video_id": "BLOCKVIDEO1",
+                        "video_path": "/tmp/BLOCKVIDEO1.mp4",
+                        "channel_handle": "@blocked",
+                        "ready": False,
+                    },
+                ]
+            },
+        )
+        monkeypatch.setattr(cli, "_resolve_project_path", lambda path: "/tmp/train_real")
+
+        import pipeline.overlay.overlay_clip_generator as clip_generator
+
+        calls: list[tuple[str, str, str, int]] = []
+
+        monkeypatch.setattr(
+            clip_generator,
+            "generate_from_video",
+            lambda video_path, channel_handle, output_dir, min_moves_per_segment=5: (
+                calls.append((video_path, channel_handle, output_dir, min_moves_per_segment))
+                or [{"filepath": f"{output_dir}/clip.pt", "num_moves": 7, "num_frames": 120}]
+            ),
+        )
+
+        cli.cmd_real_data_process(
+            SimpleNamespace(
+                clips_dir="data/argus/train_real",
+                limit=2,
+                min_moves=3,
+                max_file_size_mb=200.0,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "Processed 2 ready video(s)" in out
+        assert "Generated 2 clip(s) into /tmp/train_real" in out
+        assert calls == [
+            ("/tmp/READYVIDEO1.mp4", "@ready", "/tmp/train_real", 3),
+            ("/tmp/READYVIDEO2.mp4", "@ready", "/tmp/train_real", 3),
+        ]
+
+
 class TestInspectCalibrationCommand:
     """Test the inspect-calibration CLI command."""
 

@@ -71,8 +71,8 @@ _GRID = GridResult(
 
 
 def _resolve_frame_path(video_id: str, frame_name: str) -> Path | None:
-    """Return overlay frame path from the video store or committed fixtures."""
-    for tier in ("fullres", "hires"):
+    """Return the best available frame path from local cache or committed fixtures."""
+    for tier in ("fullres", "hires", "lores"):
         path = find_frame(video_id, tier, frame_name)  # type: ignore[arg-type]
         if path is not None:
             return path
@@ -83,22 +83,66 @@ def _resolve_frame_path(video_id: str, frame_name: str) -> Path | None:
     return None
 
 
+def _fixture_frame_annotations_for_video(video_id: str) -> dict[str, dict[str, object]]:
+    ground_truth = _load_fixture_frame_ground_truth()
+    result: dict[str, dict[str, object]] = {}
+    prefix = f"{video_id}/"
+    for key, annotation in ground_truth.items():
+        if not key.startswith(prefix):
+            continue
+        frame_name = key.split("/", 1)[1]
+        result[frame_name] = annotation
+    return result
+
+
+def _fixture_overlay_frame_names(video_id: str) -> list[str]:
+    annotations = _fixture_frame_annotations_for_video(video_id)
+    return [
+        frame_name
+        for frame_name in _EXTRACTION_FRAME_NAMES
+        if bool(annotations.get(frame_name, {}).get("has_overlay"))
+    ]
+
+
+def _fixture_overlay_bbox(
+    video_id: str,
+    frame_name: str,
+) -> tuple[int, int, int, int] | None:
+    annotation = _fixture_frame_annotations_for_video(video_id).get(frame_name)
+    if annotation is None or not bool(annotation.get("has_overlay")):
+        return None
+    bbox = annotation.get("bbox")
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        return None
+    return tuple(int(value) for value in bbox)
+
+
+def _overlay_eval_frame_names(video_id: str) -> list[str]:
+    annotated = [
+        frame_name
+        for frame_name in _fixture_overlay_frame_names(video_id)
+        if _resolve_frame_path(video_id, frame_name) is not None
+    ]
+    if annotated:
+        return annotated
+    return [
+        frame_name
+        for frame_name in _EXTRACTION_FRAME_NAMES
+        if _resolve_frame_path(video_id, frame_name) is not None
+    ]
+
+
 def _video_has_frames(video_id: str) -> bool:
-    """Check if a video has any extraction frames available."""
-    for name in _EXTRACTION_FRAME_NAMES:
-        if _resolve_frame_path(video_id, name) is not None:
-            return True
-    return False
+    """Check if a video has any overlay-eval candidate frames available."""
+    return bool(_overlay_eval_frame_names(video_id))
 
 
 def _video_has_unsaved_frames(video_id: str, saved_keys: set[str]) -> bool:
-    """Return True when at least one extraction frame exists and is not saved."""
-    for frame_name in _EXTRACTION_FRAME_NAMES:
-        if f"{video_id}:{frame_name}" in saved_keys:
-            continue
-        if _resolve_frame_path(video_id, frame_name) is not None:
-            return True
-    return False
+    """Return True when at least one candidate frame exists and is not saved."""
+    return any(
+        f"{video_id}:{frame_name}" not in saved_keys
+        for frame_name in _overlay_eval_frame_names(video_id)
+    )
 
 
 def _frame_to_base64(frame: np.ndarray, max_width: int | None = 400) -> str:
@@ -148,6 +192,7 @@ def _load_fixture_frame_ground_truth() -> dict[str, dict[str, object]]:
 
 
 def _fixture_candidate_video_ids(saved_keys: set[str], limit: int) -> list[str]:
+    del saved_keys
     ground_truth = _load_fixture_frame_ground_truth()
     video_ids = list(
         {
@@ -160,7 +205,7 @@ def _fixture_candidate_video_ids(saved_keys: set[str], limit: int) -> list[str]:
 
     result: list[str] = []
     for video_id in video_ids:
-        if _video_has_unsaved_frames(video_id, saved_keys):
+        if _video_has_frames(video_id):
             result.append(video_id)
             if len(result) >= limit:
                 break
@@ -192,6 +237,8 @@ class BoardCropResult:
     board_crop: np.ndarray
     overlay_detect_ms: float
     grid_detect_ms: float
+    detector_found: bool = True
+    warning: str | None = None
 
 
 def _decode_image_b64(image_b64: str) -> np.ndarray:
@@ -578,17 +625,19 @@ def _get_saved_frame_keys() -> set[str]:
     return saved
 
 
+def _is_saved_frame(video_id: str, frame_name: str) -> bool:
+    return f"{video_id}:{frame_name}" in _get_saved_frame_keys()
+
+
 def get_extraction_candidates(
     limit: int = 200,
     video_ids: list[str] | None = None,
 ) -> list[str]:
-    """Return video IDs that have extraction frames on disk and unsaved samples.
+    """Return video IDs that have overlay-eval candidate frames on disk.
 
     Approved videos without an explicit ``layout_type`` are treated as overlay,
     matching the rest of the screening pipeline.
     """
-    saved_keys = _get_saved_frame_keys()
-
     if video_ids:
         raw = video_ids
     else:
@@ -610,12 +659,12 @@ def get_extraction_candidates(
             break
         if vid in seen:
             continue
-        if _video_has_unsaved_frames(vid, saved_keys):
+        if _video_has_frames(vid):
             result.append(vid)
             seen.add(vid)
 
     if len(result) < limit and not video_ids:
-        for vid in _fixture_candidate_video_ids(saved_keys, limit - len(result)):
+        for vid in _fixture_candidate_video_ids(set(), limit - len(result)):
             if vid in seen:
                 continue
             result.append(vid)
@@ -626,12 +675,8 @@ def get_extraction_candidates(
     return result
 
 
-def _iter_extractable_frame_names(video_id: str, saved_keys: set[str]) -> list[str]:
-    return [
-        frame_name
-        for frame_name in _EXTRACTION_FRAME_NAMES
-        if f"{video_id}:{frame_name}" not in saved_keys
-    ]
+def _iter_extractable_frame_names(video_id: str) -> list[str]:
+    return _overlay_eval_frame_names(video_id)
 
 
 def _load_board_crop_for_video_frame(
@@ -646,17 +691,38 @@ def _load_board_crop_for_video_frame(
     if frame is None:
         return None
 
-    return _extract_board_crop_from_frame(frame)
+    runtime_crop = _extract_board_crop_from_frame(frame)
+    if runtime_crop is not None:
+        return runtime_crop
+
+    fallback_bbox = _fixture_overlay_bbox(video_id, frame_name)
+    if fallback_bbox is None:
+        return None
+
+    x, y, w, h = fallback_bbox
+    fh, fw = frame.shape[:2]
+    overlay_crop = frame[max(0, y):min(fh, y + h), max(0, x):min(fw, x + w)]
+    if overlay_crop.size == 0:
+        return None
+
+    fallback_crop = _extract_board_crop_from_overlay_crop(overlay_crop)
+    board_crop = fallback_crop.board_crop if fallback_crop is not None else overlay_crop
+    grid_detect_ms = fallback_crop.grid_detect_ms if fallback_crop is not None else 0.0
+    return BoardCropResult(
+        board_crop=board_crop,
+        overlay_detect_ms=0.0,
+        grid_detect_ms=grid_detect_ms,
+        detector_found=False,
+        warning="Runtime detector missed a known overlay; showing the fixture crop for review.",
+    )
 
 
 def extract_overlay_from_frames(video_id: str) -> dict:
     """Process one video's cached screening frames and return the best overlay."""
-    saved_keys = _get_saved_frame_keys()
-
     if not _video_has_frames(video_id):
         return {"video_id": video_id, "status": "no_overlay"}
 
-    for frame_name in _iter_extractable_frame_names(video_id, saved_keys):
+    for frame_name in _iter_extractable_frame_names(video_id):
         crop_result = _load_board_crop_for_video_frame(video_id, frame_name)
         if crop_result is None:
             continue
@@ -682,11 +748,19 @@ def extract_overlay_from_frames(video_id: str) -> dict:
             "overlay_detect_ms": crop_result.overlay_detect_ms,
             "grid_detect_ms": crop_result.grid_detect_ms,
             "piece_classify_ms": piece_classify_ms,
+            "detector_found": crop_result.detector_found,
+            "already_saved": _is_saved_frame(video_id, frame_name),
         }
 
+        warnings: list[str] = []
+        if crop_result.warning:
+            warnings.append(crop_result.warning)
         if not _is_valid_fen_placement(fen):
+            warnings.append("FEN may be invalid (missing king)")
+
+        if warnings:
             entry["status"] = "warning"
-            entry["warning"] = "FEN may be invalid (missing king)"
+            entry["warning"] = " ".join(warnings)
         else:
             entry["status"] = "ok"
 
@@ -697,28 +771,31 @@ def extract_overlay_from_frames(video_id: str) -> dict:
 
 def detect_overlay_from_frames(video_id: str) -> dict:
     """Fast phase: detect overlay and return the exact board crop shown to the UI."""
-    saved_keys = _get_saved_frame_keys()
-
     if not _video_has_frames(video_id):
         logger.info("detect_overlay: %s — no frames on disk", video_id)
         return {"video_id": video_id, "status": "no_overlay"}
 
-    for frame_name in _iter_extractable_frame_names(video_id, saved_keys):
+    for frame_name in _iter_extractable_frame_names(video_id):
         crop_result = _load_board_crop_for_video_frame(video_id, frame_name)
         if crop_result is None:
             continue
 
         frame_key = f"{video_id}:{frame_name}"
         logger.info("detect_overlay: %s — found in %s", video_id, frame_name)
-        return {
+        result = {
             "frame_key": frame_key,
             "video_id": video_id,
             "frame_name": frame_name,
             "image_b64": _frame_to_base64(crop_result.board_crop, max_width=None),
             "overlay_detect_ms": crop_result.overlay_detect_ms,
             "grid_detect_ms": crop_result.grid_detect_ms,
-            "status": "detected",
+            "detector_found": crop_result.detector_found,
+            "already_saved": _is_saved_frame(video_id, frame_name),
+            "status": "detected" if crop_result.detector_found else "warning",
         }
+        if crop_result.warning:
+            result["warning"] = crop_result.warning
+        return result
 
     logger.info("detect_overlay: %s — no overlay in any frame", video_id)
     return {"video_id": video_id, "status": "no_overlay"}
@@ -972,6 +1049,7 @@ def save_overlay_eval(
     sample_size: int,
     piece_accuracy: float | None = None,
     images_per_minute: int | None = None,
+    piece_classify_ms_avg: float | None = None,
     notes: str | None = None,
 ) -> dict:
     """Save overlay evaluation result to model_evaluations."""
@@ -980,6 +1058,8 @@ def save_overlay_eval(
         per_class_data["piece_accuracy"] = piece_accuracy
     if images_per_minute is not None:
         per_class_data["images_per_minute"] = images_per_minute
+    if piece_classify_ms_avg is not None:
+        per_class_data["piece_classify_ms_avg"] = round(piece_classify_ms_avg, 3)
 
     with get_conn() as conn:
         with conn.cursor() as cur:

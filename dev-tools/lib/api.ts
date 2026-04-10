@@ -876,6 +876,8 @@ export interface OverlayEvalResult {
   overlay_detect_ms?: number;
   grid_detect_ms?: number;
   piece_classify_ms?: number;
+  detector_found?: boolean;
+  already_saved?: boolean;
 }
 
 export interface OverlayEvalSession {

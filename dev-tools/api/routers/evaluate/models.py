@@ -243,6 +243,7 @@ class SaveOverlayEvalRequest(BaseModel):
     sample_size: int
     piece_accuracy: float | None = None
     images_per_minute: int | None = None
+    piece_classify_ms_avg: float | None = None
     notes: str | None = None
 
 
@@ -292,6 +293,7 @@ async def save_overlay_eval(body: SaveOverlayEvalRequest):
         body.sample_size,
         body.piece_accuracy,
         body.images_per_minute,
+        body.piece_classify_ms_avg,
         body.notes,
     )
     return result

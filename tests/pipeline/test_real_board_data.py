@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import cv2
 import numpy as np
 from pipeline.overlay.real_board_data import (
@@ -33,6 +35,15 @@ def test_parse_real_board_fen_runtime_filename() -> None:
 def test_parse_real_board_fen_applies_known_label_fixup() -> None:
     filename = "f_lQXos0du0bg_25pct_2p1bppp-p7-3pR3-p2P4-1P6-P1P2PPP-RNBQ2K1-8.jpg"
     assert parse_real_board_fen(filename) == "6k1/1p2pp2/2q4p/2p5/2P5/7P/1PQ1PP2/4R1K1"
+
+
+def test_parse_real_board_fen_for_saved_05zgojs1lsc_sample() -> None:
+    path = Path(
+        "data/overlay/val_real/"
+        "f_05zgojs1Lsc_50pct_1r1q1rk1-4bpp1-p2p1n2-1p2p2p-4P3-P1N4P-1PPQ1PP1-1K1R1B1R.jpg"
+    )
+    assert path.exists()
+    assert parse_real_board_fen(path) == "1r1q1rk1/4bpp1/p2p1n2/1p2p2p/4P3/P1N4P/1PPQ1PP1/1K1R1B1R"
 
 
 def test_sample_real_board_squares_respects_class_targets(tmp_path) -> None:

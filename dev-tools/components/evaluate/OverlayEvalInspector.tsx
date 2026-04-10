@@ -279,16 +279,23 @@ export default function OverlayEvalInspector({
             elapsed_ms: detectMs,
             overlay_detect_ms: raw.overlay_detect_ms,
             grid_detect_ms: raw.grid_detect_ms,
+            detector_found: raw.detector_found,
+            already_saved: raw.already_saved,
           };
 
-          if (result.status === "detected" && result.frame_name) {
+          const canClassifyFen =
+            (result.status === "detected" || result.status === "warning") &&
+            !!result.frame_name &&
+            !!result.image_b64;
+
+          if (canClassifyFen) {
             result.fen_loading = true;
             collected.push(result);
             setResults((prev) => [...prev, result]);
 
             // Slow phase: classify FEN — track promise so we can await before saving
             const frameKey = resultKey(result);
-            const frameName = result.frame_name;
+            const frameName = result.frame_name!;
             const videoId = result.video_id;
             const fenPromise = fetch("/api/models/overlay-test/extract-fen", {
               method: "POST",
@@ -301,66 +308,36 @@ export default function OverlayEvalInspector({
             })
               .then((fenRes) => fenRes.json())
               .then((fenData) => {
-                if (fenData.status === "error" || !fenData.predicted_fen) {
-                  autoPinned.add(frameKey);
-                  setPinnedIds((prev) => new Set([...prev, frameKey]));
-                  setResults((prev) =>
-                    prev.map((r) =>
-                      resultKey(r) === frameKey
-                        ? {
-                            ...r,
-                            status: "no_overlay" as const,
-                            warning: fenData.warning,
-                            fen_loading: false,
-                            piece_classify_ms: fenData.piece_classify_ms,
-                          }
-                        : r,
-                    ),
-                  );
-                  const idx = collected.findIndex((r) => resultKey(r) === frameKey);
-                  if (idx >= 0) {
-                    collected[idx] = {
-                      ...collected[idx],
-                      status: "no_overlay",
-                      warning: fenData.warning,
-                      fen_loading: false,
-                      piece_classify_ms: fenData.piece_classify_ms,
-                    };
-                  }
-                  return;
-                }
+                const detectorFound = result.detector_found !== false;
+                const nextStatus =
+                  fenData.status === "error" || !fenData.predicted_fen
+                    ? ("warning" as const)
+                    : detectorFound
+                      ? ((fenData.status ?? "ok") as OverlayEvalResult["status"])
+                      : ("warning" as const);
+                const warnings = [result.warning, fenData.warning].filter(Boolean);
+                const nextResult: OverlayEvalResult = {
+                  ...result,
+                  predicted_fen: fenData.predicted_fen,
+                  status: nextStatus,
+                  warning: warnings.length > 0 ? warnings.join(" ") : undefined,
+                  fen_loading: false,
+                  piece_classify_ms: fenData.piece_classify_ms,
+                };
                 setResults((prev) =>
-                  prev.map((r) =>
-                    resultKey(r) === frameKey
-                      ? {
-                          ...r,
-                          predicted_fen: fenData.predicted_fen,
-                          status: fenData.status,
-                          warning: fenData.warning,
-                          fen_loading: false,
-                          piece_classify_ms: fenData.piece_classify_ms,
-                        }
-                      : r,
-                  ),
+                  prev.map((r) => (resultKey(r) === frameKey ? nextResult : r)),
                 );
                 const idx = collected.findIndex((r) => resultKey(r) === frameKey);
                 if (idx >= 0) {
-                  collected[idx] = {
-                    ...collected[idx],
-                    predicted_fen: fenData.predicted_fen,
-                    status: fenData.status,
-                    warning: fenData.warning,
-                    fen_loading: false,
-                    piece_classify_ms: fenData.piece_classify_ms,
-                  };
+                  collected[idx] = nextResult;
                 }
-                if (fenData.predicted_fen) {
+                if (nextResult.predicted_fen) {
                   setEditedFens((prev) => ({
                     ...prev,
-                    [frameKey]: fenData.predicted_fen,
+                    [frameKey]: nextResult.predicted_fen!,
                   }));
                 }
-                if (fenData.status === "warning") {
+                if (nextResult.status === "warning") {
                   autoPinned.add(frameKey);
                   setPinnedIds((prev) => new Set([...prev, frameKey]));
                 }
@@ -368,31 +345,24 @@ export default function OverlayEvalInspector({
               .catch(() => {
                 autoPinned.add(frameKey);
                 setPinnedIds((prev) => new Set([...prev, frameKey]));
+                const nextResult: OverlayEvalResult = {
+                  ...result,
+                  status: "warning",
+                  warning: [result.warning, "FEN classification failed"]
+                    .filter(Boolean)
+                    .join(" "),
+                  fen_loading: false,
+                };
                 setResults((prev) =>
-                  prev.map((r) =>
-                    resultKey(r) === frameKey
-                      ? {
-                          ...r,
-                          status: "no_overlay" as const,
-                          warning: "FEN classification failed",
-                          fen_loading: false,
-                        }
-                      : r,
-                  ),
+                  prev.map((r) => (resultKey(r) === frameKey ? nextResult : r)),
                 );
                 const idx = collected.findIndex((r) => resultKey(r) === frameKey);
                 if (idx >= 0) {
-                  collected[idx] = {
-                    ...collected[idx],
-                    status: "no_overlay",
-                    warning: "FEN classification failed",
-                    fen_loading: false,
-                  };
+                  collected[idx] = nextResult;
                 }
               });
             fenPromises.push(fenPromise);
           } else {
-            // no_overlay
             collected.push(result);
             setResults((prev) => [...prev, result]);
             const key = resultKey(result);
@@ -429,6 +399,7 @@ export default function OverlayEvalInspector({
             fen_success_rate: fenSuccessRate,
             sample_size: total,
             images_per_minute: imagesPerMinute,
+            notes: modelVersion ?? undefined,
           }),
         });
         let evaluationId: number | null = null;
@@ -469,7 +440,7 @@ export default function OverlayEvalInspector({
   // Compute summary metrics
   const total = results.length;
   const detected = results.filter(
-    (r) => r.status !== "no_overlay",
+    (r) => r.detector_found !== false && r.status !== "no_overlay",
   ).length;
   const fenSuccess = results.filter((r) => r.status === "ok").length;
 
@@ -511,7 +482,7 @@ export default function OverlayEvalInspector({
       <div className="flex gap-2 items-center flex-wrap">
         <span className="text-sm text-muted-foreground">
           Sample from overlay videos:
-          <InfoIcon tip="Samples approved overlay videos when local screening data exists, then falls back to committed fixture frames so the inspector still works in a fresh clone." />
+          <InfoIcon tip="Samples approved overlay videos and inspects the best known overlay frame for each video. Saved overlay crops are still valid eval samples here; this view is not limited to unsaved extraction work." />
         </span>
         <input
           type="number"
@@ -581,7 +552,7 @@ export default function OverlayEvalInspector({
                       })}
                       {" \u00b7 "}n={s.sample_size}
                       {s.fen_success_rate != null
-                        ? ` \u00b7 ${(s.fen_success_rate * 100).toFixed(1)}% FEN`
+                        ? ` \u00b7 ${(s.fen_success_rate * 100).toFixed(1)}% valid FEN`
                         : ""}
                     </div>
                   </button>
@@ -643,7 +614,7 @@ export default function OverlayEvalInspector({
         >
           <div className="border rounded-lg p-3">
             <h3 className="text-sm font-medium mb-2">
-              Correctness over time
+              Detection / FEN validity over time
             </h3>
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
@@ -663,7 +634,7 @@ export default function OverlayEvalInspector({
                 <Tooltip
                   formatter={(value, name) => [
                     `${value}%`,
-                    name === "accuracy" ? "Detection rate" : "FEN correctness",
+                    name === "accuracy" ? "Detection rate" : "Valid FEN rate",
                   ]}
                   labelFormatter={(label, payload) => {
                     const d = payload?.[0]?.payload;
@@ -697,7 +668,7 @@ export default function OverlayEvalInspector({
                 <Line
                   type="monotone"
                   dataKey="fen_success_rate"
-                  name="FEN correctness"
+                  name="Valid FEN rate"
                   stroke="#22c55e"
                   strokeWidth={1.5}
                   dot={{ r: 2 }}
@@ -765,7 +736,7 @@ export default function OverlayEvalInspector({
             </div>
           </div>
           <div className="text-xs text-muted-foreground">
-            FEN success: {fenSuccess}/{total} (
+            Valid FEN rate: {fenSuccess}/{total} (
             {((fenSuccess / total) * 100).toFixed(1)}%)
           </div>
         </div>
@@ -827,9 +798,18 @@ export default function OverlayEvalInspector({
                   .map((r) => {
                     const key = resultKey(r);
                     const isOk = r.status === "ok";
-                    const isWarning = r.status === "warning";
+                    const isWarning = r.status === "warning" || r.detector_found === false;
                     const isNoOverlay = r.status === "no_overlay";
                     const isFenLoading = r.fen_loading;
+                    const label = isNoOverlay
+                      ? "\u2717 no overlay"
+                      : r.detector_found === false
+                        ? "\u26A0 detector miss"
+                        : isOk
+                          ? "\u2713 valid fen"
+                          : isWarning
+                            ? "\u26A0 review"
+                            : "\u2026 loading";
 
                     return (
                       <button
@@ -839,7 +819,7 @@ export default function OverlayEvalInspector({
                             ? togglePin(key)
                             : toggleExpand(key)
                         }
-                        title={`${r.frame_name ?? r.video_id}\n${isOk ? "\u2713 ok" : isWarning ? "\u26A0 warning" : isNoOverlay ? "\u2717 no overlay" : "\u2026 loading"}`}
+                        title={`${r.frame_name ?? r.video_id}\n${label}`}
                         className="relative w-16 h-16 rounded border overflow-hidden flex-shrink-0 transition-all hover:ring-2 hover:ring-foreground/30"
                       >
                         {r.image_b64 ? (

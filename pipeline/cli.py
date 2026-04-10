@@ -187,6 +187,285 @@ def cmd_split_clips(args):
     print(f"  Manifest:    {args.out_dir}/manifest.json")
 
 
+def _resolve_project_path(path: str):
+    from pathlib import Path
+
+    p = Path(path)
+    if p.is_absolute():
+        return p
+    return Path(__file__).resolve().parent.parent / p
+
+
+def _list_local_real_videos(max_file_size_mb: float | None = 200.0):
+    videos_root = _resolve_project_path("data/videos")
+    if not videos_root.exists():
+        return []
+
+    video_extensions = {".mp4", ".mkv", ".webm", ".mov"}
+    videos = []
+    for video_dir in sorted(videos_root.iterdir()):
+        if not video_dir.is_dir():
+            continue
+        for path in sorted(video_dir.iterdir()):
+            if not path.is_file() or path.suffix.lower() not in video_extensions:
+                continue
+            stat = path.stat()
+            file_size_mb = round(stat.st_size / 1024 / 1024, 1)
+            if max_file_size_mb is not None and file_size_mb > max_file_size_mb:
+                continue
+            videos.append(
+                {
+                    "video_id": video_dir.name,
+                    "video_path": str(path),
+                    "file_size_mb": file_size_mb,
+                    "modified_ts": stat.st_mtime,
+                }
+            )
+            break
+    return sorted(videos, key=lambda row: row["modified_ts"], reverse=True)
+
+
+def _load_real_video_rows(video_ids):
+    if not video_ids:
+        return {}
+
+    from pipeline.db.connection import get_conn
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT video_id, channel_handle, title, published_at,
+                       screening_status, layout_type
+                FROM youtube_videos
+                WHERE video_id = ANY(%s)
+                """,
+                (video_ids,),
+            )
+            cols = [d[0] for d in cur.description]
+            return {row[0]: dict(zip(cols, row)) for row in cur.fetchall()}
+
+
+def _load_real_db_clip_counts(video_ids):
+    if not video_ids:
+        return {}
+
+    from pipeline.db.connection import get_conn
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT video_id, COUNT(*) AS clip_count
+                FROM video_clips
+                WHERE video_id = ANY(%s)
+                GROUP BY video_id
+                """,
+                (video_ids,),
+            )
+            return {video_id: int(count) for video_id, count in cur.fetchall()}
+
+
+def _load_real_calibrated_channels():
+    from pipeline.overlay.calibration import list_calibrations
+
+    return set(list_calibrations().keys())
+
+
+def _load_existing_real_clip_counts(clips_dir):
+    from pipeline.overlay.training_dataset import infer_source_video_id
+
+    counts = {}
+    for clip_path in _resolve_project_path(clips_dir).glob("clip_*.pt"):
+        video_id = infer_source_video_id(clip_path)
+        counts[video_id] = counts.get(video_id, 0) + 1
+    return counts
+
+
+def _real_video_blocker(
+    *,
+    video_row,
+    existing_clip_count: int,
+    has_channel_calibration: bool,
+    db_clip_count: int,
+):
+    if existing_clip_count > 0:
+        return "already_processed"
+    if video_row is None:
+        return "missing_db_row"
+    if video_row.get("screening_status") != "approved":
+        return "not_approved"
+    if not video_row.get("channel_handle"):
+        return "missing_channel_handle"
+    if db_clip_count <= 0 and not has_channel_calibration:
+        return "missing_calibration"
+    return None
+
+
+def _sort_real_videos(videos):
+    def key(row):
+        published = row.get("published_at")
+        published_ts = published.timestamp() if published is not None else 0.0
+        return (published_ts, row.get("modified_ts", 0.0), row["video_id"])
+
+    return sorted(videos, key=key, reverse=True)
+
+
+def _get_real_data_overview(
+    clips_dir: str = "data/argus/train_real",
+    *,
+    max_file_size_mb: float | None = 200.0,
+    limit: int = 100,
+):
+    local_videos = _list_local_real_videos(max_file_size_mb)
+    selected_videos = local_videos[:limit]
+    video_ids = [row["video_id"] for row in selected_videos]
+
+    video_rows = _load_real_video_rows(video_ids)
+    db_clip_counts = _load_real_db_clip_counts(video_ids)
+    calibrated_channels = _load_real_calibrated_channels()
+    existing_clip_counts = _load_existing_real_clip_counts(clips_dir)
+
+    videos = []
+    for local in selected_videos:
+        video_row = video_rows.get(local["video_id"])
+        channel_handle = video_row.get("channel_handle") if video_row is not None else None
+        existing_clip_count = existing_clip_counts.get(local["video_id"], 0)
+        db_clip_count = db_clip_counts.get(local["video_id"], 0)
+        has_channel_calibration = bool(channel_handle and channel_handle in calibrated_channels)
+        blocker = _real_video_blocker(
+            video_row=video_row,
+            existing_clip_count=existing_clip_count,
+            has_channel_calibration=has_channel_calibration,
+            db_clip_count=db_clip_count,
+        )
+        videos.append(
+            {
+                "video_id": local["video_id"],
+                "video_path": local["video_path"],
+                "file_size_mb": local["file_size_mb"],
+                "modified_ts": local["modified_ts"],
+                "title": video_row.get("title") if video_row is not None else None,
+                "channel_handle": channel_handle,
+                "published_at": video_row.get("published_at") if video_row is not None else None,
+                "screening_status": video_row.get("screening_status") if video_row is not None else None,
+                "layout_type": video_row.get("layout_type") if video_row is not None else None,
+                "existing_clip_count": existing_clip_count,
+                "db_clip_count": db_clip_count,
+                "has_channel_calibration": has_channel_calibration,
+                "ready": blocker is None,
+                "blocker": blocker,
+            }
+        )
+
+    videos = _sort_real_videos(videos)
+    ready_count = sum(1 for row in videos if row["ready"])
+    processed_count = sum(1 for row in videos if row["blocker"] == "already_processed")
+    blocked_count = len(videos) - ready_count - processed_count
+
+    return {
+        "clips_dir": str(_resolve_project_path(clips_dir)),
+        "local_video_count": len(videos),
+        "ready_video_count": ready_count,
+        "processed_video_count": processed_count,
+        "blocked_video_count": blocked_count,
+        "source_video_count": len(existing_clip_counts),
+        "videos": videos,
+    }
+
+
+def cmd_real_data_overview(args):
+    """Print an overview of local real-video processing readiness."""
+    import json
+    from collections import Counter
+
+    overview = _get_real_data_overview(
+        args.clips_dir,
+        max_file_size_mb=args.max_file_size_mb,
+        limit=args.limit,
+    )
+
+    if args.json:
+        serializable = dict(overview)
+        serializable["videos"] = [
+            {
+                **video,
+                "published_at": (
+                    video["published_at"].isoformat() if video.get("published_at") else None
+                ),
+            }
+            for video in overview["videos"]
+        ]
+        print(json.dumps(serializable, indent=2, sort_keys=True))
+        return
+
+    blockers = Counter(video["blocker"] or "ready" for video in overview["videos"])
+    print(f"Clips dir:        {overview['clips_dir']}")
+    print(f"Local videos:     {overview['local_video_count']}")
+    print(f"Ready videos:     {overview['ready_video_count']}")
+    print(f"Processed videos: {overview['processed_video_count']}")
+    print(f"Blocked videos:   {overview['blocked_video_count']}")
+    print(f"Source videos:    {overview['source_video_count']}")
+    print("")
+    print("Blocker breakdown:")
+    for blocker, count in sorted(blockers.items()):
+        print(f"  {blocker}: {count}")
+    print("")
+    print("Videos:")
+    for video in overview["videos"]:
+        status = "ready" if video["ready"] else str(video["blocker"])
+        channel = video["channel_handle"] or "-"
+        title = video["title"] or "(no title)"
+        print(
+            f"  {video['video_id']}  [{status}]  {channel}  "
+            f"db_clips={video['db_clip_count']} existing={video['existing_clip_count']}  {title}"
+        )
+
+
+def cmd_real_data_process(args):
+    """Generate real-video training clips from the top ready local videos."""
+    from pathlib import Path
+
+    from pipeline.overlay.overlay_clip_generator import generate_from_video
+
+    overview = _get_real_data_overview(
+        args.clips_dir,
+        max_file_size_mb=args.max_file_size_mb,
+        limit=5000,
+    )
+    candidates = [video for video in overview["videos"] if video["ready"]][: args.limit]
+    if not candidates:
+        print("No eligible local videos found to process.")
+        return
+
+    clips_dir = _resolve_project_path(args.clips_dir)
+    Path(clips_dir).mkdir(parents=True, exist_ok=True)
+
+    generated_clips = 0
+    for video in candidates:
+        print(f"Processing {video['video_id']} ({video.get('channel_handle') or '-'})")
+        results = generate_from_video(
+            video["video_path"],
+            channel_handle=video.get("channel_handle") or "",
+            output_dir=str(clips_dir),
+            min_moves_per_segment=args.min_moves,
+        )
+        if results:
+            generated_clips += len(results)
+            print(f"  generated {len(results)} clip(s)")
+            for result in results:
+                print(
+                    f"    {result['filepath']} "
+                    f"({result['num_moves']} moves, {result['num_frames']} frames)"
+                )
+        else:
+            print("  no legal clips generated")
+
+    print("")
+    print(f"Processed {len(candidates)} ready video(s)")
+    print(f"Generated {generated_clips} clip(s) into {clips_dir}")
+
+
 def cmd_inspect(args):
     """Inspect videos by extracting frames and detecting overlay + OTB."""
     from pipeline.db.connection import get_conn
@@ -1014,6 +1293,65 @@ def main():
         help="Copy files instead of hard-linking them",
     )
 
+    # real-data-overview
+    p = subparsers.add_parser(
+        "real-data-overview",
+        help="Audit local real videos and show why they are or are not ready for clip generation",
+    )
+    p.add_argument(
+        "--clips-dir",
+        type=str,
+        default="data/argus/train_real",
+        help="Directory containing generated real clip_*.pt files",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum local videos to inspect",
+    )
+    p.add_argument(
+        "--max-file-size-mb",
+        type=float,
+        default=200.0,
+        help="Ignore local videos larger than this size",
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the overview as JSON",
+    )
+
+    # real-data-process
+    p = subparsers.add_parser(
+        "real-data-process",
+        help="Generate training clips from the top ready local real videos",
+    )
+    p.add_argument(
+        "--clips-dir",
+        type=str,
+        default="data/argus/train_real",
+        help="Directory where generated clip_*.pt files are written",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Maximum ready local videos to process",
+    )
+    p.add_argument(
+        "--min-moves",
+        type=int,
+        default=5,
+        help="Minimum detected moves required to save a clip",
+    )
+    p.add_argument(
+        "--max-file-size-mb",
+        type=float,
+        default=200.0,
+        help="Ignore local videos larger than this size",
+    )
+
     # overlay-test
     p = subparsers.add_parser("overlay-test", help="Test overlay pipeline on a screenshot")
     p.add_argument("--image", type=str, required=True, help="Path to screenshot image")
@@ -1415,6 +1753,8 @@ def main():
         "calibrate": cmd_calibrate,
         "generate-clips": cmd_generate_clips,
         "split-clips": cmd_split_clips,
+        "real-data-overview": cmd_real_data_overview,
+        "real-data-process": cmd_real_data_process,
         "overlay-test": cmd_overlay_test,
         "overlay-test-reader": cmd_overlay_test_reader,
         "overlay-yolo-export": cmd_overlay_yolo_export,

@@ -69,25 +69,19 @@ class TestVideoHasUnsavedFrames:
 class TestGetExtractionCandidates:
     """Verify extraction candidate queries follow implicit-overlay semantics."""
 
-    @patch.object(overlay_test_service, "_video_has_unsaved_frames")
-    @patch.object(
-        overlay_test_service,
-        "_get_saved_frame_keys",
-        return_value={"vid-null-layout:25pct"},
-    )
+    @patch.object(overlay_test_service, "_video_has_frames")
     @patch.object(overlay_test_service, "get_conn")
     def test_includes_approved_null_layout_videos(
         self,
         mock_get_conn,
-        _mock_saved_keys,
-        mock_has_unsaved,
+        mock_has_frames,
     ) -> None:
         """Approved videos with NULL layout_type should still be queried."""
         mock_conn_ctx, mock_cursor = _mock_db_conn(
             [("vid-null-layout",), ("vid-overlay",), ("vid-otb",)]
         )
         mock_get_conn.return_value = mock_conn_ctx
-        mock_has_unsaved.side_effect = lambda vid, _saved: vid != "vid-otb"
+        mock_has_frames.side_effect = lambda vid: vid != "vid-otb"
 
         result = overlay_test_service.get_extraction_candidates(limit=2)
 
@@ -96,9 +90,9 @@ class TestGetExtractionCandidates:
         assert "(layout_type = 'overlay' OR layout_type IS NULL)" in query
         assert params == (6,)
         assert result == ["vid-null-layout", "vid-overlay"]
-        assert mock_has_unsaved.call_args_list == [
-            call("vid-null-layout", {"vid-null-layout:25pct"}),
-            call("vid-overlay", {"vid-null-layout:25pct"}),
+        assert mock_has_frames.call_args_list == [
+            call("vid-null-layout"),
+            call("vid-overlay"),
         ]
 
     @patch.object(
@@ -106,16 +100,10 @@ class TestGetExtractionCandidates:
         "_fixture_candidate_video_ids",
         return_value=["fixture-video"],
     )
-    @patch.object(
-        overlay_test_service,
-        "_get_saved_frame_keys",
-        return_value=set(),
-    )
     @patch.object(overlay_test_service, "get_conn")
     def test_falls_back_to_fixture_videos_when_db_candidates_are_empty(
         self,
         mock_get_conn,
-        _mock_saved_keys,
         _mock_fixture_candidates,
     ) -> None:
         mock_conn_ctx, _mock_cursor = _mock_db_conn([])
@@ -124,6 +112,56 @@ class TestGetExtractionCandidates:
         result = overlay_test_service.get_extraction_candidates(limit=2)
 
         assert result == ["fixture-video"]
+
+    def test_iter_extractable_frame_names_prefers_fixture_overlay_frames(
+        self,
+        monkeypatch,
+    ) -> None:
+        monkeypatch.setattr(
+            overlay_test_service,
+            "_load_fixture_frame_ground_truth",
+            lambda: {
+                "video-1/25pct": {"has_overlay": False},
+                "video-1/50pct": {"has_overlay": True, "bbox": [1, 2, 3, 4]},
+                "video-1/75pct": {"has_overlay": True, "bbox": [1, 2, 3, 4]},
+            },
+        )
+        monkeypatch.setattr(
+            overlay_test_service,
+            "_resolve_frame_path",
+            lambda _video_id, frame_name: Path(f"/tmp/{frame_name}.jpg"),
+        )
+
+        assert overlay_test_service._iter_extractable_frame_names("video-1") == [
+            "50pct",
+            "75pct",
+        ]
+
+    def test_iter_extractable_frame_names_uses_lores_frames_when_fixture_only_has_negative_sample(
+        self,
+        monkeypatch,
+    ) -> None:
+        monkeypatch.setattr(
+            overlay_test_service,
+            "_load_fixture_frame_ground_truth",
+            lambda: {
+                "video-1/50pct": {"has_overlay": False},
+            },
+        )
+        monkeypatch.setattr(
+            overlay_test_service,
+            "find_frame",
+            lambda _video_id, tier, frame_name: (
+                Path(f"/tmp/{tier}/{frame_name}.jpg") if tier == "lores" else None
+            ),
+        )
+        monkeypatch.setattr(overlay_test_service, "FIXTURE_FRAMES_DIR", Path("/tmp/missing"))
+
+        assert overlay_test_service._iter_extractable_frame_names("video-1") == [
+            "25pct",
+            "50pct",
+            "75pct",
+        ]
 
 
 class TestFixtureFallbacks:
@@ -231,6 +269,51 @@ class TestBoardCropReuse:
         assert abs(crop.shape[1] - 320) <= 12
         assert result["overlay_detect_ms"] >= 0.0
         assert result["grid_detect_ms"] >= 0.0
+
+    def test_detect_overlay_from_frames_uses_fixture_overlay_frame_and_keeps_saved_samples(
+        self,
+        monkeypatch,
+    ) -> None:
+        board = np.full((320, 320, 3), 180, dtype=np.uint8)
+
+        monkeypatch.setattr(
+            overlay_test_service,
+            "_video_has_frames",
+            lambda _video_id: True,
+        )
+        monkeypatch.setattr(
+            overlay_test_service,
+            "_iter_extractable_frame_names",
+            lambda _video_id: ["50pct"],
+        )
+        monkeypatch.setattr(
+            overlay_test_service,
+            "_load_board_crop_for_video_frame",
+            lambda _video_id, _frame_name: overlay_test_service.BoardCropResult(
+                board_crop=board,
+                overlay_detect_ms=0.0,
+                grid_detect_ms=1.2,
+                detector_found=False,
+                warning=(
+                    "Runtime detector missed a known overlay; showing the fixture crop for review."
+                ),
+            ),
+        )
+        monkeypatch.setattr(
+            overlay_test_service,
+            "_is_saved_frame",
+            lambda _video_id, _frame_name: True,
+        )
+
+        result = overlay_test_service.detect_overlay_from_frames("video-1")
+
+        assert result["frame_key"] == "video-1:50pct"
+        assert result["status"] == "warning"
+        assert result["detector_found"] is False
+        assert result["already_saved"] is True
+        assert "Runtime detector missed" in result["warning"]
+        crop = overlay_test_service._decode_image_b64(result["image_b64"])
+        assert crop.shape[:2] == board.shape[:2]
 
     def test_classify_overlay_fen_uses_provided_board_image(self, monkeypatch) -> None:
         board = np.full((320, 320, 3), 180, dtype=np.uint8)
