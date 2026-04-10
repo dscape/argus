@@ -158,7 +158,7 @@ def _render_3d_square(
 # ---------------------------------------------------------------------------
 
 
-def _augment(img: np.ndarray, rng: random.Random) -> np.ndarray:
+def augment_square_image(img: np.ndarray, rng: random.Random) -> np.ndarray:
     """Apply random augmentations to a square image."""
     # Brightness / contrast
     alpha = rng.uniform(0.8, 1.2)  # contrast
@@ -322,7 +322,7 @@ def generate_dataset(
             else:
                 img = _render_3d_square(piece_type, is_white, is_light, size, rng, cache)
 
-            img = _augment(img, rng)
+            img = augment_square_image(img, rng)
             images.append(img)
             labels.append(class_idx)
 

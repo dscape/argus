@@ -25,7 +25,13 @@ from torch.utils.data import DataLoader, TensorDataset
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.overlay.chess_positions_data import sample_chess_positions_squares
-from pipeline.overlay.piece_classifier_data import CLASS_NAMES, NUM_CLASSES, generate_dataset
+from pipeline.overlay.piece_classifier_data import (
+    CLASS_NAMES,
+    NUM_CLASSES,
+    augment_square_image,
+    generate_dataset,
+)
+from pipeline.overlay.real_board_data import sample_real_board_squares
 from pipeline.overlay.square_classifier_model import (
     INPUT_SIZE,
     MODEL_CODE_VERSION,
@@ -39,6 +45,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "overlay"
 DEFAULT_CP_TRAIN_DIR = _PROJECT_ROOT / "data" / "overlay" / "train"
 DEFAULT_CP_VAL_DIR = _PROJECT_ROOT / "data" / "overlay" / "val"
+DEFAULT_REAL_BOARD_TRAIN_DIR = _PROJECT_ROOT / "data" / "overlay" / "val_real"
 
 
 def _to_tensor_dataset(images: np.ndarray, labels: np.ndarray) -> TensorDataset:
@@ -93,6 +100,42 @@ def _load_chess_positions_split(
         seed=seed,
     )
     return images, labels
+
+
+def _load_real_board_train_split(
+    data_dir: Path | None,
+    *,
+    seed: int,
+    augment_copies: int,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    if data_dir is None:
+        return None
+    if not data_dir.exists():
+        logger.warning("Real board directory not found: %s", data_dir)
+        return None
+
+    images, labels = sample_real_board_squares(
+        data_dir,
+        max_per_class=None,
+        size=INPUT_SIZE,
+        seed=seed,
+    )
+    if augment_copies <= 0:
+        return images, labels
+
+    augmented_images: list[np.ndarray] = [img for img in images]
+    augmented_labels: list[int] = labels.astype(np.int64, copy=False).tolist()
+    for index, (image, label) in enumerate(zip(images, labels.tolist())):
+        for copy_index in range(augment_copies):
+            aug_seed = seed + index * 997 + copy_index * 7919
+            rng = random.Random(aug_seed)
+            augmented_images.append(augment_square_image(image.copy(), rng))
+            augmented_labels.append(int(label))
+
+    augmented_arr = np.array(augmented_images, dtype=np.uint8)
+    labels_arr = np.array(augmented_labels, dtype=np.int64)
+    perm = np.random.RandomState(seed).permutation(len(augmented_arr))
+    return augmented_arr[perm], labels_arr[perm]
 
 
 def _concat_splits(
@@ -167,10 +210,11 @@ def _train(
     epochs: int,
     lr: float,
     weight_decay: float,
+    label_smoothing: float,
     device: torch.device,
 ) -> tuple[TinySquareClassifier, float]:
     model = TinySquareClassifier().to(device)
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
+    criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
@@ -281,6 +325,7 @@ def main() -> None:
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--label-smoothing", type=float, default=0.0)
     parser.add_argument("--synthetic-train-samples", type=int, default=1200)
     parser.add_argument("--synthetic-val-samples", type=int, default=300)
     parser.add_argument("--chess-positions-train-dir", type=Path, default=DEFAULT_CP_TRAIN_DIR)
@@ -288,6 +333,8 @@ def main() -> None:
     parser.add_argument("--chess-positions-train-samples", type=int, default=2500)
     parser.add_argument("--chess-positions-val-samples", type=int, default=1200)
     parser.add_argument("--chess-positions-empty-multiplier", type=int, default=6)
+    parser.add_argument("--real-board-train-dir", type=Path, default=None)
+    parser.add_argument("--real-board-augment-copies", type=int, default=0)
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -314,8 +361,13 @@ def main() -> None:
         empty_multiplier=args.chess_positions_empty_multiplier,
         seed=args.seed,
     )
+    real_train = _load_real_board_train_split(
+        args.real_board_train_dir,
+        seed=args.seed,
+        augment_copies=args.real_board_augment_copies,
+    )
 
-    train_images, train_labels = _concat_splits([synthetic_train, cp_train])
+    train_images, train_labels = _concat_splits([synthetic_train, cp_train, real_train])
     val_images, val_labels = _concat_splits([synthetic_val, cp_val])
 
     logger.info("Train: %d images", len(train_images))
@@ -335,6 +387,7 @@ def main() -> None:
         epochs=args.epochs,
         lr=args.lr,
         weight_decay=args.weight_decay,
+        label_smoothing=args.label_smoothing,
         device=device,
     )
     _log_per_class_accuracy(model, val_loader, device=device)
@@ -365,6 +418,11 @@ def main() -> None:
             "chess_positions_train_per_piece_class": args.chess_positions_train_samples,
             "chess_positions_val_per_piece_class": args.chess_positions_val_samples,
             "chess_positions_empty_multiplier": args.chess_positions_empty_multiplier,
+            "real_board_train_dir": (
+                str(args.real_board_train_dir) if args.real_board_train_dir else None
+            ),
+            "real_board_augment_copies": args.real_board_augment_copies,
+            "label_smoothing": args.label_smoothing,
         },
     }
     with (WEIGHTS_DIR / "metadata.json").open("w") as handle:

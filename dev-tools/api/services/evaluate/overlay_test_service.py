@@ -27,6 +27,7 @@ from pipeline.overlay.chess_positions_data import (
 )
 from pipeline.overlay.grid_detector import GridResult, detect_grid
 from pipeline.overlay.piece_classifier import class_grid_to_fen, read_fen_with_grid
+from pipeline.overlay.real_board_data import parse_real_board_fen
 from pipeline.overlay.scanner import (
     compute_alternation_strength,
     compute_axis_aligned_periodicity,
@@ -396,12 +397,7 @@ def inspect_board(filename: str) -> dict:
         actual_name = filename[len(_REAL_PREFIX):]
         image_path = resolve_board_image_path(filename)
         source = "real"
-        stem = Path(actual_name).stem
-        if stem.startswith("f_"):
-            _, _, expected_fen = _parse_frame_filename(stem)
-        else:
-            fen_hyphenated = stem.split("_", 1)[1] if "_" in stem else stem
-            expected_fen = fen_hyphenated.replace("-", "/")
+        expected_fen = parse_real_board_fen(actual_name)
     else:
         image_path = resolve_board_image_path(filename)
         source = "synthetic"

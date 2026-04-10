@@ -535,9 +535,12 @@ Tiny depthwise-separable CNN exported to ONNX, classifying individual board squa
 ```bash
 # Train the tiny square classifier and export weights/overlay/best.onnx
 make train-pieces ARGS="--epochs 6 --batch-size 256"
+
+# Optional: adapt on labeled real board crops as well
+make train-pieces ARGS="--epochs 6 --batch-size 256 --real-board-train-dir data/overlay/val_real --real-board-augment-copies 4"
 ```
 
-The training script mixes synthetic square crops with sampled `data/overlay/train` / `data/overlay/val` squares, deliberately oversamples real empty squares to suppress false positives, and then exports a CPU runtime ONNX model.
+The training script mixes synthetic square crops with sampled `data/overlay/train` / `data/overlay/val` squares and can optionally add labeled runtime board crops from `data/overlay/val_real`. If you train with `val_real`, treat it as an adaptation set, not an unbiased holdout.
 
 ### Accuracy Validation
 

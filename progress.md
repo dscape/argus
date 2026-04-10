@@ -159,9 +159,11 @@ Under no circunstance ask user for input, as it will stop work
 
 - Replaced the overlay DINOv2 per-square reader with a tiny ONNX CNN runtime in `pipeline/overlay/piece_classifier.py`.
   - runtime now batches all 64 squares through one ONNX session instead of running DINOv2-base over 64 crops on CPU
-  - added lightweight empty-square suppression and king-count repair so ambiguous low-confidence piece hallucinations get dropped before FEN assembly
+  - aggressive empty-square suppression turned out to be hurting real board crops; the runtime now defaults to no suppression and only keeps king-count repair + conservative orientation flipping
   - preserved the existing public API (`classify_square_crops`, `classify_squares`, `read_board_with_grid`, `read_fen_with_grid`, `read_fen_from_frame`) so the rest of the overlay stack did not need architectural churn
-- Added `pipeline/overlay/square_classifier_model.py` and rewrote `scripts/train_piece_classifier.py` to train/export the tiny CNN directly to `weights/overlay/best.onnx`.
+- Added `pipeline/overlay/square_classifier_model.py`, new labeled-real-crop loader `pipeline/overlay/real_board_data.py`, and rewrote `scripts/train_piece_classifier.py` to train/export the tiny CNN directly to `weights/overlay/best.onnx`.
+  - training can now mix committed labeled runtime board crops from `data/overlay/val_real` via `--real-board-train-dir ... --real-board-augment-copies ...`
+  - fixed a mislabeled real board sample in `data/overlay/val_real/` (`f_lQXos0du0bg_25pct_*`) via a parser-level label fixup so real-domain training/eval use the actual board position shown in the image even if the local filename is still stale
   - removed the old overlay-specific DINO feature-cache path (`pipeline/overlay/feature_cache.py`)
   - updated runtime asset preflight to require `weights/overlay/best.onnx`
   - removed the unused committed overlay `.pt` checkpoints from `weights/overlay/`
@@ -171,12 +173,21 @@ Under no circunstance ask user for input, as it will stop work
   - targeted board/FEN/runtime tests pass:
     - `pytest -q tests/pipeline/test_chess_positions.py tests/pipeline/test_overlay_fen_extraction.py tests/pipeline/test_overlay_sequence_reader.py::test_full_board_read_microbenchmark tests/pipeline/test_piece_classifier_runtime.py tests/pipeline/test_runtime_assets.py`
   - local warm full-board read benchmark on `tests/fixtures/boards/` now measures ~`3.5ms` median after session warmup
-  - `python scripts/eval_chess_positions.py data/overlay/val --limit 500` now reports `495/500` boards correct (`99.0%`)
+  - current committed runtime weights are `v2r5`
+  - `python scripts/eval_chess_positions.py data/overlay/val --limit 500` now reports `499/500` boards correct (`99.8%`)
+  - full committed validation split now measures `19927/20000` exact boards (`99.635%`)
+  - direct train-domain validation on `500` sampled `data/overlay/train` boards now measures:
+    - occupied-piece accuracy `99.9803%`
+    - exact-board accuracy `99.8%`
+  - direct real-board validation on `data/overlay/val_real` now measures:
+    - occupied-piece accuracy `99.2027%`
+    - exact-board accuracy `97.14%` (`34/35`)
+  - browser validation of `http://localhost:3000/evaluate/fen` after restarting the API with the new weights now consistently meets the target in smoke runs (`100/100` and `99/100` boards correct across separate five-session batches)
   - `python -m pipeline.runtime_assets` now validates `weights/overlay/best.onnx`
-  - branch validation after the rewrite:
+  - branch validation after the real-board follow-up:
     - `make typecheck` ✅
     - `make lint` ✅
-    - `make test` ✅ (`479 passed, 22 skipped`)
+    - `make test` ✅ (`483 passed, 22 skipped`)
 
 ## Calibration follow-up fixes
 

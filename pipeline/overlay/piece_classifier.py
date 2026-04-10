@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import chess
 import cv2
@@ -45,7 +46,8 @@ WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "overlay"
 _cached_session: Any | None = None
 _cached_input_name: str | None = None
 _logged_non_cpu_devices: set[str] = set()
-_NON_EMPTY_MARGIN_THRESHOLD = 0.31
+_NON_EMPTY_MARGIN_THRESHOLD = 0.0
+_ORIENTATION_FLIP_MARGIN = 8.0
 
 
 @dataclass(frozen=True)
@@ -98,43 +100,45 @@ def classify_squares(
 
 def _detect_orientation(class_grid: list[list[int]]) -> bool:
     """Return True if board is flipped (black at bottom)."""
+    normal_score = _orientation_score(class_grid, flipped=False)
+    flipped_score = _orientation_score(class_grid, flipped=True)
+    return flipped_score >= normal_score + _ORIENTATION_FLIP_MARGIN
 
-    def _score(flipped: bool) -> float:
-        board = chess.Board(fen=None)
-        for r in range(8):
-            for c in range(8):
-                piece = CLASS_TO_PIECE.get(class_grid[r][c])
-                if piece is None:
-                    continue
-                if not flipped:
-                    sq = chess.square(c, 7 - r)
-                else:
-                    sq = chess.square(7 - c, r)
-                board.set_piece_at(sq, piece)
 
-        score = 0.0
-        wk = len(board.pieces(chess.KING, chess.WHITE))
-        bk = len(board.pieces(chess.KING, chess.BLACK))
-        if wk == 1:
-            score += 10
-        if bk == 1:
-            score += 10
-        for sq in chess.SquareSet(chess.BB_RANK_1 | chess.BB_RANK_8):
-            piece = board.piece_at(sq)
-            if piece and piece.piece_type == chess.PAWN:
-                score -= 5
-        for sq in chess.SQUARES:
-            piece = board.piece_at(sq)
+def _orientation_score(class_grid: list[list[int]], *, flipped: bool) -> float:
+    board = chess.Board(fen=None)
+    for r in range(8):
+        for c in range(8):
+            piece = CLASS_TO_PIECE.get(class_grid[r][c])
             if piece is None:
                 continue
-            rank = chess.square_rank(sq)
-            if piece.color == chess.WHITE and piece.piece_type != chess.PAWN and rank <= 1:
-                score += 1
-            if piece.color == chess.BLACK and piece.piece_type != chess.PAWN and rank >= 6:
-                score += 1
-        return score
+            if not flipped:
+                sq = chess.square(c, 7 - r)
+            else:
+                sq = chess.square(7 - c, r)
+            board.set_piece_at(sq, piece)
 
-    return _score(True) > _score(False)
+    score = 0.0
+    wk = len(board.pieces(chess.KING, chess.WHITE))
+    bk = len(board.pieces(chess.KING, chess.BLACK))
+    if wk == 1:
+        score += 10
+    if bk == 1:
+        score += 10
+    for sq in chess.SquareSet(chess.BB_RANK_1 | chess.BB_RANK_8):
+        piece = board.piece_at(sq)
+        if piece and piece.piece_type == chess.PAWN:
+            score -= 5
+    for sq in chess.SQUARES:
+        piece = board.piece_at(sq)
+        if piece is None:
+            continue
+        rank = chess.square_rank(sq)
+        if piece.color == chess.WHITE and piece.piece_type != chess.PAWN and rank <= 1:
+            score += 1
+        if piece.color == chess.BLACK and piece.piece_type != chess.PAWN and rank >= 6:
+            score += 1
+    return score
 
 
 def class_grid_to_fen(
@@ -232,6 +236,9 @@ def _suppress_ambiguous_non_empty_predictions(
     class_ids: np.ndarray,
     logits: np.ndarray,
 ) -> np.ndarray:
+    if _NON_EMPTY_MARGIN_THRESHOLD <= 0.0:
+        return class_ids
+
     probs = _softmax(logits)
     refined = class_ids.copy()
     for index, class_id in enumerate(refined.tolist()):
@@ -246,14 +253,29 @@ def _suppress_ambiguous_non_empty_predictions(
 def _repair_king_counts(class_ids: np.ndarray, logits: np.ndarray) -> np.ndarray:
     probs = _softmax(logits)
     refined = class_ids.copy()
+    reserved_indices: set[int] = set()
+
     for king_class in (6, 12):
         indices = np.flatnonzero(refined == king_class).tolist()
-        if len(indices) <= 1:
+        if len(indices) > 1:
+            best_index = max(indices, key=lambda idx: float(probs[idx, king_class] - probs[idx, 0]))
+            reserved_indices.add(best_index)
+            for idx in indices:
+                if idx != best_index:
+                    refined[idx] = 0
             continue
-        best_index = max(indices, key=lambda idx: float(probs[idx, king_class] - probs[idx, 0]))
-        for idx in indices:
-            if idx != best_index:
-                refined[idx] = 0
+        if len(indices) == 1:
+            reserved_indices.add(indices[0])
+            continue
+
+        candidate_indices = [idx for idx in range(len(refined)) if idx not in reserved_indices]
+        best_index = max(
+            candidate_indices,
+            key=lambda idx: float(probs[idx, king_class] - probs[idx, 0]),
+        )
+        reserved_indices.add(best_index)
+        refined[best_index] = king_class
+
     return refined
 
 
