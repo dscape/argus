@@ -47,12 +47,15 @@ export interface DetectedMove {
   uci: string;
   san: string | null;
   detect_value: number | null;
+  timestamp_seconds: number | null;
 }
 
 export interface ClipInspectResponse {
   file_size_mb: number;
   tensors: TensorInfo[];
   num_frames: number;
+  frame_indices: number[];
+  frame_timestamps_seconds: number[];
   pixel_range: [number, number];
   moves: DetectedMove[];
   total_moves: number;
@@ -63,6 +66,13 @@ export interface ClipInspectResponse {
   final_fen: string | null;
   avg_legal_moves: number | null;
   metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface ClipAnnotationResponse {
+  filename: string;
+  annotation_path: string;
+  content: string;
+  exists: boolean;
 }
 
 // Video annotator

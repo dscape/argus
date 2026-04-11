@@ -2,6 +2,7 @@
 
 import chess
 from pipeline.overlay.overlay_move_detector import (
+    MoveDetectionDiagnostics,
     detect_moves,
     find_move_between_positions,
 )
@@ -211,6 +212,40 @@ class TestDetectMoves:
         assert len(split) == 2
         assert [move.move_uci for move in split[0].moves] == ["e2e4"]
         assert [move.move_uci for move in split[1].moves] == ["d2d4"]
+
+    def test_diagnostics_track_illegal_jumps_and_hard_cuts(self):
+        board = chess.Board()
+        start = board.board_fen()
+        board.push(chess.Move.from_uci("e2e4"))
+        after_e4 = board.board_fen()
+        board.push(chess.Move.from_uci("c7c5"))
+        board.push(chess.Move.from_uci("g1f3"))
+        jumped = board.board_fen()
+        empty = "8/8/8/8/8/8/8/8"
+
+        fens = []
+        indices = []
+        idx = 0
+        for fen in [start, after_e4, jumped, empty]:
+            for _ in range(3):
+                fens.append(fen)
+                indices.append(idx)
+                idx += 1
+
+        diagnostics = MoveDetectionDiagnostics()
+        segments = detect_moves(
+            fens,
+            indices,
+            fps=2.0,
+            split_on_illegal=True,
+            diagnostics=diagnostics,
+        )
+
+        assert len(segments) == 1
+        assert diagnostics.detected_move_count == 1
+        assert diagnostics.illegal_jump_count == 1
+        assert diagnostics.hard_cut_count == 1
+        assert diagnostics.segment_move_counts == [1]
 
     def test_empty_fens(self):
         """Handle empty FEN list gracefully."""

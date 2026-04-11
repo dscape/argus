@@ -8,6 +8,7 @@ import logging
 import os
 import subprocess
 import time
+from dataclasses import dataclass, field
 
 import chess
 import chess.pgn
@@ -17,7 +18,11 @@ import torch
 
 from pipeline.overlay.calibration import LayoutCalibration, get_calibration
 from pipeline.overlay.grid_detector import detect_grid
-from pipeline.overlay.overlay_move_detector import GameSegment, detect_moves
+from pipeline.overlay.overlay_move_detector import (
+    GameSegment,
+    MoveDetectionDiagnostics,
+    detect_moves,
+)
 from pipeline.overlay.replay import build_replay_board
 from pipeline.overlay.sequence_reader import LockedOverlaySequenceReader
 
@@ -35,6 +40,29 @@ except ImportError:
 
 OUTPUT_DIR = os.path.join("data", "argus", "train_real")
 FRAME_SIZE = 224
+
+
+@dataclass
+class ClipGenerationDiagnostics:
+    """Summary stats for one clip-generation run over a time window."""
+
+    clip_label: str = ""
+    start_time_seconds: float | None = None
+    end_time_seconds: float | None = None
+    sampled_frame_count: int = 0
+    readable_fen_count: int = 0
+    sampled_video_fps: float = 0.0
+    sampled_fps: float = 0.0
+    realtime_factor: float = 0.0
+    full_reads: int = 0
+    partial_reads: int = 0
+    cached_reads: int = 0
+    suppressed_reads: int = 0
+    move_detection: MoveDetectionDiagnostics | None = None
+    segment_move_counts: list[int] = field(default_factory=list)
+    saved_clip_move_counts: list[int] = field(default_factory=list)
+    short_segment_move_counts: list[int] = field(default_factory=list)
+    rejected_segment_move_counts: list[int] = field(default_factory=list)
 
 
 class OverlayClipGenerator:
@@ -60,6 +88,8 @@ class OverlayClipGenerator:
         start_time: float | None = None,
         end_time: float | None = None,
         channel_handle: str | None = None,
+        save_clips: bool = True,
+        diagnostics: ClipGenerationDiagnostics | None = None,
     ) -> list[dict]:
         """Generate training clips from a video with 2D overlay.
 
@@ -73,6 +103,11 @@ class OverlayClipGenerator:
         Returns:
             List of dicts with clip metadata for each generated clip.
         """
+        if diagnostics is not None:
+            diagnostics.clip_label = video_id or os.path.splitext(os.path.basename(video_path))[0]
+            diagnostics.start_time_seconds = start_time
+            diagnostics.end_time_seconds = end_time
+
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             logger.error(f"Cannot open video: {video_path}")
@@ -152,6 +187,12 @@ class OverlayClipGenerator:
         sampled_video_fps = fps / frame_skip if frame_skip > 0 else fps
         processed_seconds = max(last_frame - first_frame, 0) / fps if fps > 0 else 0.0
         realtime_factor = processed_seconds / elapsed if elapsed > 0 else 0.0
+
+        if diagnostics is not None:
+            diagnostics.sampled_frame_count = len(frame_indices)
+            diagnostics.sampled_fps = sampled_fps
+            diagnostics.sampled_video_fps = float(sampled_video_fps)
+            diagnostics.realtime_factor = realtime_factor
         logger.info(
             "Sampled %d frames in %.2fs (%.2f sampled fps, %.2fx realtime at %.2f video fps)",
             len(frame_indices),
@@ -167,6 +208,8 @@ class OverlayClipGenerator:
 
         readable = sum(1 for f in fens if f is not None)
         logger.info(f"Extracted {len(fens)} frames, {readable} readable FENs")
+        if diagnostics is not None:
+            diagnostics.readable_fen_count = readable
         if sequence_reader is not None:
             logger.info(
                 "Overlay read stats: %d full, %d partial, %d cached, %d suppressed",
@@ -175,15 +218,25 @@ class OverlayClipGenerator:
                 sequence_reader.num_cached_reads,
                 sequence_reader.num_suppressed_reads,
             )
+            if diagnostics is not None:
+                diagnostics.full_reads = sequence_reader.num_full_reads
+                diagnostics.partial_reads = sequence_reader.num_partial_reads
+                diagnostics.cached_reads = sequence_reader.num_cached_reads
+                diagnostics.suppressed_reads = sequence_reader.num_suppressed_reads
 
         # Detect moves from FEN sequence
+        move_detection_diagnostics = MoveDetectionDiagnostics() if diagnostics is not None else None
         segments = detect_moves(
             fens=fens,
             frame_indices=frame_indices,
             fps=fps,
             start_time=clip_start_time,
             split_on_illegal=True,
+            diagnostics=move_detection_diagnostics,
         )
+        if diagnostics is not None:
+            diagnostics.move_detection = move_detection_diagnostics
+            diagnostics.segment_move_counts = [segment.num_moves for segment in segments]
 
         if not segments:
             logger.warning("No game segments detected")
@@ -193,10 +246,13 @@ class OverlayClipGenerator:
 
         # Generate a .pt clip for each game segment
         results = []
-        os.makedirs(self.output_dir, exist_ok=True)
+        if save_clips:
+            os.makedirs(self.output_dir, exist_ok=True)
 
         for game_idx, segment in enumerate(segments):
             if segment.num_moves < self.min_moves_per_segment:
+                if diagnostics is not None:
+                    diagnostics.short_segment_move_counts.append(segment.num_moves)
                 logger.info(f"Skipping segment {game_idx}: only {segment.num_moves} moves")
                 continue
 
@@ -215,6 +271,8 @@ class OverlayClipGenerator:
                 clip_data["sampled_video_fps"] = float(sampled_video_fps)
 
             if clip_data is None:
+                if diagnostics is not None:
+                    diagnostics.rejected_segment_move_counts.append(segment.num_moves)
                 continue
 
             # Generate video_id from path if not provided
@@ -222,19 +280,29 @@ class OverlayClipGenerator:
             filename = f"clip_overlay_{vid}_{game_idx}.pt"
             filepath = os.path.join(self.output_dir, filename)
 
-            torch.save(clip_data, filepath)
-            logger.info(
-                f"Saved clip: {filename} ({segment.num_moves} moves, "
-                f"{clip_data['frames'].shape[0]} frames)"
-            )
+            if save_clips:
+                torch.save(clip_data, filepath)
+                logger.info(
+                    f"Saved clip: {filename} ({segment.num_moves} moves, "
+                    f"{clip_data['frames'].shape[0]} frames)"
+                )
+            else:
+                logger.info(
+                    f"Built clip (dry run): {filename} ({segment.num_moves} moves, "
+                    f"{clip_data['frames'].shape[0]} frames)"
+                )
+
+            if diagnostics is not None:
+                diagnostics.saved_clip_move_counts.append(segment.num_moves)
 
             results.append(
                 {
-                    "filepath": filepath,
+                    "filepath": filepath if save_clips else filename,
                     "num_frames": clip_data["frames"].shape[0],
                     "num_moves": segment.num_moves,
                     "game_index": game_idx,
                     "pgn_moves": segment.pgn_moves,
+                    "saved_to_disk": save_clips,
                 }
             )
 
@@ -276,6 +344,22 @@ class OverlayClipGenerator:
         if start_idx is None or end_idx is None or end_idx <= start_idx:
             return None
 
+        delay_sample_steps = (
+            int(move_delay_seconds * fps / frame_skip) if move_delay_seconds > 0 else 0
+        )
+        delay_frame_offset = delay_sample_steps * frame_skip
+
+        # Preserve at least one pre-move sampled frame when available so the
+        # first clip frame is not already the first detected move after any
+        # broadcast-delay compensation.
+        if segment.moves:
+            first_effective_move_frame = max(
+                segment.moves[0].frame_idx - delay_frame_offset,
+                segment.start_frame,
+            )
+            if frame_indices[start_idx] == first_effective_move_frame and start_idx > 0:
+                start_idx -= 1
+
         segment_cameras = camera_crops[start_idx : end_idx + 1]
         segment_frame_indices = frame_indices[start_idx : end_idx + 1]
         num_frames = len(segment_cameras)
@@ -293,11 +377,6 @@ class OverlayClipGenerator:
         frames_tensor = (
             torch.from_numpy(np.stack(resized)).permute(0, 3, 1, 2).to(torch.uint8)
         )  # (T, C, H, W)
-
-        delay_sample_steps = (
-            int(move_delay_seconds * fps / frame_skip) if move_delay_seconds > 0 else 0
-        )
-        delay_frame_offset = delay_sample_steps * frame_skip
         frame_timestamps = torch.tensor(
             [frame_idx / fps for frame_idx in segment_frame_indices],
             dtype=torch.float32,
@@ -478,6 +557,8 @@ def generate_from_video(
     output_dir: str = OUTPUT_DIR,
     base_fps: float = 2.0,
     min_moves_per_segment: int = 5,
+    save_clips: bool = True,
+    diagnostics: list[ClipGenerationDiagnostics] | None = None,
 ) -> list[dict]:
     """Generate training clips from a video path or URL.
 
@@ -525,6 +606,13 @@ def generate_from_video(
                 board_flipped=clip_row["board_flipped"],
                 board_theme=clip_row["board_theme"],
             )
+            clip_diagnostics = None
+            if diagnostics is not None:
+                clip_diagnostics = ClipGenerationDiagnostics(
+                    clip_label=f"{video_id}_clip{clip_row['id']}",
+                    start_time_seconds=float(clip_row["start_time"]),
+                    end_time_seconds=float(clip_row["end_time"]),
+                )
             clip_results = generator.generate_clips(
                 video_path,
                 cal,
@@ -532,7 +620,11 @@ def generate_from_video(
                 start_time=clip_row["start_time"],
                 end_time=clip_row["end_time"],
                 channel_handle=channel_handle,
+                save_clips=save_clips,
+                diagnostics=clip_diagnostics,
             )
+            if diagnostics is not None and clip_diagnostics is not None:
+                diagnostics.append(clip_diagnostics)
             results.extend(clip_results)
         return results
 
@@ -550,9 +642,18 @@ def generate_from_video(
         base_fps=base_fps,
         min_moves_per_segment=min_moves_per_segment,
     )
-    return generator.generate_clips(
+    clip_diagnostics = None
+    if diagnostics is not None:
+        clip_diagnostics = ClipGenerationDiagnostics(clip_label=video_id)
+
+    results = generator.generate_clips(
         video_path,
         calibration,
         video_id=video_id,
         channel_handle=channel_handle,
+        save_clips=save_clips,
+        diagnostics=clip_diagnostics,
     )
+    if diagnostics is not None and clip_diagnostics is not None:
+        diagnostics.append(clip_diagnostics)
+    return results

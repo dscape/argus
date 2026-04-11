@@ -4,7 +4,12 @@ import chess
 import numpy as np
 import pytest
 import torch
-from pipeline.overlay.overlay_clip_generator import OverlayClipGenerator
+from pipeline.overlay.calibration import LayoutCalibration
+from pipeline.overlay.overlay_clip_generator import (
+    ClipGenerationDiagnostics,
+    OverlayClipGenerator,
+    generate_from_video,
+)
 from pipeline.overlay.overlay_move_detector import GameSegment, OverlayDetectedMove
 
 # Try to import argus vocabulary
@@ -358,6 +363,45 @@ class TestBuildTrainingClip:
 
         assert extracted_moves == ["e7e5", "g1f3"]
 
+    @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
+    def test_build_training_clip_keeps_one_pre_move_frame_when_available(self, generator):
+        segment, frame_indices = _make_game_segment(["e2e4", "e7e5"], frames_per_move=3)
+        segment.start_frame = segment.moves[0].frame_idx
+        camera_crops = _make_camera_crops(len(frame_indices))
+
+        clip = generator._build_training_clip(
+            camera_crops=camera_crops,
+            frame_indices=frame_indices,
+            segment=segment,
+            fps=30.0,
+        )
+
+        assert clip is not None
+        assert clip["frame_indices"][0].item() == segment.moves[0].frame_idx - 1
+        move_frames = (clip["detect_targets"] == 1.0).nonzero(as_tuple=True)[0]
+        assert move_frames.tolist()[0] == 1
+
+    @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
+    def test_build_training_clip_keeps_pre_move_frame_after_delay_compensation(self, generator):
+        segment, frame_indices = _make_game_segment(["e2e4", "e7e5"], frames_per_move=3)
+        segment.start_frame = frame_indices[2]
+        camera_crops = _make_camera_crops(len(frame_indices))
+
+        clip = generator._build_training_clip(
+            camera_crops=camera_crops,
+            frame_indices=frame_indices,
+            segment=segment,
+            fps=3.0,
+            frame_skip=1,
+            move_delay_seconds=1.0,
+        )
+
+        assert clip is not None
+        assert clip["frame_indices"][0].item() == frame_indices[1]
+        move_frames = (clip["detect_targets"] == 1.0).nonzero(as_tuple=True)[0]
+        assert move_frames.tolist()[0] == 1
+        assert clip["move_frame_indices"][0].item() == frame_indices[2]
+
     def test_short_segment_skipped(self, generator):
         """Segments with < 5 frames should return None."""
         segment, frame_indices = _make_game_segment(["e2e4"], frames_per_move=1)
@@ -470,3 +514,66 @@ class TestBuildTrainingClip:
         assert "pgn_moves" in clip
         assert "num_moves" in clip
         assert clip["num_moves"] == len(ITALIAN_GAME)
+
+
+class TestGenerateFromVideo:
+    def test_dry_run_collects_diagnostics_without_writing(self, monkeypatch, tmp_path):
+        import pipeline.overlay.overlay_clip_generator as mod
+
+        monkeypatch.setattr(mod, "_get_db_clips", lambda video_id: [])
+        monkeypatch.setattr(
+            mod,
+            "get_calibration",
+            lambda channel_handle: LayoutCalibration(
+                overlay=(0, 0, 100, 100),
+                camera=(0, 0, 100, 100),
+                ref_resolution=(1920, 1080),
+                board_flipped=False,
+                board_theme="lichess_default",
+            ),
+        )
+
+        calls = []
+
+        def fake_generate_clips(
+            self,
+            video_path,
+            calibration,
+            video_id="",
+            start_time=None,
+            end_time=None,
+            channel_handle=None,
+            save_clips=True,
+            diagnostics=None,
+        ):
+            calls.append((video_path, video_id, channel_handle, save_clips))
+            assert diagnostics is not None
+            diagnostics.sampled_frame_count = 12
+            diagnostics.readable_fen_count = 12
+            diagnostics.saved_clip_move_counts.append(6)
+            return [{"filepath": "clip_overlay_demo123_0.pt", "num_moves": 6, "num_frames": 42}]
+
+        monkeypatch.setattr(OverlayClipGenerator, "generate_clips", fake_generate_clips)
+
+        diagnostics: list[ClipGenerationDiagnostics] = []
+        results = generate_from_video(
+            "/tmp/demo123.mp4",
+            channel_handle="@demo",
+            output_dir=str(tmp_path),
+            min_moves_per_segment=5,
+            save_clips=False,
+            diagnostics=diagnostics,
+        )
+
+        assert results == [
+            {
+                "filepath": "clip_overlay_demo123_0.pt",
+                "num_moves": 6,
+                "num_frames": 42,
+            }
+        ]
+        assert calls == [("/tmp/demo123.mp4", "demo123", "@demo", False)]
+        assert len(diagnostics) == 1
+        assert diagnostics[0].clip_label == "demo123"
+        assert diagnostics[0].sampled_frame_count == 12
+        assert diagnostics[0].saved_clip_move_counts == [6]

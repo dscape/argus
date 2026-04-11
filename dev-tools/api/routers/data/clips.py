@@ -1,11 +1,22 @@
 """Clip inspector endpoints (session-based)."""
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from pathlib import Path
+
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from api.services.data import clip_service
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+
+
+def _resolve(path: str) -> Path:
+    candidate = Path(path)
+    if candidate.is_absolute():
+        return candidate
+    return (_PROJECT_ROOT / candidate).resolve()
 
 router = APIRouter()
 
@@ -29,15 +40,16 @@ class LoadFromPathRequest(BaseModel):
 @router.post("/load-from-path")
 async def load_clip_from_path(body: LoadFromPathRequest):
     """Load a .pt clip from a server-side file path."""
-    import os
-    if not os.path.exists(body.filepath):
-        raise HTTPException(404, f"File not found: {body.filepath}")
-    with open(body.filepath, "rb") as f:
+    resolved = _resolve(body.filepath)
+    if not resolved.exists():
+        raise HTTPException(404, f"File not found: {resolved}")
+    with resolved.open("rb") as f:
         file_bytes = f.read()
     session_id = await run_in_threadpool(
         clip_service.create_session,
         file_bytes,
-        os.path.basename(body.filepath),
+        resolved.name,
+        source_filepath=str(resolved),
     )
     return {"session_id": session_id}
 
@@ -53,7 +65,7 @@ async def get_clip_info(session_id: str):
 
 @router.get("/{session_id}/frame/{frame_index}")
 async def get_clip_frame(session_id: str, frame_index: int):
-    """Get a single frame as a PNG image."""
+    """Get a single stored clip frame as a PNG image."""
     try:
         png_bytes = await run_in_threadpool(
             clip_service.get_frame_png, session_id, frame_index
@@ -61,6 +73,49 @@ async def get_clip_frame(session_id: str, frame_index: int):
         return Response(content=png_bytes, media_type="image/png")
     except ValueError as e:
         raise HTTPException(404, str(e))
+
+
+@router.get("/{session_id}/overlay-frame/{frame_index}")
+async def get_clip_overlay_frame(session_id: str, frame_index: int):
+    """Get the corresponding overlay crop from the source video as a PNG image."""
+    try:
+        png_bytes = await run_in_threadpool(
+            clip_service.get_overlay_frame_png, session_id, frame_index
+        )
+        return Response(content=png_bytes, media_type="image/png")
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.api_route("/{session_id}/source-video", methods=["GET", "HEAD"])
+async def get_clip_source_video(session_id: str):
+    """Get the source video file for a real clip review session."""
+    try:
+        video_path = await run_in_threadpool(clip_service.get_source_video_path, session_id)
+        return FileResponse(video_path)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.get("/annotation")
+async def get_clip_annotation(filename: str = Query(...)):
+    """Load reviewer notes for a clip filename."""
+    return await run_in_threadpool(clip_service.get_annotation, filename)
+
+
+class SaveAnnotationRequest(BaseModel):
+    filename: str
+    content: str
+
+
+@router.put("/annotation")
+async def save_clip_annotation(body: SaveAnnotationRequest):
+    """Save reviewer notes for a clip filename."""
+    return await run_in_threadpool(
+        clip_service.save_annotation,
+        body.filename,
+        body.content,
+    )
 
 
 @router.delete("/{session_id}")

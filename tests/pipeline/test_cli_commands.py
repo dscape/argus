@@ -324,6 +324,119 @@ class TestRealDataProcessCommand:
         ]
 
 
+class TestRealDataAuditCommand:
+    """Test the real-data-audit CLI command."""
+
+    def test_prints_audit_summary(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            cli,
+            "_get_real_data_overview",
+            lambda clips_dir, max_file_size_mb=200.0, limit=5000: {
+                "videos": [
+                    {
+                        "video_id": "READYVIDEO1",
+                        "video_path": "/tmp/READYVIDEO1.mp4",
+                        "channel_handle": "@ready",
+                        "title": "Ready video",
+                        "existing_clip_count": 0,
+                        "ready": True,
+                    }
+                ]
+            },
+        )
+
+        import pipeline.overlay.real_video_audit as real_video_audit
+
+        monkeypatch.setattr(
+            real_video_audit,
+            "audit_video_generation",
+            lambda video_id, video_path, channel_handle, output_dir, min_moves_per_segment: {
+                "video_id": video_id,
+                "generated_clip_count": 0,
+                "failure_reason": "illegal_jump_fragmentation",
+                "max_segment_moves": 4,
+                "hard_cut_count": 1,
+                "illegal_jump_count": 6,
+                "clip_reports": [
+                    {
+                        "clip_label": video_id,
+                        "failure_reason": "illegal_jump_fragmentation",
+                        "segment_count": 2,
+                        "max_segment_moves": 4,
+                        "hard_cut_count": 1,
+                        "illegal_jump_count": 6,
+                    }
+                ],
+            },
+        )
+
+        cli.cmd_real_data_audit(
+            SimpleNamespace(
+                video_id=None,
+                clips_dir="data/argus/train_real",
+                limit=10,
+                min_moves=5,
+                max_file_size_mb=200.0,
+                json=False,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "Videos audited:   1" in out
+        assert "illegal_jump_fragmentation: 1" in out
+        assert "READYVIDEO1  [illegal_jump_fragmentation]" in out
+        assert "segments=2  max_moves=4  hard_cuts=1  illegal=6" in out
+
+    def test_json_output(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            cli,
+            "_get_real_data_overview",
+            lambda clips_dir, max_file_size_mb=200.0, limit=5000: {
+                "videos": [
+                    {
+                        "video_id": "READYVIDEO1",
+                        "video_path": "/tmp/READYVIDEO1.mp4",
+                        "channel_handle": "@ready",
+                        "title": "Ready video",
+                        "existing_clip_count": 0,
+                        "ready": True,
+                    }
+                ]
+            },
+        )
+
+        import pipeline.overlay.real_video_audit as real_video_audit
+
+        monkeypatch.setattr(
+            real_video_audit,
+            "audit_video_generation",
+            lambda video_id, video_path, channel_handle, output_dir, min_moves_per_segment: {
+                "video_id": video_id,
+                "generated_clip_count": 1,
+                "failure_reason": None,
+                "max_segment_moves": 8,
+                "hard_cut_count": 0,
+                "illegal_jump_count": 0,
+                "clip_reports": [],
+            },
+        )
+
+        cli.cmd_real_data_audit(
+            SimpleNamespace(
+                video_id="READYVIDEO1",
+                clips_dir="data/argus/train_real",
+                limit=10,
+                min_moves=5,
+                max_file_size_mb=200.0,
+                json=True,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert '"video_count": 1' in out
+        assert '"would_generate_clips": 1' in out
+
+
 class TestReferencePgnBenchmarkCommand:
     """Test the reference-pgn-benchmark CLI command."""
 

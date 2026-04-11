@@ -370,12 +370,114 @@
   - follow-up `generate-clips --video-id RyXsGZckLHQ --min-moves 5` still produced `0` clips
   - conclusion: for that video, missing calibration was only the first blocker; the remaining blocker is move-detection continuity / no sufficiently long legal spans
 
+## Ready-video audit follow-up
+
+- Added a dry-run CLI audit command for the remaining ready videos:
+  - `python -m pipeline.cli real-data-audit [--video-id <id>] [--json]`
+- Added supporting audit tooling in:
+  - `pipeline/overlay/real_video_audit.py`
+  - diagnostics capture in `pipeline/overlay/overlay_move_detector.py`
+  - dry-run / diagnostics support in `pipeline/overlay/overlay_clip_generator.py`
+- The audit runs the real clip-generation path **without writing clips**, then classifies the dominant blocker per video.
+- Saved the current audit snapshot under:
+  - `outputs/real-data-audit/ready_videos_2026-04-10.json`
+- Current audit result for the `10` ready-but-clipless local videos:
+  - `too_few_readable_frames`: `1`
+    - `9IKtoJ914yU` (`12` sampled/readable frames over a very short DB clip window)
+  - `illegal_jump_fragmentation`: `6`
+    - `hXgd42rAa-4`
+    - `YEjQAF0hbBs`
+    - `C-SuORC-1RY`
+    - `Ov8PXnJp1PU`
+    - `fGzLaA9uPEU`
+    - `RyXsGZckLHQ`
+  - `repeated_hard_cuts`: `3`
+    - `ycitHs8_NY4`
+    - `ji-ZR2Nr5gI`
+    - `w-BBT27D_l8`
+- Important audit finding:
+  - all `10` remaining ready-but-clipless videos start from **mid-game**, so the opening-position path is not the blocker for this remaining set
+  - the main remaining yield blocker is now clearly **mid-game continuity across illegal overlay jumps**, not missing metadata or replay validation bugs
+- Representative audit details:
+  - `RyXsGZckLHQ`: `904` sampled frames, `89` illegal jumps, `0` hard cuts, longest span only `3` moves
+  - `fGzLaA9uPEU`: `1282` sampled frames, `106` illegal jumps, `45` hard cuts, longest span `2` moves
+  - `ji-ZR2Nr5gI`: `1753` sampled frames, `121` hard cuts, `46` illegal jumps, no game segments survived
+- Added regression coverage:
+  - `tests/pipeline/test_real_video_audit.py`
+  - diagnostics coverage in `tests/pipeline/test_overlay_move_detector.py`
+  - dry-run diagnostics coverage in `tests/pipeline/test_overlay_clip_generator.py`
+  - CLI coverage in `tests/pipeline/test_cli_commands.py`
+
+## Dev-tools clip review UX follow-up
+
+- Added routeable clip-review pages for direct `.pt` inspection:
+  - real clips: `/data/real/<filename>.pt`
+  - synthetic clips: `/data/synthetic/<filename>.pt`
+- The clip galleries now navigate to those routes instead of opening transient modal inspectors.
+- Added a shared clip-review page component in:
+  - `dev-tools/components/data/ClipReviewPage.tsx`
+- Review page changes:
+  - move list is now shown as a chess-style **timeline** instead of an unstructured badge dump
+  - the selected frame shows large synchronized panels for:
+    - overlay crop from the source video (real clips only)
+    - stored clip frame / real camera crop
+  - frame-strip thumbnails remain available as small squares for quick visual scanning
+  - clip metadata and tensor payload stay visible on the same page
+  - tuned the layout so the timeline + synchronized footage stay side-by-side on typical desktop widths instead of dropping the timeline below the fold
+  - removed the old replay-error toast spam; invalid clips now communicate failure inline via the badge + summary card instead
+  - exact move frames now highlight the corresponding move strongly in the timeline
+  - added inline reviewer notes saved to `data/clip_annotations/<clip>.txt`
+  - added an inline source-video review player with sync / play-pause / ±1s controls
+- Clip-generation follow-up tied to review findings:
+  - `pipeline/overlay/overlay_clip_generator.py` now preserves one sampled **pre-move** frame when the first move would otherwise land on clip frame `0` after delay compensation
+  - added regression coverage in `tests/pipeline/test_overlay_clip_generator.py` for both:
+    - raw first-move-at-start segments
+    - delay-compensated first-move-at-start segments
+  - regenerated `2wWUKmCBr6A` clips after the fix:
+    - `clip_overlay_2wWUKmCBr6A_clip5_1.pt` now starts with a non-move lead-in frame
+    - first detected move `dxc5` moved from clip frame `0` to clip frame `1`
+    - clip length increased from `359` to `360` frames
+- Backend/API support added for richer review:
+  - `dev-tools/api/services/data/clip_service.py`
+    - now returns `frame_indices`, `frame_timestamps_seconds`, and per-move `timestamp_seconds`
+    - now supports overlay preview extraction from the original source video for DB-backed real clips
+    - now persists clip-review annotations under `data/clip_annotations/`
+    - now prepares a browser-friendly review video path for real clip playback
+  - `dev-tools/api/routers/data/clips.py`
+    - added `/api/clips/{session_id}/overlay-frame/{frame_index}`
+    - added `/api/clips/{session_id}/source-video`
+    - added `/api/clips/annotation`
+  - `dev-tools/lib/api.ts`
+    - added generic `loadClipFromPath()` and `clipOverlayFrameUrl()`
+    - added source-video + annotation helpers for the review page
+- Added regression coverage in `tests/dev_tools/test_clip_service.py` for:
+  - frame/timestamp inspection payloads
+  - overlay-frame extraction from source video + DB clip metadata
+  - annotation save/load path behavior
+- Browser validation:
+  - `http://localhost:3000/data/real/clip_overlay_EEZo0uDh4AY_clip9_5.pt`
+    - route loads successfully
+    - overlay + real footage render side-by-side
+    - move timeline selection updates the reviewed frame
+  - `http://localhost:3000/data/real/clip_overlay_2wWUKmCBr6A_clip5_1.pt`
+    - active move is visibly highlighted in the timeline
+    - reviewer notes save to `data/clip_annotations/clip_overlay_2wWUKmCBr6A_clip5_1.txt`
+    - after regeneration, the route now opens on `Frame 2 / 360`, confirming the clip no longer starts directly on the first move
+    - saved note now reflects the fix: one non-move pre-roll frame was added before `dxc5`
+    - source-video review endpoint now serves a browser-friendly MP4 with range support (`HEAD 200`, `206 Partial Content`, ffprobe-confirmed H.264)
+  - `http://localhost:3000/data/synthetic/clip_000000.pt`
+    - route loads successfully with timeline + frame strip
+  - clip-card navigation from `/data/real` now lands on the routeable review page
+- Validation after the clip-review route/UI follow-up:
+  - `make lint` ✅
+  - `make typecheck` ✅
+  - `make test` ✅ (`511 passed, 22 skipped`)
+
 ## Active dependency-unblocking plan
 
-1. Audit the remaining `9` ready local videos that still produce no clips and classify the exact dominant failure mode for each one.
-   - current likely buckets: source clip too short, repeated hard cuts, mid-game pickup with no long legal span, overlay read instability on non-STL layouts
-2. Improve the pipeline/tooling so this audit is fast and repeatable from the CLI.
-3. Focus code work on increasing clip yield / continuity for those remaining ready videos without regressing the exact-match benchmark spans.
+1. Focus code work on the `6`-video **illegal-jump fragmentation** bucket first, since those videos still show long readable runs and are the most plausible source of near-term clip-yield gains.
+2. Treat the `3`-video **repeated hard-cut** bucket as a separate problem class; likely montage / nonstandard-layout / frequent scene-switch content rather than a simple legality-resync issue.
+3. Keep `9IKtoJ914yU` low priority unless we lower `min_moves` or widen that source clip window; it is primarily a short-window issue, not a continuity issue.
 4. Rebuild `data/argus/training_dataset/` after each materially successful clip-yield change.
 5. Re-run small real-data training/eval checks after each meaningful data expansion or continuity fix.
 

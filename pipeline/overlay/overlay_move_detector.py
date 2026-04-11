@@ -61,6 +61,19 @@ class GameSegment:
         return len(self.moves)
 
 
+@dataclass
+class MoveDetectionDiagnostics:
+    """Summary stats for one overlay move-detection run."""
+
+    valid_frame_count: int = 0
+    started_midgame: bool = False
+    reset_count: int = 0
+    hard_cut_count: int = 0
+    illegal_jump_count: int = 0
+    detected_move_count: int = 0
+    segment_move_counts: list[int] = field(default_factory=list)
+
+
 def count_fen_differences(fen_a: str, fen_b: str) -> int:
     """Count squares where piece placement differs between two board FENs.
 
@@ -106,6 +119,7 @@ def detect_moves(
     start_time: float = 0.0,
     stability_window: int = STABILITY_WINDOW,
     split_on_illegal: bool = False,
+    diagnostics: MoveDetectionDiagnostics | None = None,
 ) -> list[GameSegment]:
     """Detect moves from a sequence of board FENs.
 
@@ -121,11 +135,18 @@ def detect_moves(
     Returns:
         List of GameSegments (one per game in multi-game streams).
     """
+    if diagnostics is not None:
+        diagnostics.valid_frame_count = sum(1 for fen in fens if fen is not None)
+
     if len(fens) < 2:
         return []
 
     # Filter out None FENs
-    valid = [(i, fen, idx) for i, (fen, idx) in enumerate(zip(fens, frame_indices)) if fen is not None]
+    valid = [
+        (i, fen, idx)
+        for i, (fen, idx) in enumerate(zip(fens, frame_indices))
+        if fen is not None
+    ]
 
     if len(valid) < 2:
         return []
@@ -150,6 +171,8 @@ def detect_moves(
         # We can't determine whose move it is without more context,
         # so we'll set up the board but may not detect the first few moves.
         logger.info("Video doesn't start from standard position, attempting mid-game pickup")
+        if diagnostics is not None:
+            diagnostics.started_midgame = True
         board = chess.Board()
         board.set_board_fen(first_fen)
 
@@ -184,6 +207,8 @@ def detect_moves(
         # Check for new game (reset to starting position).
         if current_fen == starting_fen and ply > 4:
             # New game detected
+            if diagnostics is not None:
+                diagnostics.reset_count += 1
             current_segment.end_frame = frame_idx
             current_segment.end_time = timestamp
             if current_segment.moves:
@@ -201,6 +226,8 @@ def detect_moves(
 
         # Hard cut detection: too many squares changed for a legal move.
         if diff_count > MAX_MOVE_CHANGED_SQUARES:
+            if diagnostics is not None:
+                diagnostics.hard_cut_count += 1
             logger.info(
                 f"Hard cut detected at frame {frame_idx}: "
                 f"{diff_count} squares changed (max for a move is "
@@ -227,6 +254,8 @@ def detect_moves(
         move = find_move_between_positions(board, current_fen)
 
         if move is not None:
+            if diagnostics is not None:
+                diagnostics.detected_move_count += 1
             san = board.san(move)
             detected_move = OverlayDetectedMove(
                 move_index=ply,
@@ -247,6 +276,8 @@ def detect_moves(
             # during analysis/review). Log and either resync in-place or
             # split the segment so downstream training clip generation keeps
             # only replay-consistent spans.
+            if diagnostics is not None:
+                diagnostics.illegal_jump_count += 1
             logger.warning(
                 f"No legal move found at frame {frame_idx}: "
                 f"{stable_fen} -> {current_fen}"
@@ -281,5 +312,8 @@ def detect_moves(
         current_segment.end_time = last_time
     if current_segment.moves:
         segments.append(current_segment)
+
+    if diagnostics is not None:
+        diagnostics.segment_move_counts = [segment.num_moves for segment in segments]
 
     return segments

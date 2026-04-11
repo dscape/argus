@@ -1,6 +1,7 @@
 import type {
   OverlayTestResponse,
   CalibrationEntry,
+  ClipAnnotationResponse,
   ClipInspectResponse,
   VideoSession,
   FrameOverlayResponse,
@@ -123,8 +124,50 @@ export async function getClipInfo(
   return res.json();
 }
 
+export async function loadClipFromPath(
+  filepath: string
+): Promise<{ session_id: string }> {
+  const res = await fetch("/api/clips/load-from-path", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filepath }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export function clipFrameUrl(sessionId: string, index: number): string {
   return `/api/clips/${sessionId}/frame/${index}`;
+}
+
+export function clipOverlayFrameUrl(sessionId: string, index: number): string {
+  return `/api/clips/${sessionId}/overlay-frame/${index}`;
+}
+
+export function clipSourceVideoUrl(sessionId: string): string {
+  return `/api/clips/${sessionId}/source-video`;
+}
+
+export async function getClipAnnotation(
+  filename: string
+): Promise<ClipAnnotationResponse> {
+  const params = new URLSearchParams({ filename });
+  const res = await fetch(`/api/clips/annotation?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function saveClipAnnotation(
+  filename: string,
+  content: string
+): Promise<ClipAnnotationResponse> {
+  const res = await fetch("/api/clips/annotation", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename, content }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function deleteClipSession(sessionId: string): Promise<void> {
@@ -1010,13 +1053,7 @@ export async function getSyntheticStats(
 export async function inspectSyntheticClip(
   filepath: string
 ): Promise<{ session_id: string }> {
-  const res = await fetch("/api/synthetic/inspect", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filepath }),
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return loadClipFromPath(filepath);
 }
 
 // ── Synthetic Generation Control ─────────────────────────────

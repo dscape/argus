@@ -347,8 +347,12 @@ def _get_real_data_overview(
                 "modified_ts": local["modified_ts"],
                 "title": video_row.get("title") if video_row is not None else None,
                 "channel_handle": channel_handle,
-                "published_at": video_row.get("published_at") if video_row is not None else None,
-                "screening_status": video_row.get("screening_status") if video_row is not None else None,
+                "published_at": (
+                    video_row.get("published_at") if video_row is not None else None
+                ),
+                "screening_status": (
+                    video_row.get("screening_status") if video_row is not None else None
+                ),
                 "layout_type": video_row.get("layout_type") if video_row is not None else None,
                 "existing_clip_count": existing_clip_count,
                 "db_clip_count": db_clip_count,
@@ -464,6 +468,86 @@ def cmd_real_data_process(args):
     print("")
     print(f"Processed {len(candidates)} ready video(s)")
     print(f"Generated {generated_clips} clip(s) into {clips_dir}")
+
+
+def cmd_real_data_audit(args):
+    """Audit ready real videos in dry-run mode and classify yield blockers."""
+    import json
+    from collections import Counter
+
+    from pipeline.overlay.real_video_audit import audit_video_generation
+
+    overview = _get_real_data_overview(
+        args.clips_dir,
+        max_file_size_mb=args.max_file_size_mb,
+        limit=5000,
+    )
+    if args.video_id:
+        candidates = [
+            video for video in overview["videos"] if video["video_id"] == args.video_id
+        ]
+        if not candidates:
+            print(f"No local video found for {args.video_id}")
+            return
+    else:
+        candidates = [
+            video
+            for video in overview["videos"]
+            if video["ready"] and video.get("existing_clip_count", 0) == 0
+        ][: args.limit]
+        if not candidates:
+            print("No eligible local videos found to audit.")
+            return
+
+    reports = []
+    for video in candidates:
+        report = audit_video_generation(
+            video_id=video["video_id"],
+            video_path=video["video_path"],
+            channel_handle=video.get("channel_handle") or "",
+            output_dir=args.clips_dir,
+            min_moves_per_segment=args.min_moves,
+        )
+        report["title"] = video.get("title")
+        report["channel_handle"] = video.get("channel_handle")
+        reports.append(report)
+
+    failure_breakdown = Counter(
+        report["failure_reason"] or "would_generate_clips" for report in reports
+    )
+    summary = {
+        "video_count": len(reports),
+        "failure_breakdown": dict(sorted(failure_breakdown.items())),
+        "videos": reports,
+    }
+
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        return
+
+    print(f"Videos audited:   {summary['video_count']}")
+    print("Failure breakdown:")
+    for failure, count in sorted(summary["failure_breakdown"].items()):
+        print(f"  {failure}: {count}")
+    print("")
+    print("Videos:")
+    for report in reports:
+        title = report.get("title") or "(no title)"
+        failure = report["failure_reason"] or "would_generate_clips"
+        print(
+            f"  {report['video_id']}  [{failure}]  clips={report['generated_clip_count']}  "
+            f"max_moves={report['max_segment_moves']}  hard_cuts={report['hard_cut_count']}  "
+            f"illegal={report['illegal_jump_count']}  {title}"
+        )
+        for clip_report in report["clip_reports"]:
+            label = clip_report["clip_label"] or report["video_id"]
+            print(
+                f"    {label}: {clip_report['failure_reason']}  "
+                f"segments={clip_report['segment_count']}  "
+                f"max_moves={clip_report['max_segment_moves']}  "
+                f"hard_cuts={clip_report['hard_cut_count']}  "
+                f"illegal={clip_report['illegal_jump_count']}"
+            )
 
 
 def cmd_reference_pgn_benchmark(args):
@@ -957,7 +1041,8 @@ def cmd_auto_segment_video(args):
         print("Segments:")
         for segment in result["segments"]:
             print(
-                f"  clip_id={segment['clip_id']}  {segment['start_time']:.1f}-{segment['end_time']:.1f}s  "
+                f"  clip_id={segment['clip_id']}  "
+                f"{segment['start_time']:.1f}-{segment['end_time']:.1f}s  "
                 f"score={segment['score']:.3f}  overlay={segment['overlay_bbox']}"
             )
 
@@ -1475,6 +1560,47 @@ def main():
         help="Ignore local videos larger than this size",
     )
 
+    # real-data-audit
+    p = subparsers.add_parser(
+        "real-data-audit",
+        help="Audit ready local real videos in dry-run mode and classify blockers",
+    )
+    p.add_argument(
+        "--video-id",
+        type=str,
+        default=None,
+        help="Optional single local video id to audit",
+    )
+    p.add_argument(
+        "--clips-dir",
+        type=str,
+        default="data/argus/train_real",
+        help="Directory where real clips are normally written",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Maximum ready local videos to audit",
+    )
+    p.add_argument(
+        "--min-moves",
+        type=int,
+        default=5,
+        help="Minimum detected moves required to keep a clip",
+    )
+    p.add_argument(
+        "--max-file-size-mb",
+        type=float,
+        default=200.0,
+        help="Ignore local videos larger than this size",
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the audit result as JSON",
+    )
+
     # reference-pgn-benchmark
     p = subparsers.add_parser(
         "reference-pgn-benchmark",
@@ -1943,6 +2069,7 @@ def main():
         "split-clips": cmd_split_clips,
         "real-data-overview": cmd_real_data_overview,
         "real-data-process": cmd_real_data_process,
+        "real-data-audit": cmd_real_data_audit,
         "reference-pgn-benchmark": cmd_reference_pgn_benchmark,
         "overlay-test": cmd_overlay_test,
         "overlay-test-reader": cmd_overlay_test_reader,

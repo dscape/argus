@@ -8,20 +8,10 @@ import {
   startGeneration,
   stopGeneration,
 } from "@/lib/api";
-import type {
-  ClipInspectResponse,
-  GenerationStatus,
-  SyntheticStatsResponse,
-} from "@/lib/types";
+import type { ClipInspectResponse, GenerationStatus, SyntheticStatsResponse } from "@/lib/types";
 import { ClipGallery } from "@/components/data/ClipGallery";
-import { ClipInspector } from "@/components/data/ClipInspector";
 import { usePolledScan } from "@/hooks/usePolledScan";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const DIRECTORY = "data/argus/train";
@@ -62,22 +52,19 @@ export function SyntheticDataPane() {
   });
 
   useEffect(() => {
-    if (scanError) toast.error(scanError);
+    if (scanError) {
+      toast.error(scanError);
+    }
   }, [scanError]);
 
   const [validCount, setValidCount] = useState(0);
   const [invalidCount, setInvalidCount] = useState(0);
-  const [inspectedClip, setInspectedClip] = useState<{
-    filename: string;
-    sessionId: string;
-    clipInfo: ClipInspectResponse;
-  } | null>(null);
 
   const handleClipInspected = useCallback((clipInfo: ClipInspectResponse) => {
     if (clipInfo.replay_valid) {
-      setValidCount((c) => c + 1);
+      setValidCount((count) => count + 1);
     } else {
-      setInvalidCount((c) => c + 1);
+      setInvalidCount((count) => count + 1);
     }
   }, []);
 
@@ -89,7 +76,9 @@ export function SyntheticDataPane() {
   }, []);
 
   useEffect(() => {
-    if (genStatus.status !== "running") return;
+    if (genStatus.status !== "running") {
+      return;
+    }
     const id = setInterval(() => {
       getGenerationStatus().then(setGenStatus).catch(() => {});
     }, 2000);
@@ -100,7 +89,7 @@ export function SyntheticDataPane() {
     if (genStatus.status === "failed") {
       toast.error(genStatus.error || "Generation failed");
     }
-  }, [genStatus.status, genStatus.error]);
+  }, [genStatus.error, genStatus.status]);
 
   const handleGenerate10 = async () => {
     setGenLoading(true);
@@ -144,7 +133,7 @@ export function SyntheticDataPane() {
           {isGenerating ? (
             <button
               onClick={handleStopGeneration}
-              className="flex items-center gap-1.5 px-3 h-8 rounded-xl text-xs font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-all duration-150"
+              className="flex h-8 items-center gap-1.5 rounded-xl bg-destructive px-3 text-xs font-medium text-destructive-foreground transition-all duration-150 hover:bg-destructive/90"
             >
               Stop ({genCompleted}/{genTotal})
             </button>
@@ -152,19 +141,19 @@ export function SyntheticDataPane() {
             <button
               onClick={handleGenerate10}
               disabled={genLoading}
-              className="flex items-center gap-1.5 px-3 h-8 rounded-xl text-xs font-medium bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-all duration-150 disabled:opacity-50 disabled:pointer-events-none"
+              className="flex h-8 items-center gap-1.5 rounded-xl bg-secondary px-3 text-xs font-medium text-secondary-foreground transition-all duration-150 hover:bg-secondary/80 disabled:pointer-events-none disabled:opacity-50"
             >
               {genLoading ? "Starting..." : "Generate 10"}
             </button>
           )}
           <span className="text-muted-foreground/40">|</span>
           <span
-            className={`inline-block w-2 h-2 rounded-full ${
-              isPolling ? "bg-green-500 animate-pulse" : "bg-gray-400"
+            className={`inline-block h-2 w-2 rounded-full ${
+              isPolling ? "animate-pulse bg-green-500" : "bg-gray-400"
             }`}
           />
           <span>{isPolling ? "Live" : "Paused"}</span>
-          <button onClick={() => setPolling(!isPolling)} className="text-xs underline ml-1">
+          <button onClick={() => setPolling(!isPolling)} className="ml-1 text-xs underline">
             {isPolling ? "Pause" : "Resume"}
           </button>
         </div>
@@ -172,21 +161,21 @@ export function SyntheticDataPane() {
 
       <div>
         {statsLoading || !stats ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {Array.from({ length: 8 }, (_, i) => (
-              <Card key={i}>
-                <CardHeader className="pb-1 pt-3 px-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {Array.from({ length: 8 }, (_, index) => (
+              <Card key={index}>
+                <CardHeader className="px-4 pb-1 pt-3">
                   <Skeleton className="h-3 w-20" />
                 </CardHeader>
                 <CardContent className="px-4 pb-3">
-                  <Skeleton className="h-6 w-16 mt-1" />
+                  <Skeleton className="mt-1 h-6 w-16" />
                 </CardContent>
               </Card>
             ))}
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-2 mb-2">
+            <div className="mb-2 flex items-center gap-2">
               <button
                 onClick={refreshStats}
                 disabled={statsLoading}
@@ -195,7 +184,7 @@ export function SyntheticDataPane() {
                 Refresh stats
               </button>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
               <StatCard label="Clips" value={stats.clip_count} />
               <StatCard label="Total frames" value={stats.total_frames} />
               <StatCard label="Avg frames/clip" value={stats.avg_frames_per_clip} />
@@ -224,21 +213,15 @@ export function SyntheticDataPane() {
         <ClipGallery
           clips={scan.clips}
           directory={scan.directory}
-          onClipClick={(clip, sessionId, clipInfo) =>
-            setInspectedClip({
-              filename: clip.filename,
-              sessionId,
-              clipInfo,
-            })
-          }
+          detailBasePath="/data/synthetic"
           onClipInspected={handleClipInspected}
         />
       ) : !scanError ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-          {Array.from({ length: 8 }, (_, i) => (
-            <div key={i} className="rounded-lg border bg-card overflow-hidden">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          {Array.from({ length: 8 }, (_, index) => (
+            <div key={index} className="overflow-hidden rounded-lg border bg-card">
               <Skeleton className="aspect-square w-full rounded-none" />
-              <div className="p-2 space-y-1">
+              <div className="space-y-1 p-2">
                 <Skeleton className="h-3 w-3/4" />
                 <Skeleton className="h-3 w-1/2" />
               </div>
@@ -246,16 +229,6 @@ export function SyntheticDataPane() {
           ))}
         </div>
       ) : null}
-
-      {inspectedClip && (
-        <ClipInspector
-          open={!!inspectedClip}
-          onClose={() => setInspectedClip(null)}
-          filename={inspectedClip.filename}
-          sessionId={inspectedClip.sessionId}
-          clipInfo={inspectedClip.clipInfo}
-        />
-      )}
     </div>
   );
 }
@@ -263,7 +236,7 @@ export function SyntheticDataPane() {
 function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
     <Card>
-      <CardHeader className="pb-1 pt-3 px-4">
+      <CardHeader className="px-4 pb-1 pt-3">
         <CardDescription className="text-xs">{label}</CardDescription>
       </CardHeader>
       <CardContent className="px-4 pb-3">
@@ -275,22 +248,25 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
 
 function ValidityStatCard({ valid, invalid }: { valid: number; invalid: number }) {
   const total = valid + invalid;
-  if (total === 0) return null;
+  if (total === 0) {
+    return null;
+  }
+
   const pct = Math.round((valid / total) * 100);
   return (
     <Card>
-      <CardHeader className="pb-1 pt-3 px-4">
+      <CardHeader className="px-4 pb-1 pt-3">
         <CardDescription className="text-xs">Clip validity</CardDescription>
       </CardHeader>
       <CardContent className="px-4 pb-3">
         <p className="text-xl font-bold">{pct}%</p>
-        <div className="mt-1 h-1.5 rounded-full bg-red-500/20 overflow-hidden">
+        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-red-500/20">
           <div
-            className="h-full bg-green-500 rounded-full transition-all"
+            className="h-full rounded-full bg-green-500 transition-all"
             style={{ width: `${pct}%` }}
           />
         </div>
-        <p className="text-xs text-muted-foreground mt-0.5">
+        <p className="mt-0.5 text-xs text-muted-foreground">
           {valid} valid / {invalid} invalid
         </p>
       </CardContent>
