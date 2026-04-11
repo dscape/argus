@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChessBoard } from "@/components/ChessBoard";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -244,7 +245,17 @@ function ClipReviewContent({
     [clipInfo.moves, selectedFrame]
   );
   const selectedMove = selectedMoveIndex >= 0 ? clipInfo.moves[selectedMoveIndex] : null;
-  const moveRows = useMemo(() => groupMoves(clipInfo.moves), [clipInfo.moves]);
+  const selectedEstimatedOtbTime = selectedMove?.estimated_otb_timestamp_seconds ?? null;
+  const selectedReplayFen = clipInfo.frame_replay_fens[selectedFrame] ?? null;
+  const displayedReplayFen = selectedMove?.fen_after ?? selectedReplayFen;
+  const previousMoveEntry = useMemo(
+    () => findPreviousMoveEntry(clipInfo.moves, selectedFrame),
+    [clipInfo.moves, selectedFrame]
+  );
+  const nextMoveEntry = useMemo(
+    () => findNextMoveEntry(clipInfo.moves, selectedFrame),
+    [clipInfo.moves, selectedFrame]
+  );
   const moveByFrame = useMemo(() => {
     const map = new Map<number, string>();
     clipInfo.moves.forEach((move, index) => {
@@ -257,6 +268,58 @@ function ClipReviewContent({
     [clipInfo.moves]
   );
   const annotationDirty = annotationText !== savedAnnotationText;
+
+  const goToPreviousMove = useCallback(() => {
+    if (previousMoveEntry) {
+      setSelectedFrame(previousMoveEntry.move.frame_index);
+    }
+  }, [previousMoveEntry]);
+
+  const goToNextMove = useCallback(() => {
+    if (nextMoveEntry) {
+      setSelectedFrame(nextMoveEntry.move.frame_index);
+    }
+  }, [nextMoveEntry]);
+
+  const stepForwardFrame = useCallback(() => {
+    setSelectedFrame((value) => Math.min(frameCount - 1, value + 1));
+  }, [frameCount]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target instanceof HTMLButtonElement ||
+        target instanceof HTMLVideoElement ||
+        target instanceof HTMLAnchorElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (event.key === "ArrowLeft") {
+        if (!previousMoveEntry) {
+          return;
+        }
+        event.preventDefault();
+        setSelectedFrame(previousMoveEntry.move.frame_index);
+      }
+
+      if (event.key === "ArrowRight") {
+        if (!nextMoveEntry) {
+          return;
+        }
+        event.preventDefault();
+        setSelectedFrame(nextMoveEntry.move.frame_index);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [nextMoveEntry, previousMoveEntry]);
 
   useEffect(() => {
     if (dataset === "real" && frameTime !== null) {
@@ -358,56 +421,70 @@ function ClipReviewContent({
   };
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-3">
-        <Link href={`/data/${dataset}`} className="text-sm underline underline-offset-4">
-          ← Back to {datasetLabel(dataset)} clips
-        </Link>
-        <div className="flex flex-wrap items-center gap-3">
-          <h3 className="text-2xl font-semibold tracking-tight">{filename}</h3>
-          <Badge variant="outline">{clipInfo.file_size_mb} MB</Badge>
-          <Badge variant={clipInfo.replay_valid ? "default" : "destructive"}>
-            {clipInfo.replay_valid ? "Replay valid" : "Replay invalid"}
-          </Badge>
-          <Badge variant="secondary">{frameCount} frames</Badge>
-          <Badge variant="secondary">{clipInfo.total_moves} moves</Badge>
-          {hasFirstFrameMove && <Badge variant="destructive">first frame is a move</Badge>}
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Review the synchronized footage, overlay, move timeline, source video, and frame strip before training.
-        </p>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-xl font-semibold tracking-tight">{filename}</h3>
+        <Badge variant="outline">{clipInfo.file_size_mb} MB</Badge>
+        <Badge variant={clipInfo.replay_valid ? "default" : "destructive"}>
+          {clipInfo.replay_valid ? "Replay valid" : "Replay invalid"}
+        </Badge>
+        <Badge variant="secondary">{frameCount} frames</Badge>
+        <Badge variant="secondary">{clipInfo.total_moves} moves</Badge>
+        {hasFirstFrameMove && <Badge variant="destructive">first frame is a move</Badge>}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(300px,380px)]">
-        <div className="space-y-4">
-          <section className="rounded-3xl border border-amber-500/20 bg-[#171411] p-4 text-stone-100 shadow-[0_20px_80px_rgba(0,0,0,0.35)]">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.62fr)_minmax(280px,340px)]">
+        <div className="space-y-3">
+          <section className="rounded-2xl border border-amber-500/20 bg-[#171411] p-3 text-stone-100 shadow-[0_20px_80px_rgba(0,0,0,0.35)]">
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
               <div>
-                <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-stone-400">
+                <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-stone-400">
                   Review console
                 </p>
-                <h4 className="text-xl font-semibold text-stone-50">
+                <h4 className="text-lg font-semibold text-stone-50">
                   Frame {selectedFrame + 1} / {frameCount}
                 </h4>
               </div>
-              <div className="flex flex-wrap items-center gap-2 text-sm text-stone-300">
-                <span>source f{sourceFrame}</span>
-                {frameTime !== null && <span>• {formatSeconds(frameTime)}</span>}
-                {selectedMove && (
-                  <Badge className="border-amber-400/50 bg-amber-500/20 text-amber-50 hover:bg-amber-500/20">
-                    {moveLabel(selectedMoveIndex, selectedMove)}
-                  </Badge>
-                )}
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <FrameNavButton
+                    label="← Previous move"
+                    disabled={!previousMoveEntry}
+                    onClick={goToPreviousMove}
+                  />
+                  <FrameNavButton
+                    label="Step"
+                    disabled={selectedFrame >= frameCount - 1}
+                    onClick={stepForwardFrame}
+                  />
+                  <FrameNavButton
+                    label="Next move →"
+                    disabled={!nextMoveEntry}
+                    onClick={goToNextMove}
+                  />
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-stone-300">
+                  <span>source frame {sourceFrame}</span>
+                  {frameTime !== null && <span>• train {formatSeconds(frameTime)}</span>}
+                  {selectedEstimatedOtbTime !== null && (
+                    <span>• est {formatSeconds(selectedEstimatedOtbTime)}</span>
+                  )}
+                  {selectedMove && (
+                    <Badge className="border-amber-400/50 bg-amber-500/20 text-amber-50 hover:bg-amber-500/20">
+                      {moveLabel(selectedMoveIndex, selectedMove)}
+                    </Badge>
+                  )}
+                </div>
               </div>
             </div>
 
             {hasFirstFrameMove && selectedFrame === 0 && (
-              <div className="mb-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+              <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-100">
                 The first sampled frame already contains a move. Use the source video player to scrub earlier than this timestamp and annotate whether the clip needs more pre-roll.
               </div>
             )}
 
-            <div className={`grid gap-4 ${canShowOverlay ? "lg:grid-cols-2" : "grid-cols-1"}`}>
+            <div className={`grid gap-3 ${canShowOverlay ? "lg:grid-cols-2" : "grid-cols-1"}`}>
               {canShowOverlay && (
                 <ReviewFramePanel
                   title="Overlay"
@@ -430,41 +507,53 @@ function ClipReviewContent({
             </div>
 
             {!canShowOverlay && dataset === "real" && (
-              <p className="mt-4 text-sm text-stone-400">
+              <p className="mt-3 text-xs text-stone-400">
                 Overlay preview is unavailable for this clip session.
               </p>
             )}
 
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <FrameNavButton
-                label="Previous"
-                disabled={selectedFrame <= 0}
-                onClick={() => setSelectedFrame((value) => Math.max(0, value - 1))}
-              />
-              <FrameNavButton
-                label="Next"
-                disabled={selectedFrame >= frameCount - 1}
-                onClick={() => setSelectedFrame((value) => Math.min(frameCount - 1, value + 1))}
-              />
-            </div>
+            {displayedReplayFen && (
+              <div className="mt-3 space-y-2 rounded-xl border border-stone-800 bg-black/20 p-3">
+                <div>
+                  <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-stone-400">
+                    Computed replay board
+                  </p>
+                  <p className="text-xs text-stone-300">
+                    {selectedMove
+                      ? "Showing the replay position after the selected move. The highlighted squares and arrow show what changed."
+                      : "Expected chessboard state at this sampled frame from the clip's initial FEN and replayed moves."}
+                  </p>
+                </div>
+                <ReplayBoardPanel
+                  title={selectedMove ? "After selected move" : "Replay state"}
+                  caption={selectedMove ? `${moveLabel(selectedMoveIndex, selectedMove)} played on ${selectedMove.uci}.` : "No move event is aligned to this frame."}
+                  fen={displayedReplayFen}
+                  moveUci={selectedMove?.uci ?? null}
+                  moveSan={selectedMove?.san ?? null}
+                  sideToMove={selectedMove?.side_to_move ?? null}
+                  trainingTimestampSeconds={selectedMove?.timestamp_seconds ?? frameTime}
+                  estimatedOtbTimestampSeconds={selectedMove?.estimated_otb_timestamp_seconds ?? null}
+                />
+              </div>
+            )}
 
-            <div className="mt-6 space-y-3 rounded-2xl border border-stone-800 bg-black/20 p-4">
+            <div className="mt-3 space-y-2 rounded-xl border border-stone-800 bg-black/20 p-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-stone-400">
+                  <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-stone-400">
                     Review notes
                   </p>
-                  <p className="text-sm text-stone-300">
+                  <p className="text-xs text-stone-300">
                     Save reviewer annotations under <code>{annotationPath ?? annotationFileLabel(filename)}</code>
                   </p>
                 </div>
-                <div className="flex items-center gap-2 text-xs text-stone-400">
+                <div className="flex items-center gap-2 text-[11px] text-stone-400">
                   {annotationSavedAt && <span>saved at {annotationSavedAt}</span>}
                   <button
                     type="button"
                     onClick={() => void handleSaveAnnotation()}
                     disabled={annotationLoading || annotationSaving || !annotationDirty}
-                    className="rounded-full border border-amber-500/40 bg-amber-500/15 px-3 py-1.5 font-medium text-amber-50 transition hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-full border border-amber-500/40 bg-amber-500/15 px-2.5 py-1 text-xs font-medium text-amber-50 transition hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {annotationSaving ? "Saving…" : annotationDirty ? "Save notes" : "Saved"}
                   </button>
@@ -473,25 +562,25 @@ function ClipReviewContent({
               <textarea
                 value={annotationText}
                 onChange={(event) => setAnnotationText(event.target.value)}
-                rows={5}
+                rows={4}
                 placeholder="Write review notes, suspicious moves, frame-zero issues, or fixes to make later."
-                className="min-h-[128px] w-full rounded-2xl border border-stone-700 bg-stone-950/60 px-4 py-3 text-sm text-stone-100 outline-none placeholder:text-stone-500 focus:border-amber-400/60"
+                className="min-h-[96px] w-full rounded-xl border border-stone-700 bg-stone-950/60 px-3 py-2 text-xs text-stone-100 outline-none placeholder:text-stone-500 focus:border-amber-400/60"
               />
-              {annotationError && <p className="text-sm text-red-300">{annotationError}</p>}
+              {annotationError && <p className="text-xs text-red-300">{annotationError}</p>}
             </div>
           </section>
 
-          <section className="rounded-3xl border bg-card p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
+          <section className="rounded-2xl border bg-card p-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
               <div>
-                <h4 className="text-base font-semibold">Frame strip</h4>
-                <p className="text-sm text-muted-foreground">
+                <h4 className="text-sm font-semibold">Frame strip</h4>
+                <p className="text-xs text-muted-foreground">
                   Small squares for quick visual validation and move alignment.
                 </p>
               </div>
-              <p className="text-xs text-muted-foreground">Click any frame to inspect it above</p>
+              <p className="text-[11px] text-muted-foreground">Click any frame to inspect it above</p>
             </div>
-            <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10">
+            <div className="grid grid-cols-5 gap-1.5 sm:grid-cols-7 lg:grid-cols-9 xl:grid-cols-12">
               {Array.from({ length: frameCount }, (_, frameIndex) => {
                 const isSelected = frameIndex === selectedFrame;
                 const moveText = moveByFrame.get(frameIndex);
@@ -501,7 +590,7 @@ function ClipReviewContent({
                     type="button"
                     onClick={() => setSelectedFrame(frameIndex)}
                     className={[
-                      "group overflow-hidden rounded-2xl border text-left transition-all",
+                      "group overflow-hidden rounded-xl border text-left transition-all",
                       isSelected
                         ? "border-amber-500 ring-2 ring-amber-500/25"
                         : "border-border hover:border-amber-500/50",
@@ -518,7 +607,7 @@ function ClipReviewContent({
                         {frameIndex}
                       </span>
                       {moveText && (
-                        <span className="absolute bottom-1 left-1 right-1 truncate rounded bg-amber-500/90 px-1.5 py-0.5 text-[10px] font-medium text-black">
+                        <span className="absolute bottom-1 left-1 right-1 truncate rounded bg-amber-500/90 px-1 py-0.5 text-[9px] font-medium text-black">
                           {moveText}
                         </span>
                       )}
@@ -530,20 +619,22 @@ function ClipReviewContent({
           </section>
         </div>
 
-        <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
-          <section className="rounded-3xl border border-stone-800 bg-[#171411] p-4 text-stone-100 shadow-[0_16px_60px_rgba(0,0,0,0.25)]">
-            <div className="mb-4">
-              <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-stone-400">
+        <div className="space-y-3 lg:sticky lg:top-4 lg:self-start">
+          <section className="rounded-2xl border border-stone-800 bg-[#171411] p-3 text-stone-100 shadow-[0_16px_60px_rgba(0,0,0,0.25)]">
+            <div className="mb-2">
+              <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-stone-400">
                 Move timeline
               </p>
-              <h4 className="text-lg font-semibold text-stone-50">Detected PGN</h4>
+              <h4 className="text-sm font-semibold text-stone-50">Detected move events</h4>
             </div>
             <MoveTimeline
               moves={clipInfo.moves}
               selectedMoveIndex={selectedMoveIndex}
-              moveRows={moveRows}
               onSelectMove={(frameIndex) => setSelectedFrame(frameIndex)}
             />
+            <p className="mt-2 text-[10px] text-stone-400">
+              Train = canonical post-move training label. Est = earlier OTB timing estimate.
+            </p>
           </section>
 
           {dataset === "real" && (
@@ -551,6 +642,7 @@ function ClipReviewContent({
               videoSrc={sourceVideoUrl}
               videoLoading={sourceVideoLoading}
               frameTime={frameTime}
+              estimatedOtbTime={selectedEstimatedOtbTime}
               selectedMove={selectedMove}
               hasFirstFrameMove={hasFirstFrameMove}
               setVideoRef={(node) => {
@@ -570,12 +662,17 @@ function ClipReviewContent({
             />
           )}
 
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-1">
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-1">
             <MetadataCard title="Clip summary">
               <MetadataRow label="Dataset" value={datasetLabel(dataset)} />
               <MetadataRow label="Source video" value={metadata.source_video_id} />
               <MetadataRow label="DB clip id" value={metadata.source_db_clip_id} />
               <MetadataRow label="Channel" value={metadata.source_channel_handle} />
+              <MetadataRow label="Timing mode" value={metadata.training_target_timing} />
+              <MetadataRow
+                label="Est. OTB delay"
+                value={formatMaybeSeconds(metadata.estimated_otb_delay_seconds)}
+              />
               <MetadataRow
                 label="Segment start"
                 value={formatMaybeSeconds(metadata.segment_start_time_seconds)}
@@ -642,12 +739,12 @@ function ReviewFramePanel({
   onError?: () => void;
 }) {
   return (
-    <div className="space-y-2">
+    <div className="space-y-1.5">
       <div>
-        <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-stone-400">{title}</p>
-        <p className="text-sm text-stone-300">{caption}</p>
+        <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-stone-400">{title}</p>
+        <p className="text-xs text-stone-300">{caption}</p>
       </div>
-      <div className="overflow-hidden rounded-3xl border border-stone-800 bg-black/40">
+      <div className="overflow-hidden rounded-2xl border border-stone-800 bg-black/40">
         <img
           src={imageUrl}
           alt={alt}
@@ -663,6 +760,7 @@ function SourceVideoCard({
   videoSrc,
   videoLoading,
   frameTime,
+  estimatedOtbTime,
   selectedMove,
   hasFirstFrameMove,
   setVideoRef,
@@ -681,6 +779,7 @@ function SourceVideoCard({
   videoSrc: string | null;
   videoLoading: boolean;
   frameTime: number | null;
+  estimatedOtbTime: number | null;
   selectedMove: DetectedMove | null;
   hasFirstFrameMove: boolean;
   setVideoRef: (node: HTMLVideoElement | null) => void;
@@ -697,31 +796,32 @@ function SourceVideoCard({
   onLoadedMetadata: () => void;
 }) {
   return (
-    <section className="rounded-3xl border bg-card p-4">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+    <section className="rounded-2xl border bg-card p-3">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-muted-foreground">
+          <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-muted-foreground">
             Source video
           </p>
-          <h4 className="text-base font-semibold">Inline playback</h4>
-          <p className="text-sm text-muted-foreground">
+          <h4 className="text-sm font-semibold">Inline playback</h4>
+          <p className="text-xs text-muted-foreground">
             Scrub before or after the sampled frame when you need more context.
           </p>
         </div>
         <div className="text-right text-xs text-muted-foreground">
-          {frameTime !== null && <p>target {formatSeconds(frameTime)}</p>}
+          {frameTime !== null && <p>train {formatSeconds(frameTime)}</p>}
+          {estimatedOtbTime !== null && <p>est {formatSeconds(estimatedOtbTime)}</p>}
           {videoCurrentTime !== null && <p>current {formatSeconds(videoCurrentTime)}</p>}
           {selectedMove && <p>{selectedMove.san || selectedMove.uci}</p>}
         </div>
       </div>
 
       {hasFirstFrameMove && (
-        <div className="mb-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-200">
+        <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-200">
           This clip starts with a move on frame 0. Jump backward in the source video to inspect the lead-in before deciding whether the clip needs regeneration.
         </div>
       )}
 
-      <div className="overflow-hidden rounded-2xl border bg-black">
+      <div className="overflow-hidden rounded-xl border bg-black">
         {videoSrc ? (
           <video
             ref={setVideoRef}
@@ -737,13 +837,13 @@ function SourceVideoCard({
             onLoadedMetadata={onLoadedMetadata}
           />
         ) : (
-          <div className="flex aspect-video items-center justify-center text-sm text-stone-300">
+          <div className="flex aspect-video items-center justify-center text-xs text-stone-300">
             {videoLoading ? "Preparing review video…" : "Source video unavailable."}
           </div>
         )}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="mt-2 flex flex-wrap items-center gap-2">
         <VideoControlButton label={videoPlaying ? "Pause" : "Play"} onClick={onTogglePlayback} />
         <VideoControlButton label="Sync to frame" onClick={onSync} />
         <VideoControlButton label="-1s" onClick={onJumpBack} />
@@ -767,7 +867,7 @@ function FrameNavButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded-full border border-stone-700 px-3 py-1.5 text-sm text-stone-100 transition hover:border-amber-400/60 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
+      className="rounded-full border border-stone-700 px-2.5 py-1 text-xs text-stone-100 transition hover:border-amber-400/60 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
     >
       {label}
     </button>
@@ -779,7 +879,7 @@ function VideoControlButton({ label, onClick }: { label: string; onClick: () => 
     <button
       type="button"
       onClick={onClick}
-      className="rounded-full border px-3 py-1.5 text-sm transition hover:border-foreground hover:text-foreground"
+      className="rounded-full border px-2.5 py-1 text-xs transition hover:border-foreground hover:text-foreground"
     >
       {label}
     </button>
@@ -789,12 +889,10 @@ function VideoControlButton({ label, onClick }: { label: string; onClick: () => 
 function MoveTimeline({
   moves,
   selectedMoveIndex,
-  moveRows,
   onSelectMove,
 }: {
   moves: DetectedMove[];
   selectedMoveIndex: number;
-  moveRows: Array<{ moveNumber: number; white?: MoveEntry; black?: MoveEntry }>;
   onSelectMove: (frameIndex: number) => void;
 }) {
   const activeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -804,94 +902,133 @@ function MoveTimeline({
   }, [selectedMoveIndex]);
 
   if (moves.length === 0) {
-    return <p className="text-sm text-stone-400">No moves stored in this clip.</p>;
+    return <p className="text-xs text-stone-400">No moves stored in this clip.</p>;
   }
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-stone-800">
-      {moveRows.map((row) => (
-        <div
-          key={row.moveNumber}
-          className="grid grid-cols-[56px_minmax(0,1fr)_minmax(0,1fr)] border-b border-stone-800/80 last:border-b-0"
-        >
-          <div className="flex items-center justify-center bg-white/[0.03] px-3 py-3 text-lg font-semibold text-stone-400">
-            {row.moveNumber}.
-          </div>
-          <MoveCell
-            entry={row.white}
-            selectedMoveIndex={selectedMoveIndex}
-            onSelectMove={onSelectMove}
-            setActiveButtonRef={(node) => {
-              activeButtonRef.current = node;
-            }}
-          />
-          <MoveCell
-            entry={row.black}
-            selectedMoveIndex={selectedMoveIndex}
-            onSelectMove={onSelectMove}
-            setActiveButtonRef={(node) => {
-              activeButtonRef.current = node;
-            }}
-          />
-        </div>
-      ))}
+    <div className="overflow-hidden rounded-xl border border-stone-800">
+      <div className="grid grid-cols-[32px_18px_minmax(0,1fr)_66px_40px_46px] gap-2 border-b border-stone-800 bg-white/[0.03] px-2 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-stone-400">
+        <span>#</span>
+        <span>S</span>
+        <span>Move</span>
+        <span>UCI</span>
+        <span>Frame</span>
+        <span>Train</span>
+      </div>
+      <div className="max-h-[520px] overflow-y-auto">
+        {moves.map((move, index) => {
+          const isSelected = index === selectedMoveIndex;
+          return (
+            <button
+              key={`${move.frame_index}-${move.uci}-${index}`}
+              ref={isSelected ? activeButtonRef : undefined}
+              type="button"
+              onClick={() => onSelectMove(move.frame_index)}
+              className={[
+                "grid h-8 w-full grid-cols-[32px_18px_minmax(0,1fr)_66px_40px_46px] items-center gap-2 border-b border-stone-800 px-2 text-left text-[11px] transition last:border-b-0",
+                isSelected
+                  ? "bg-amber-400/18 text-amber-50 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.18)]"
+                  : "bg-white/[0.02] text-stone-100 hover:bg-white/[0.04]",
+              ].join(" ")}
+            >
+              <span className="truncate text-stone-400">{index + 1}</span>
+              <span className="truncate text-stone-400">{move.side_to_move === "black" ? "B" : "W"}</span>
+              <span className="truncate font-medium">{move.san || move.uci}</span>
+              <span className="truncate font-mono text-[10px] text-stone-400">{move.uci}</span>
+              <span className="truncate text-stone-400">{move.frame_index}</span>
+              <span className="truncate text-stone-400">
+                {move.timestamp_seconds !== null ? formatSeconds(move.timestamp_seconds) : "-"}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-type MoveEntry = {
-  index: number;
-  move: DetectedMove;
-};
-
-function MoveCell({
-  entry,
-  selectedMoveIndex,
-  onSelectMove,
-  setActiveButtonRef,
+function ReplayBoardPanel({
+  title,
+  caption,
+  fen,
+  moveUci,
+  moveSan,
+  sideToMove,
+  trainingTimestampSeconds,
+  estimatedOtbTimestampSeconds,
 }: {
-  entry?: MoveEntry;
-  selectedMoveIndex: number;
-  onSelectMove: (frameIndex: number) => void;
-  setActiveButtonRef: (node: HTMLButtonElement | null) => void;
+  title: string;
+  caption: string;
+  fen: string;
+  moveUci: string | null;
+  moveSan: string | null;
+  sideToMove: "white" | "black" | null;
+  trainingTimestampSeconds: number | null;
+  estimatedOtbTimestampSeconds: number | null;
 }) {
-  if (!entry) {
-    return <div className="border-l border-stone-800/80 bg-transparent" />;
-  }
+  const highlightedSquares = moveUci ? [moveUci.slice(0, 2), moveUci.slice(2, 4)] : [];
+  const arrows = moveUci
+    ? [
+        {
+          from: moveUci.slice(0, 2),
+          to: moveUci.slice(2, 4),
+        },
+      ]
+    : [];
 
-  const isSelected = entry.index === selectedMoveIndex;
   return (
-    <button
-      ref={isSelected ? setActiveButtonRef : undefined}
-      type="button"
-      onClick={() => onSelectMove(entry.move.frame_index)}
-      className={[
-        "flex min-w-0 flex-col items-start gap-1 border-l border-stone-800/80 px-4 py-3 text-left transition",
-        isSelected
-          ? "bg-amber-400/22 text-amber-50 ring-1 ring-inset ring-amber-300/70 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.18)]"
-          : "bg-transparent text-stone-100 hover:bg-white/[0.04]",
-      ].join(" ")}
-    >
-      <span className="truncate text-xl font-semibold leading-none">
-        {entry.move.san || entry.move.uci}
-      </span>
-      <span className="text-xs text-stone-400">
-        f{entry.move.frame_index}
-        {entry.move.timestamp_seconds !== null
-          ? ` • ${formatSeconds(entry.move.timestamp_seconds)}`
-          : ""}
-      </span>
-    </button>
+    <div className="space-y-2 rounded-xl border border-stone-800 bg-black/30 p-3">
+      <div>
+        <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-stone-400">{title}</p>
+        <p className="text-xs text-stone-300">{caption}</p>
+      </div>
+      <div className="space-y-2">
+        <div className="w-fit overflow-hidden rounded-xl border border-stone-700 bg-white">
+          <ChessBoard fen={fen} size={196} highlightedSquares={highlightedSquares} arrows={arrows} />
+        </div>
+        <div className="min-w-0 space-y-1.5 text-[11px] text-stone-300">
+          {moveUci && (
+            <p>
+              <span className="font-medium text-stone-100">Highlighted move:</span> {moveSan ?? moveUci} ({moveUci})
+            </p>
+          )}
+          {sideToMove && (
+            <p>
+              <span className="font-medium text-stone-100">Played by:</span> {sideToMove}
+            </p>
+          )}
+          {trainingTimestampSeconds !== null && (
+            <p>
+              <span className="font-medium text-stone-100">Train time:</span> {formatSeconds(trainingTimestampSeconds)}
+            </p>
+          )}
+          {estimatedOtbTimestampSeconds !== null && (
+            <p>
+              <span className="font-medium text-stone-100">Est. OTB time:</span> {formatSeconds(estimatedOtbTimestampSeconds)}
+            </p>
+          )}
+          <p>
+            <span className="font-medium text-stone-100">Turn:</span> {turnLabelFromFen(fen)}
+          </p>
+          <p>
+            <span className="font-medium text-stone-100">Board FEN:</span>
+          </p>
+          <code className="block whitespace-pre-wrap break-words rounded-lg border border-stone-800 bg-stone-950/60 p-2 text-[10px] text-stone-200">
+            {fen}
+          </code>
+        </div>
+      </div>
+    </div>
   );
 }
 
 function MetadataCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <Card>
-      <CardHeader className="pb-2">
-        <CardDescription>{title}</CardDescription>
+      <CardHeader className="pb-1 pt-4">
+        <CardDescription className="text-[11px] uppercase tracking-[0.14em]">{title}</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-2">{children}</CardContent>
+      <CardContent className="space-y-1.5 pt-0">{children}</CardContent>
     </Card>
   );
 }
@@ -912,7 +1049,7 @@ function MetadataRow({
   }
 
   return (
-    <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-3 text-sm">
+    <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 text-[11px] leading-4">
       <span className="text-muted-foreground">{label}</span>
       <span
         className={[
@@ -952,22 +1089,36 @@ function ClipReviewSkeleton({ dataset, filename }: { dataset: DatasetKind; filen
   );
 }
 
-function groupMoves(moves: DetectedMove[]) {
-  const rows: Array<{ moveNumber: number; white?: MoveEntry; black?: MoveEntry }> = [];
-  for (let index = 0; index < moves.length; index += 2) {
-    rows.push({
-      moveNumber: Math.floor(index / 2) + 1,
-      white: { index, move: moves[index] },
-      black: moves[index + 1] ? { index: index + 1, move: moves[index + 1] } : undefined,
-    });
-  }
-  return rows;
+type MoveEntry = {
+  index: number;
+  move: DetectedMove;
+};
+
+function turnLabelFromFen(fen: string): string {
+  const parts = fen.split(" ");
+  return parts[1] === "b" ? "black to move" : "white to move";
 }
 
 function moveLabel(index: number, move: DetectedMove): string {
-  const moveNumber = Math.floor(index / 2) + 1;
-  const san = move.san || move.uci;
-  return index % 2 === 0 ? `${moveNumber}.${san}` : `${moveNumber}...${san}`;
+  return `#${index + 1} ${move.san || move.uci}`;
+}
+
+function findPreviousMoveEntry(moves: DetectedMove[], selectedFrame: number): MoveEntry | null {
+  for (let index = moves.length - 1; index >= 0; index -= 1) {
+    if (moves[index]!.frame_index < selectedFrame) {
+      return { index, move: moves[index]! };
+    }
+  }
+  return null;
+}
+
+function findNextMoveEntry(moves: DetectedMove[], selectedFrame: number): MoveEntry | null {
+  for (let index = 0; index < moves.length; index += 1) {
+    if (moves[index]!.frame_index > selectedFrame) {
+      return { index, move: moves[index]! };
+    }
+  }
+  return null;
 }
 
 function datasetLabel(dataset: DatasetKind): string {

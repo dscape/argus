@@ -1,4 +1,4 @@
-"""Tests for move synchronization (delay compensation) in overlay_clip_generator."""
+"""Tests for move-timing metadata in overlay_clip_generator."""
 
 import chess
 import numpy as np
@@ -46,7 +46,10 @@ except ImportError:
 
 
 class TestMoveDelaySynchronization:
-    """Test that move_delay_seconds shifts move timestamps backward."""
+    """Test that training targets stay on overlay-confirm frames.
+
+    Delay compensation is stored only as metadata.
+    """
 
     @pytest.fixture
     def generator(self, tmp_path):
@@ -54,7 +57,7 @@ class TestMoveDelaySynchronization:
 
     @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
     def test_zero_delay_no_shift(self, generator):
-        """With delay=0, move stays at its original frame."""
+        """With delay=0, training targets and estimated OTB timing match."""
         total = 30
         move_frame = 15
         segment = _make_segment_with_one_move(move_frame, total)
@@ -75,10 +78,12 @@ class TestMoveDelaySynchronization:
         move_at = (detect == 1.0).nonzero(as_tuple=True)[0].tolist()
         actual_frames = clip["frame_indices"][move_at].tolist()
         assert move_frame in actual_frames
+        assert clip["move_frame_indices"].tolist() == [move_frame]
+        assert clip["estimated_otb_frame_indices"].tolist() == [move_frame]
 
     @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
     def test_delay_shifts_backward(self, generator):
-        """With delay=2s at 30fps, move should shift backward by 60 frames."""
+        """Delay should only affect estimated OTB timing metadata, not training targets."""
         total = 100
         move_frame = 80
         segment = _make_segment_with_one_move(move_frame, total)
@@ -98,13 +103,14 @@ class TestMoveDelaySynchronization:
         detect = clip["detect_targets"]
         move_at = (detect == 1.0).nonzero(as_tuple=True)[0].tolist()
         actual_frames = clip["frame_indices"][move_at].tolist()
-        # Should be at frame 80 - 60 = 20
-        assert 20 in actual_frames
-        assert move_frame not in actual_frames
+        assert move_frame in actual_frames
+        assert clip["move_frame_indices"].tolist() == [move_frame]
+        # 2s at 30fps -> estimated OTB time is 60 frames earlier.
+        assert clip["estimated_otb_frame_indices"].tolist() == [20]
 
     @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
     def test_delay_clamps_to_start(self, generator):
-        """Delay should not produce negative frame indices — clamp to start."""
+        """Estimated OTB timing should clamp to the segment start, without moving targets."""
         total = 30
         move_frame = 5
         segment = _make_segment_with_one_move(move_frame, total)
@@ -124,12 +130,13 @@ class TestMoveDelaySynchronization:
         detect = clip["detect_targets"]
         move_at = (detect == 1.0).nonzero(as_tuple=True)[0].tolist()
         actual_frames = clip["frame_indices"][move_at].tolist()
-        # Should clamp to frame 0 (start_frame)
-        assert 0 in actual_frames
+        assert move_frame in actual_frames
+        assert clip["move_frame_indices"].tolist() == [move_frame]
+        assert clip["estimated_otb_frame_indices"].tolist() == [0]
 
     @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
     def test_frame_skip_affects_delay(self, generator):
-        """frame_skip should be accounted for in delay calculation."""
+        """frame_skip should still be accounted for in estimated OTB timing metadata."""
         total_actual_frames = 750
         move_frame = 600
         segment = _make_segment_with_one_move(move_frame, total_actual_frames)
@@ -150,4 +157,6 @@ class TestMoveDelaySynchronization:
         detect = clip["detect_targets"]
         move_at = (detect == 1.0).nonzero(as_tuple=True)[0].tolist()
         actual_frames = clip["frame_indices"][move_at].tolist()
-        assert 540 in actual_frames
+        assert move_frame in actual_frames
+        assert clip["move_frame_indices"].tolist() == [move_frame]
+        assert clip["estimated_otb_frame_indices"].tolist() == [540]

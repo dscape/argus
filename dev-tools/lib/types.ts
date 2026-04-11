@@ -48,6 +48,11 @@ export interface DetectedMove {
   san: string | null;
   detect_value: number | null;
   timestamp_seconds: number | null;
+  estimated_otb_frame_index: number | null;
+  estimated_otb_timestamp_seconds: number | null;
+  side_to_move: "white" | "black" | null;
+  fen_before: string | null;
+  fen_after: string | null;
 }
 
 export interface ClipInspectResponse {
@@ -57,6 +62,7 @@ export interface ClipInspectResponse {
   frame_indices: number[];
   frame_timestamps_seconds: number[];
   pixel_range: [number, number];
+  frame_replay_fens: Array<string | null>;
   moves: DetectedMove[];
   total_moves: number;
   no_move_frames: number;

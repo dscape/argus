@@ -40,6 +40,7 @@ class LayoutCalibration:
     board_flipped: bool = False
     board_theme: str = "lichess_default"
     move_delay_seconds: float = 2.0  # Broadcast delay: OTB move happens before overlay updates
+    # Used for estimated OTB timing metadata; training labels stay on overlay-confirm frames.
 
     def scale_to_resolution(self, width: int, height: int) -> "LayoutCalibration":
         """Return a new calibration scaled to a different resolution."""

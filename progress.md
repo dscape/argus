@@ -417,10 +417,31 @@
 - Added a shared clip-review page component in:
   - `dev-tools/components/data/ClipReviewPage.tsx`
 - Review page changes:
-  - move list is now shown as a chess-style **timeline** instead of an unstructured badge dump
+  - move list is now shown as a review-oriented **move event timeline** instead of an unstructured badge dump
+  - timeline entries now use local clip event labels (`#1`, `#2`, …) instead of fake whole-game move numbers like `1.` / `1...`
+  - each move event now shows both SAN (e.g. `dxc5`) and UCI (e.g. `d4c5`) so notation is easier to audit
+  - frame labels now say `frame N` instead of terse `fN`
+  - after the timing-label decision, the review page now surfaces both:
+    - `train` = canonical post-move training label time/frame
+    - `est` = earlier OTB timing estimate derived from the old fixed delay
+  - review-page density was increased for faster clip auditing:
+    - removed the redundant back-link row from the loaded clip page
+    - removed the redundant “Review the synchronized footage…” intro copy
+    - tightened paddings, headings, notes, frame-strip spacing, and sidebar cards
+    - converted the move timeline into a compact table-like list with ~`32px` rows and scrollable overflow so many moves stay visible at once
+  - top-of-console navigation now prioritizes move review rather than raw frame stepping:
+    - `Previous move` / `Next move` jump across detected move events
+    - `Step` advances one frame forward for fine-grained inspection between moves
+    - left/right keyboard arrows also jump across previous/next move events
   - the selected frame shows large synchronized panels for:
     - overlay crop from the source video (real clips only)
     - stored clip frame / real camera crop
+  - review console now also shows a computed replay chessboard derived from `initial_board_fen` + replayed moves
+    - for exact move frames it now shows only the **post-move** replay position
+    - the board uses chess.com-style move visualization with highlighted origin/destination squares plus an arrow from source to destination
+    - replay details now include both train time and estimated OTB time when available
+    - full replay FEN is visible inline so training-state interpretation is explicit
+  - removed the temporary notation explainer panel from the move timeline after the notation cleanup landed
   - frame-strip thumbnails remain available as small squares for quick visual scanning
   - clip metadata and tensor payload stay visible on the same page
   - tuned the layout so the timeline + synchronized footage stay side-by-side on typical desktop widths instead of dropping the timeline below the fold
@@ -429,17 +450,52 @@
   - added inline reviewer notes saved to `data/clip_annotations/<clip>.txt`
   - added an inline source-video review player with sync / play-pause / ±1s controls
 - Clip-generation follow-up tied to review findings:
-  - `pipeline/overlay/overlay_clip_generator.py` now preserves one sampled **pre-move** frame when the first move would otherwise land on clip frame `0` after delay compensation
+  - `pipeline/overlay/overlay_clip_generator.py` now preserves one sampled **pre-move** frame when the first move would otherwise land on clip frame `0`
   - added regression coverage in `tests/pipeline/test_overlay_clip_generator.py` for both:
     - raw first-move-at-start segments
-    - delay-compensated first-move-at-start segments
+    - clips that still carry estimated OTB delay metadata
   - regenerated `2wWUKmCBr6A` clips after the fix:
-    - `clip_overlay_2wWUKmCBr6A_clip5_1.pt` now starts with a non-move lead-in frame
-    - first detected move `dxc5` moved from clip frame `0` to clip frame `1`
-    - clip length increased from `359` to `360` frames
+    - `clip_overlay_2wWUKmCBr6A_clip5_1.pt` now starts with a non-move lead-in frame before the first labeled move
+- Oracle-guided timing-label decision for training:
+  - used the `oracle` skill to review the timing semantics across:
+    - `pipeline/overlay/overlay_clip_generator.py`
+    - `pipeline/overlay/calibration.py`
+    - `src/argus/datagen/synth.py`
+    - `tests/pipeline/test_move_sync.py`
+    - `tests/pipeline/test_overlay_clip_generator.py`
+    - `src/argus/model/losses.py`
+    - `src/argus/eval/metrics.py`
+  - conclusion adopted on this branch:
+    - `detect_targets` / `move_targets` should mean **the sampled frame already shows the post-move board state**
+    - real clips should therefore use the raw **overlay-confirm** frame for training supervision, matching synthetic clips
+    - the old fixed backward shift (`move_delay_seconds`) was hurting label quality by moving supervision onto pre-move / in-motion camera frames
+  - implementation:
+    - real clip training targets now stay on the raw overlay-confirm frame indices/timestamps
+    - backward-shifted OTB estimates are still preserved, but only as metadata:
+      - `estimated_otb_frame_indices`
+      - `estimated_otb_timestamps_seconds`
+    - `move_frame_indices` / `move_timestamps_seconds` are now the canonical training-aligned post-move times
+  - regression coverage updated:
+    - `tests/pipeline/test_move_sync.py` now verifies delay affects only estimated metadata, not training targets
+    - `tests/pipeline/test_overlay_clip_generator.py` now verifies canonical vs estimated timing are stored separately
+  - regenerated and spot-checked real clips:
+    - `clip_overlay_2wWUKmCBr6A_clip5_1.pt`
+      - first labeled move moved later from `29.0s` to `30.5s`
+      - canonical first move frame index now `915`; estimated OTB metadata still records `870`
+      - browser route now opens on `Frame 4 / 359`, and the selected move visually matches a post-move board state much better
+      - review UI now explicitly shows `train 30.5s` and `est 29.0s`
+    - `clip_overlay_EEZo0uDh4AY_clip9_5.pt`
+      - first labeled move moved later from `450.5s` to `452.5s`
+      - canonical first move frame index now `13575`; estimated OTB metadata still records `13515`
+      - browser route now opens on `Frame 17 / 99`, again matching a post-move board snapshot more closely than before
+      - review UI now explicitly shows `train 452.5s` and `est 450.5s`
 - Backend/API support added for richer review:
   - `dev-tools/api/services/data/clip_service.py`
     - now returns `frame_indices`, `frame_timestamps_seconds`, and per-move `timestamp_seconds`
+    - now returns per-frame replay FEN plus per-move `fen_before` / `fen_after` / `side_to_move` data for the review UI
+    - after the timing-label fix it also returns per-move estimated OTB timing metadata:
+      - `estimated_otb_frame_index`
+      - `estimated_otb_timestamp_seconds`
     - now supports overlay preview extraction from the original source video for DB-backed real clips
     - now persists clip-review annotations under `data/clip_annotations/`
     - now prepares a browser-friendly review video path for real clip playback
@@ -452,6 +508,8 @@
     - added source-video + annotation helpers for the review page
 - Added regression coverage in `tests/dev_tools/test_clip_service.py` for:
   - frame/timestamp inspection payloads
+  - replay-FEN / move-state inspection payloads
+  - estimated OTB timing metadata in clip inspection payloads
   - overlay-frame extraction from source video + DB clip metadata
   - annotation save/load path behavior
 - Browser validation:
@@ -461,9 +519,16 @@
     - move timeline selection updates the reviewed frame
   - `http://localhost:3000/data/real/clip_overlay_2wWUKmCBr6A_clip5_1.pt`
     - active move is visibly highlighted in the timeline
+    - move list now shows `#n`, SAN, UCI, color-to-move, and explicit `frame N` labels
+    - `Previous move` / `Next move` now navigate across move events; `Step` advances one frame at a time between them
+    - browser spot-check confirmed `Next move`, `Previous move`, and left/right keyboard arrows all jump across move events, while `Step` increments the frame counter by one
+    - browser spot-check also confirmed the back-link row and redundant intro sentence are gone from the loaded clip page
+    - compact move timeline renders as a dense scrollable table with `32px` row height, allowing many more moves on screen at once
+    - timeline / console / source-video panel now explicitly distinguish `train` vs `est` move times
+    - review console now shows a computed replay board for the selected move's post-move state with highlighted squares and an arrow overlay
     - reviewer notes save to `data/clip_annotations/clip_overlay_2wWUKmCBr6A_clip5_1.txt`
-    - after regeneration, the route now opens on `Frame 2 / 360`, confirming the clip no longer starts directly on the first move
-    - saved note now reflects the fix: one non-move pre-roll frame was added before `dxc5`
+    - after the timing-label fix, the route now opens on `Frame 4 / 359` with the first move at `30.5s` instead of `29.0s`, keeping supervision on a post-move board frame
+    - saved note now reflects the new semantics: training labels stay on overlay-confirm/post-move frames and earlier OTB timing is metadata only
     - source-video review endpoint now serves a browser-friendly MP4 with range support (`HEAD 200`, `206 Partial Content`, ffprobe-confirmed H.264)
   - `http://localhost:3000/data/synthetic/clip_000000.pt`
     - route loads successfully with timeline + frame strip

@@ -31,8 +31,12 @@ def _make_midgame_clip_bytes() -> bytes:
         "frame_indices": torch.tensor([120, 135, 150, 165], dtype=torch.long),
         "frame_timestamps_seconds": torch.tensor([4.0, 4.5, 5.0, 5.5], dtype=torch.float32),
         "move_timestamps_seconds": torch.tensor([5.0], dtype=torch.float32),
+        "estimated_otb_frame_indices": torch.tensor([135], dtype=torch.long),
+        "estimated_otb_timestamps_seconds": torch.tensor([4.5], dtype=torch.float32),
         "initial_board_fen": board.board_fen(),
         "pgn_moves": "Bg2",
+        "training_target_timing": "overlay_confirm_post_move",
+        "estimated_otb_delay_seconds": 0.5,
     }
 
     buffer = io.BytesIO()
@@ -52,9 +56,22 @@ def test_inspect_replays_from_initial_board_fen_for_midgame_clip() -> None:
     assert result["moves"][0]["uci"] == "f1g2"
     assert result["moves"][0]["san"] == "Bg2"
     assert result["moves"][0]["timestamp_seconds"] == 5.0
+    assert result["moves"][0]["estimated_otb_frame_index"] == 135
+    assert result["moves"][0]["estimated_otb_timestamp_seconds"] == 4.5
+    assert result["moves"][0]["side_to_move"] == "white"
+    assert result["moves"][0]["fen_before"] is not None
+    assert result["moves"][0]["fen_after"] is not None
     assert result["frame_indices"] == [120, 135, 150, 165]
     assert result["frame_timestamps_seconds"] == [4.0, 4.5, 5.0, 5.5]
+    assert result["frame_replay_fens"] == [
+        "rnbqkbnr/pp1p1ppp/2p1p3/8/4P3/3P2P1/PPP2P1P/RNBQKBNR w KQkq - 0 1",
+        "rnbqkbnr/pp1p1ppp/2p1p3/8/4P3/3P2P1/PPP2P1P/RNBQKBNR w KQkq - 0 1",
+        "rnbqkbnr/pp1p1ppp/2p1p3/8/4P3/3P2P1/PPP2P1P/RNBQKBNR w KQkq - 0 1",
+        "rnbqkbnr/pp1p1ppp/2p1p3/8/4P3/3P2P1/PPP2PBP/RNBQK1NR b KQkq - 1 1",
+    ]
     assert result["metadata"]["initial_board_fen"] == EXPECTED_INITIAL_BOARD_FEN
+    assert result["metadata"]["training_target_timing"] == "overlay_confirm_post_move"
+    assert result["metadata"]["estimated_otb_delay_seconds"] == 0.5
 
 
 def test_get_overlay_frame_png_uses_source_video_and_db_clip(monkeypatch, tmp_path) -> None:

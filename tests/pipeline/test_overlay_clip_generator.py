@@ -162,6 +162,8 @@ class TestBuildTrainingClip:
         assert clip["move_ucis"] == ITALIAN_GAME
         assert clip["move_sans"] == [move.move_san for move in segment.moves]
         assert clip["num_moves"] == len(ITALIAN_GAME)
+        assert clip["training_target_timing"] == "overlay_confirm_post_move"
+        assert clip["estimated_otb_delay_seconds"] == 0.0
         assert torch.equal(clip["frame_indices"], torch.tensor(frame_indices, dtype=torch.long))
         assert torch.allclose(
             clip["frame_timestamps_seconds"],
@@ -382,7 +384,7 @@ class TestBuildTrainingClip:
         assert move_frames.tolist()[0] == 1
 
     @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
-    def test_build_training_clip_keeps_pre_move_frame_after_delay_compensation(self, generator):
+    def test_build_training_clip_keeps_pre_move_frame_when_delay_metadata_exists(self, generator):
         segment, frame_indices = _make_game_segment(["e2e4", "e7e5"], frames_per_move=3)
         segment.start_frame = frame_indices[2]
         camera_crops = _make_camera_crops(len(frame_indices))
@@ -397,10 +399,11 @@ class TestBuildTrainingClip:
         )
 
         assert clip is not None
-        assert clip["frame_indices"][0].item() == frame_indices[1]
+        assert clip["frame_indices"][0].item() == frame_indices[2]
         move_frames = (clip["detect_targets"] == 1.0).nonzero(as_tuple=True)[0]
         assert move_frames.tolist()[0] == 1
-        assert clip["move_frame_indices"][0].item() == frame_indices[2]
+        assert clip["move_frame_indices"][0].item() == frame_indices[3]
+        assert clip["estimated_otb_frame_indices"][0].item() == frame_indices[2]
 
     def test_short_segment_skipped(self, generator):
         """Segments with < 5 frames should return None."""
@@ -445,7 +448,7 @@ class TestBuildTrainingClip:
 
         assert clip is None
 
-    def test_clip_delay_metadata_matches_shifted_move_frames(self, generator):
+    def test_clip_stores_estimated_otb_timing_separately_from_targets(self, generator):
         segment, frame_indices = _make_game_segment(["e2e4", "e7e5"], frames_per_move=4)
         frame_indices = [frame_idx * 2 for frame_idx in frame_indices]
         for move in segment.moves:
@@ -466,10 +469,18 @@ class TestBuildTrainingClip:
         assert clip is not None
         assert torch.equal(
             clip["move_frame_indices"],
-            torch.tensor([0, 8], dtype=torch.long),
+            torch.tensor([8, 16], dtype=torch.long),
         )
         assert torch.allclose(
             clip["move_timestamps_seconds"],
+            torch.tensor([1.0, 2.0], dtype=torch.float32),
+        )
+        assert torch.equal(
+            clip["estimated_otb_frame_indices"],
+            torch.tensor([0, 8], dtype=torch.long),
+        )
+        assert torch.allclose(
+            clip["estimated_otb_timestamps_seconds"],
             torch.tensor([0.0, 1.0], dtype=torch.float32),
         )
 

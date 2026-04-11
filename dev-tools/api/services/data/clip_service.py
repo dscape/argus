@@ -347,6 +347,10 @@ def inspect(session_id: str) -> dict[str, Any]:
         frame_timestamps_seconds = []
 
     move_timestamps_seconds = _tensor_float_list(clip.get("move_timestamps_seconds"))
+    estimated_otb_frame_indices = _tensor_int_list(clip.get("estimated_otb_frame_indices"))
+    estimated_otb_timestamps_seconds = _tensor_float_list(
+        clip.get("estimated_otb_timestamps_seconds")
+    )
 
     moves = []
     total_moves = 0
@@ -355,6 +359,7 @@ def inspect(session_id: str) -> dict[str, Any]:
     replay_valid = False
     replay_error = None
     final_fen = None
+    frame_replay_fens: list[str | None] = []
 
     if "move_targets" in clip:
         move_targets = clip["move_targets"]
@@ -376,6 +381,14 @@ def inspect(session_id: str) -> dict[str, Any]:
                 timestamp_seconds = None
                 if move_event_index < len(move_timestamps_seconds):
                     timestamp_seconds = move_timestamps_seconds[move_event_index]
+                estimated_otb_frame_index = None
+                if move_event_index < len(estimated_otb_frame_indices):
+                    estimated_otb_frame_index = estimated_otb_frame_indices[move_event_index]
+                estimated_otb_timestamp_seconds_value = None
+                if move_event_index < len(estimated_otb_timestamps_seconds):
+                    estimated_otb_timestamp_seconds_value = estimated_otb_timestamps_seconds[
+                        move_event_index
+                    ]
                 moves.append(
                     {
                         "frame_index": frame_index,
@@ -383,6 +396,11 @@ def inspect(session_id: str) -> dict[str, Any]:
                         "san": None,
                         "detect_value": detect,
                         "timestamp_seconds": timestamp_seconds,
+                        "estimated_otb_frame_index": estimated_otb_frame_index,
+                        "estimated_otb_timestamp_seconds": estimated_otb_timestamp_seconds_value,
+                        "side_to_move": None,
+                        "fen_before": None,
+                        "fen_after": None,
                     }
                 )
                 move_event_index += 1
@@ -399,25 +417,38 @@ def inspect(session_id: str) -> dict[str, Any]:
                 else:
                     board = chess.Board()
             replay_valid = True
-            for i, move_data in enumerate(moves):
-                try:
-                    move = chess.Move.from_uci(move_data["uci"])
-                    if move not in board.legal_moves:
+            frame_replay_fens = [None] * total_frames
+            move_cursor = 0
+            for frame_index in range(total_frames):
+                frame_replay_fens[frame_index] = board.fen()
+                while move_cursor < len(moves) and moves[move_cursor]["frame_index"] == frame_index:
+                    move_data = moves[move_cursor]
+                    try:
+                        move = chess.Move.from_uci(move_data["uci"])
+                        if move not in board.legal_moves:
+                            replay_valid = False
+                            replay_error = (
+                                f"Illegal at ply {move_cursor}: {move_data['uci']} "
+                                f"(frame {move_data['frame_index']})"
+                            )
+                            break
+                        move_data["side_to_move"] = "white" if board.turn == chess.WHITE else "black"
+                        move_data["fen_before"] = board.fen()
+                        move_data["san"] = board.san(move)
+                        board.push(move)
+                        move_data["fen_after"] = board.fen()
+                    except ValueError:
                         replay_valid = False
-                        replay_error = (
-                            f"Illegal at ply {i}: {move_data['uci']} "
-                            f"(frame {move_data['frame_index']})"
-                        )
+                        replay_error = f"Invalid UCI at ply {move_cursor}: {move_data['uci']}"
                         break
-                    move_data["san"] = board.san(move)
-                    board.push(move)
-                except ValueError:
-                    replay_valid = False
-                    replay_error = f"Invalid UCI at ply {i}: {move_data['uci']}"
+                    move_cursor += 1
+                if not replay_valid:
                     break
 
             if replay_valid:
                 final_fen = board.board_fen()
+            else:
+                frame_replay_fens = []
 
     avg_legal = None
     if "legal_masks" in clip:
@@ -431,6 +462,7 @@ def inspect(session_id: str) -> dict[str, Any]:
         "pgn_moves",
         "source_video_id",
         "source_channel_handle",
+        "training_target_timing",
     ]:
         value = clip.get(key)
         if isinstance(value, (str, bool, int, float)) or value is None:
@@ -440,6 +472,7 @@ def inspect(session_id: str) -> dict[str, Any]:
         "segment_end_time_seconds",
         "sampled_video_fps",
         "num_moves",
+        "estimated_otb_delay_seconds",
     ]:
         value = clip.get(key)
         if isinstance(value, (bool, int, float)) or value is None:
@@ -457,6 +490,7 @@ def inspect(session_id: str) -> dict[str, Any]:
         "frame_indices": frame_indices,
         "frame_timestamps_seconds": frame_timestamps_seconds,
         "pixel_range": pixel_range,
+        "frame_replay_fens": frame_replay_fens,
         "moves": moves,
         "total_moves": total_moves,
         "no_move_frames": no_move_count,

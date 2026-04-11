@@ -325,9 +325,11 @@ class OverlayClipGenerator:
             segment: Detected game segment with moves.
             fps: Video FPS.
             frame_skip: Frames skipped between samples (for delay calculation).
-            move_delay_seconds: Broadcast delay — shift move timestamps backward
-                by this many seconds to align with the OTB camera moment the
-                move was actually played (overlay updates after OTB).
+            move_delay_seconds: Broadcast delay between the physical board and
+                the overlay update. This is stored as estimated OTB timing
+                metadata only; training targets stay anchored to the raw
+                overlay-confirm frame so labels match the visible post-move
+                board state.
 
         Returns:
             Dict with frames, move_targets, detect_targets, legal_masks, move_mask.
@@ -350,14 +352,13 @@ class OverlayClipGenerator:
         delay_frame_offset = delay_sample_steps * frame_skip
 
         # Preserve at least one pre-move sampled frame when available so the
-        # first clip frame is not already the first detected move after any
-        # broadcast-delay compensation.
+        # first clip frame is not already the first detected move. Training
+        # targets use the raw overlay-confirm frame because that is the first
+        # frame guaranteed to show the post-move board state, matching the
+        # synthetic-data semantics.
         if segment.moves:
-            first_effective_move_frame = max(
-                segment.moves[0].frame_idx - delay_frame_offset,
-                segment.start_frame,
-            )
-            if frame_indices[start_idx] == first_effective_move_frame and start_idx > 0:
+            first_move_frame = segment.moves[0].frame_idx
+            if frame_indices[start_idx] == first_move_frame and start_idx > 0:
                 start_idx -= 1
 
         segment_cameras = camera_crops[start_idx : end_idx + 1]
@@ -382,11 +383,16 @@ class OverlayClipGenerator:
             dtype=torch.float32,
         )
 
-        adjusted_move_frames = [
+        canonical_move_frames = [move.frame_idx for move in segment.moves]
+        move_timestamps = torch.tensor(
+            [frame_idx / fps for frame_idx in canonical_move_frames],
+            dtype=torch.float32,
+        )
+        estimated_otb_move_frames = [
             max(move.frame_idx - delay_frame_offset, segment.start_frame) for move in segment.moves
         ]
-        move_timestamps = torch.tensor(
-            [frame_idx / fps for frame_idx in adjusted_move_frames],
+        estimated_otb_move_timestamps = torch.tensor(
+            [frame_idx / fps for frame_idx in estimated_otb_move_frames],
             dtype=torch.float32,
         )
         initial_board_fen = (
@@ -403,10 +409,17 @@ class OverlayClipGenerator:
             "move_sans": [move.move_san for move in segment.moves],
             "frame_indices": torch.tensor(segment_frame_indices, dtype=torch.long),
             "frame_timestamps_seconds": frame_timestamps,
-            "move_frame_indices": torch.tensor(adjusted_move_frames, dtype=torch.long),
+            "move_frame_indices": torch.tensor(canonical_move_frames, dtype=torch.long),
             "move_timestamps_seconds": move_timestamps,
+            "estimated_otb_frame_indices": torch.tensor(
+                estimated_otb_move_frames,
+                dtype=torch.long,
+            ),
+            "estimated_otb_timestamps_seconds": estimated_otb_move_timestamps,
             "segment_start_time_seconds": float(segment.start_time),
             "segment_end_time_seconds": float(segment.end_time),
+            "training_target_timing": "overlay_confirm_post_move",
+            "estimated_otb_delay_seconds": float(move_delay_seconds),
         }
 
         if VOCAB is None:
@@ -428,8 +441,8 @@ class OverlayClipGenerator:
 
         # Build a map from frame index to move.
         move_frame_map = {}
-        for adjusted_idx, move in zip(adjusted_move_frames, segment.moves):
-            move_frame_map[adjusted_idx] = move
+        for canonical_idx, move in zip(canonical_move_frames, segment.moves):
+            move_frame_map[canonical_idx] = move
 
         # Replay the game to generate legal masks
         board = initial_board.copy(stack=False)
