@@ -22,6 +22,72 @@ BOARD_THEMES: dict[str, dict[str, str]] = {
     "chess_com_brown": {"light": "#F0D9B5", "dark": "#B58863"},
 }
 
+_PLACEHOLDER_BBOX = (0, 0, 100, 100)
+_MAX_CAMERA_BBOX_AREA_RATIO = 0.25
+
+
+def _normalize_bbox(bbox: tuple[int, int, int, int] | list[int]) -> tuple[int, int, int, int]:
+    return tuple(int(v) for v in bbox)
+
+
+def is_placeholder_bbox(bbox: tuple[int, int, int, int] | list[int]) -> bool:
+    return _normalize_bbox(bbox) == _PLACEHOLDER_BBOX
+
+
+def bbox_area_ratio(
+    bbox: tuple[int, int, int, int] | list[int],
+    ref_resolution: tuple[int, int] | list[int],
+) -> float:
+    _, _, width, height = _normalize_bbox(bbox)
+    ref_width, ref_height = (int(v) for v in ref_resolution)
+    if ref_width <= 0 or ref_height <= 0:
+        return 0.0
+    return (width * height) / (ref_width * ref_height)
+
+
+def is_bbox_within_frame(
+    bbox: tuple[int, int, int, int] | list[int],
+    ref_resolution: tuple[int, int] | list[int],
+) -> bool:
+    x, y, width, height = _normalize_bbox(bbox)
+    ref_width, ref_height = (int(v) for v in ref_resolution)
+    if width <= 0 or height <= 0 or ref_width <= 0 or ref_height <= 0:
+        return False
+    if x < 0 or y < 0:
+        return False
+    return x + width <= ref_width and y + height <= ref_height
+
+
+def is_overlay_bbox_usable(
+    bbox: tuple[int, int, int, int] | list[int],
+    ref_resolution: tuple[int, int] | list[int],
+) -> bool:
+    return not is_placeholder_bbox(bbox) and is_bbox_within_frame(bbox, ref_resolution)
+
+
+def is_camera_bbox_usable(
+    bbox: tuple[int, int, int, int] | list[int],
+    ref_resolution: tuple[int, int] | list[int],
+    *,
+    max_area_ratio: float = _MAX_CAMERA_BBOX_AREA_RATIO,
+) -> bool:
+    if is_placeholder_bbox(bbox):
+        return False
+    if not is_bbox_within_frame(bbox, ref_resolution):
+        return False
+    return bbox_area_ratio(bbox, ref_resolution) <= max_area_ratio
+
+
+def calibration_has_usable_camera_crop(calibration: "LayoutCalibration") -> bool:
+    return is_camera_bbox_usable(calibration.camera, calibration.ref_resolution)
+
+
+def calibration_is_usable(calibration: "LayoutCalibration") -> bool:
+    return is_overlay_bbox_usable(
+        calibration.overlay,
+        calibration.ref_resolution,
+    ) and calibration_has_usable_camera_crop(calibration)
+
 
 def hex_to_bgr(hex_color: str) -> tuple[int, int, int]:
     """Convert hex color string to BGR tuple."""

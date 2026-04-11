@@ -1,9 +1,12 @@
 """Tests for pipeline.overlay.overlay_clip_generator."""
 
+from types import SimpleNamespace
+
 import chess
 import numpy as np
 import pytest
 import torch
+from pipeline.overlay.auto_calibration import CalibrationProposal
 from pipeline.overlay.calibration import LayoutCalibration
 from pipeline.overlay.overlay_clip_generator import (
     ClipGenerationDiagnostics,
@@ -543,6 +546,19 @@ class TestGenerateFromVideo:
                 board_theme="lichess_default",
             ),
         )
+        monkeypatch.setattr(
+            mod,
+            "propose_calibration",
+            lambda video_id: CalibrationProposal(
+                overlay=(10, 20, 300, 300),
+                camera=(1200, 700, 400, 220),
+                ref_resolution=(1920, 1080),
+                board_flipped=False,
+                board_theme="lichess_default",
+                theme_confidence=0.9,
+                orientation_confidence=0.9,
+            ),
+        )
 
         calls = []
 
@@ -557,7 +573,7 @@ class TestGenerateFromVideo:
             save_clips=True,
             diagnostics=None,
         ):
-            calls.append((video_path, video_id, channel_handle, save_clips))
+            calls.append((video_path, video_id, channel_handle, save_clips, calibration.camera))
             assert diagnostics is not None
             diagnostics.sampled_frame_count = 12
             diagnostics.readable_fen_count = 12
@@ -583,8 +599,139 @@ class TestGenerateFromVideo:
                 "num_frames": 42,
             }
         ]
-        assert calls == [("/tmp/demo123.mp4", "demo123", "@demo", False)]
+        assert calls == [("/tmp/demo123.mp4", "demo123", "@demo", False, (1200, 700, 400, 220))]
         assert len(diagnostics) == 1
         assert diagnostics[0].clip_label == "demo123"
         assert diagnostics[0].sampled_frame_count == 12
         assert diagnostics[0].saved_clip_move_counts == [6]
+
+    def test_db_clip_with_placeholder_camera_uses_auto_calibration(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        import pipeline.overlay.overlay_clip_generator as mod
+
+        monkeypatch.setattr(
+            mod,
+            "_get_db_clips",
+            lambda video_id: [
+                {
+                    "id": 19,
+                    "start_time": 30.0,
+                    "end_time": 120.0,
+                    "overlay_bbox": [56, 10, 1056, 1056],
+                    "camera_bbox": [0, 0, 100, 100],
+                    "ref_resolution": [1920, 1080],
+                    "board_flipped": False,
+                    "board_theme": "lichess_default",
+                }
+            ],
+        )
+        monkeypatch.setattr(mod, "get_calibration", lambda channel_handle: None)
+        monkeypatch.setattr(
+            mod,
+            "inspect_clip_calibration",
+            lambda video_path, start_time, end_time, ref_resolution: SimpleNamespace(
+                proposal=CalibrationProposal(
+                    overlay=(60, 12, 1050, 1050),
+                    camera=(1294, 894, 499, 178),
+                    ref_resolution=(1920, 1080),
+                    board_flipped=False,
+                    board_theme="lichess_default",
+                    theme_confidence=0.8,
+                    orientation_confidence=1.0,
+                )
+            ),
+        )
+
+        calls = []
+
+        def fake_generate_clips(
+            self,
+            video_path,
+            calibration,
+            video_id="",
+            start_time=None,
+            end_time=None,
+            channel_handle=None,
+            save_clips=True,
+            diagnostics=None,
+        ):
+            calls.append(calibration)
+            return []
+
+        monkeypatch.setattr(OverlayClipGenerator, "generate_clips", fake_generate_clips)
+
+        generate_from_video(
+            "/tmp/demo123.mp4",
+            channel_handle="@demo",
+            output_dir=str(tmp_path),
+            save_clips=False,
+        )
+
+        assert len(calls) == 1
+        assert calls[0].camera == (1294, 894, 499, 178)
+        assert calls[0].overlay == (60, 12, 1050, 1050)
+
+    def test_db_clip_with_unusable_camera_is_skipped_when_recovery_fails(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        import pipeline.overlay.overlay_clip_generator as mod
+
+        monkeypatch.setattr(
+            mod,
+            "_get_db_clips",
+            lambda video_id: [
+                {
+                    "id": 53,
+                    "start_time": 16.0,
+                    "end_time": 462.0,
+                    "overlay_bbox": [56, 10, 1056, 1056],
+                    "camera_bbox": [1112, 0, 808, 1080],
+                    "ref_resolution": [1920, 1080],
+                    "board_flipped": False,
+                    "board_theme": "lichess_default",
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            mod,
+            "get_calibration",
+            lambda channel_handle: LayoutCalibration(
+                overlay=(0, 0, 1079, 1079),
+                camera=(1079, 0, 841, 1080),
+                ref_resolution=(1920, 1080),
+                board_flipped=False,
+                board_theme="lichess_default",
+            ),
+        )
+        monkeypatch.setattr(
+            mod,
+            "inspect_clip_calibration",
+            lambda video_path, start_time, end_time, ref_resolution: SimpleNamespace(
+                proposal=None,
+                failure_reason="camera_not_found",
+            ),
+        )
+
+        called = False
+
+        def fake_generate_clips(*args, **kwargs):
+            nonlocal called
+            called = True
+            return []
+
+        monkeypatch.setattr(OverlayClipGenerator, "generate_clips", fake_generate_clips)
+
+        results = generate_from_video(
+            "/tmp/demo123.mp4",
+            channel_handle="@demo",
+            output_dir=str(tmp_path),
+            save_clips=False,
+        )
+
+        assert results == []
+        assert called is False

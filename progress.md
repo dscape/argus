@@ -538,6 +538,105 @@
   - `make typecheck` ✅
   - `make test` ✅ (`511 passed, 22 skipped`)
 
+## Real-clip preview root-cause fix
+
+- New dataset issue discovered from `/data/real` screenshots:
+  - several clip-card previews were not showing real OTB boards at all
+  - the bad previews were not a frontend rendering bug; the stored clip frames themselves were wrong
+- Root cause:
+  - `pipeline.overlay.overlay_clip_generator.generate_from_video()` treated **any** `video_clips` DB row as usable calibration
+  - that included segmentation placeholders like `camera_bbox=[0, 0, 100, 100]`
+  - it also allowed overly broad camera crops such as whole right-side broadcast panels (`@STLChessClub` style `~40%` of the full frame) that are not tight board crops
+  - once those bogus crops were written into `.pt` files, `/data/real` faithfully previewed nonsense because the training frames themselves were nonsense
+- Code fix:
+  - added calibration usability helpers in `pipeline/overlay/calibration.py`:
+    - `is_placeholder_bbox(...)`
+    - `bbox_area_ratio(...)`
+    - `is_overlay_bbox_usable(...)`
+    - `is_camera_bbox_usable(...)`
+    - `calibration_has_usable_camera_crop(...)`
+    - `calibration_is_usable(...)`
+  - `pipeline/overlay/overlay_clip_generator.py` now:
+    - rejects placeholder / over-large camera crops as unusable
+    - attempts clip-level auto-calibration recovery before generating from a bad DB clip row
+    - falls back to a usable channel calibration only when that fallback is itself board-tight
+    - skips unresolved clips instead of silently writing garbage board crops
+    - for videos without DB clips, requires either a usable channel calibration or a successful auto-proposed full-video calibration
+- Added regression coverage:
+  - new file `tests/pipeline/test_calibration.py`
+  - expanded `tests/pipeline/test_overlay_clip_generator.py` for:
+    - invalid DB camera bbox → auto-calibration recovery
+    - unusable camera bbox with failed recovery → clip skipped
+    - whole-video fallback using an auto-proposed calibration
+- Operational cleanup after the fix:
+  - removed previously bad generated clips for:
+    - `psrPAoHr4wA`
+    - `vkoTN5DxRS0`
+    - `hryRA0-fqm0`
+    - `O8ZwstOxG_A`
+    - `GGzMsJZf0OM`
+  - regenerated the recoverable set with the new calibration guard/recovery path:
+    - `psrPAoHr4wA`
+      - clip rows `19` and `20` recovered via auto-calibration
+      - regenerated clips:
+        - `clip_overlay_psrPAoHr4wA_clip19_0.pt`
+        - `clip_overlay_psrPAoHr4wA_clip20_0.pt`
+    - `vkoTN5DxRS0`
+      - clip rows `21`, `22`, and `23` recovered via auto-calibration
+      - regenerated clips:
+        - `clip_overlay_vkoTN5DxRS0_clip22_0.pt`
+        - `clip_overlay_vkoTN5DxRS0_clip22_2.pt`
+        - `clip_overlay_vkoTN5DxRS0_clip23_0.pt`
+        - `clip_overlay_vkoTN5DxRS0_clip23_1.pt`
+        - `clip_overlay_vkoTN5DxRS0_clip23_6.pt`
+    - `hryRA0-fqm0`
+      - clip rows `24` and `25` recovered via auto-calibration
+      - regenerated clip:
+        - `clip_overlay_hryRA0-fqm0_clip25_2.pt`
+  - unresolved bad rows are now skipped instead of producing junk clips:
+    - `O8ZwstOxG_A` clip rows `53` and `63`
+    - `GGzMsJZf0OM` clip row `68`
+- Representative visual validation after regeneration:
+  - regenerated first-frame previews now show actual chessboards for:
+    - `clip_overlay_psrPAoHr4wA_clip19_0.pt`
+    - `clip_overlay_vkoTN5DxRS0_clip23_0.pt`
+    - `clip_overlay_hryRA0-fqm0_clip25_2.pt`
+- `/data/real` browser follow-up:
+  - bad filenames are gone from the gallery:
+    - `clip_overlay_O8ZwstOxG_A_*`
+    - `clip_overlay_GGzMsJZf0OM_*`
+  - browser screenshot now shows the visible gallery cards rendering real chessboards again, not black strips / title cards / overlay panels
+  - new valid filenames are present:
+    - `clip_overlay_RyXsGZckLHQ_clip73_2.pt`
+    - `clip_overlay_cQAedm_gWrw_clip67_2.pt`
+- Real dataset snapshot after cleanup/regeneration:
+  - `34` clips in `data/argus/train_real`
+  - `11` source videos represented
+  - the source set now includes:
+    - added: `RyXsGZckLHQ` (`@FIDEchess`)
+    - added: `cQAedm_gWrw` (`@GothamChess`)
+    - removed bad-source coverage: `O8ZwstOxG_A`, `GGzMsJZf0OM`
+  - rebuilt split:
+    - `26` train clips
+    - `8` val clips
+- Cross-channel / cross-tournament expansion attempts after the fix:
+  - successful additions:
+    - `RyXsGZckLHQ` (`@FIDEchess`) via `--min-moves 3`
+      - new clip: `clip_overlay_RyXsGZckLHQ_clip73_2.pt` (`3` moves, `66` frames)
+    - `cQAedm_gWrw` (`@GothamChess`) via `--min-moves 3`
+      - new clips:
+        - `clip_overlay_cQAedm_gWrw_clip67_2.pt` (`3` moves, `83` frames)
+        - `clip_overlay_cQAedm_gWrw_clip67_3.pt` (`3` moves, `173` frames)
+  - attempted but still yielded `0` clips:
+    - `APk4NR8aoWI` (`@chessbrah`) — no OTB board detected for auto-calibration
+    - `Cv41HepMpTg` (`@BotezLive`) — no OTB board detected for auto-calibration
+    - `05zgojs1Lsc` (`@crestbook`) — no usable overlay/calibration proposal
+    - `JuTsIXvmWvA` (`@FIDEchess`) — long video but still no replay-valid segments at current continuity settings
+    - `9IKtoJ914yU` (`@CFNChannel`) — still no usable clip even at `--min-moves 3`
+    - `dS89JM-x_so` (`@DanielNaroditskyGM`) — auto-calibration could not recover a usable OTB board crop
+    - `Unu6antTBGs` (`@AnishGiriOfficial`) — auto-calibration could not recover a usable OTB board crop
+    - `ZP9AVIsWxnI` (`@AnnaCramling`) — usable calibration exists, but current continuity still produced no ≥3-move replay-valid segment
+
 ## Active dependency-unblocking plan
 
 1. Focus code work on the `6`-video **illegal-jump fragmentation** bucket first, since those videos still show long readable runs and are the most plausible source of near-term clip-yield gains.

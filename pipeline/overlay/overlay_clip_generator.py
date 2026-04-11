@@ -16,7 +16,14 @@ import cv2
 import numpy as np
 import torch
 
-from pipeline.overlay.calibration import LayoutCalibration, get_calibration
+from pipeline.overlay.auto_calibration import inspect_clip_calibration, propose_calibration
+from pipeline.overlay.calibration import (
+    LayoutCalibration,
+    calibration_has_usable_camera_crop,
+    calibration_is_usable,
+    get_calibration,
+    is_overlay_bbox_usable,
+)
 from pipeline.overlay.grid_detector import detect_grid
 from pipeline.overlay.overlay_move_detector import (
     GameSegment,
@@ -564,6 +571,137 @@ def _get_db_clips(video_id: str) -> list[dict]:
         return []
 
 
+def _clip_row_to_calibration(
+    clip_row: dict,
+    *,
+    move_delay_seconds: float = 2.0,
+) -> LayoutCalibration:
+    return LayoutCalibration(
+        overlay=tuple(clip_row["overlay_bbox"]),
+        camera=tuple(clip_row["camera_bbox"]),
+        ref_resolution=tuple(clip_row["ref_resolution"]),
+        board_flipped=clip_row["board_flipped"],
+        board_theme=clip_row["board_theme"],
+        move_delay_seconds=move_delay_seconds,
+    )
+
+
+def _proposal_to_calibration(
+    proposal,
+    *,
+    move_delay_seconds: float,
+) -> LayoutCalibration:
+    return LayoutCalibration(
+        overlay=proposal.overlay,
+        camera=proposal.camera,
+        ref_resolution=proposal.ref_resolution,
+        board_flipped=proposal.board_flipped,
+        board_theme=proposal.board_theme,
+        move_delay_seconds=move_delay_seconds,
+    )
+
+
+def _resolve_db_clip_calibration(
+    *,
+    video_path: str,
+    video_id: str,
+    clip_row: dict,
+    channel_calibration: LayoutCalibration | None,
+) -> LayoutCalibration | None:
+    ref_resolution = tuple(clip_row["ref_resolution"])
+    channel_move_delay = (
+        channel_calibration.move_delay_seconds if channel_calibration is not None else 2.0
+    )
+    db_calibration = _clip_row_to_calibration(
+        clip_row,
+        move_delay_seconds=channel_move_delay,
+    )
+    if calibration_is_usable(db_calibration):
+        return db_calibration
+
+    inspection = inspect_clip_calibration(
+        video_path,
+        start_time=float(clip_row["start_time"]),
+        end_time=float(clip_row["end_time"]),
+        ref_resolution=ref_resolution,
+    )
+    if inspection.proposal is not None:
+        logger.info(
+            "Recovered clip %s calibration for %s via auto-calibration",
+            clip_row["id"],
+            video_id,
+        )
+        return _proposal_to_calibration(
+            inspection.proposal,
+            move_delay_seconds=channel_move_delay,
+        )
+
+    if channel_calibration is not None:
+        scaled_channel = channel_calibration.scale_to_resolution(*ref_resolution)
+        if calibration_has_usable_camera_crop(scaled_channel) and is_overlay_bbox_usable(
+            db_calibration.overlay,
+            db_calibration.ref_resolution,
+        ):
+            logger.info(
+                "Falling back to channel camera crop for clip %s in %s",
+                clip_row["id"],
+                video_id,
+            )
+            return LayoutCalibration(
+                overlay=db_calibration.overlay,
+                camera=scaled_channel.camera,
+                ref_resolution=db_calibration.ref_resolution,
+                board_flipped=scaled_channel.board_flipped,
+                board_theme=scaled_channel.board_theme,
+                move_delay_seconds=scaled_channel.move_delay_seconds,
+            )
+        if calibration_is_usable(scaled_channel):
+            logger.info(
+                "Falling back to full channel calibration for clip %s in %s",
+                clip_row["id"],
+                video_id,
+            )
+            return scaled_channel
+
+    logger.warning(
+        "Skipping clip %s in %s: unusable camera calibration (auto-calibration failed)",
+        clip_row["id"],
+        video_id,
+    )
+    return None
+
+
+def _resolve_video_calibration(
+    *,
+    video_id: str,
+    channel_handle: str,
+) -> LayoutCalibration | None:
+    calibration = get_calibration(channel_handle)
+    if calibration is not None and calibration_is_usable(calibration):
+        return calibration
+
+    proposal = propose_calibration(video_id)
+    if proposal is not None:
+        logger.info("Recovered video-level calibration for %s via auto-calibration", video_id)
+        move_delay_seconds = calibration.move_delay_seconds if calibration is not None else 2.0
+        return _proposal_to_calibration(
+            proposal,
+            move_delay_seconds=move_delay_seconds,
+        )
+
+    if calibration is None:
+        logger.error(
+            "No calibration found for %s. Run auto-segment + auto-calibrate, or 'pipeline calibrate' first.",
+            channel_handle,
+        )
+    else:
+        logger.error(
+            "Calibration for %s has an unusable camera crop; run auto-segment + auto-calibrate.",
+            channel_handle,
+        )
+    return None
+
+
 def generate_from_video(
     video_path_or_url: str,
     channel_handle: str,
@@ -601,6 +739,8 @@ def generate_from_video(
 
     video_id = os.path.splitext(os.path.basename(video_path))[0]
 
+    channel_calibration = get_calibration(channel_handle)
+
     # 1. Try per-clip DB calibrations
     db_clips = _get_db_clips(video_id)
     if db_clips:
@@ -612,13 +752,14 @@ def generate_from_video(
         )
         results: list[dict] = []
         for clip_row in db_clips:
-            cal = LayoutCalibration(
-                overlay=tuple(clip_row["overlay_bbox"]),
-                camera=tuple(clip_row["camera_bbox"]),
-                ref_resolution=tuple(clip_row["ref_resolution"]),
-                board_flipped=clip_row["board_flipped"],
-                board_theme=clip_row["board_theme"],
+            cal = _resolve_db_clip_calibration(
+                video_path=video_path,
+                video_id=video_id,
+                clip_row=clip_row,
+                channel_calibration=channel_calibration,
             )
+            if cal is None:
+                continue
             clip_diagnostics = None
             if diagnostics is not None:
                 clip_diagnostics = ClipGenerationDiagnostics(
@@ -641,13 +782,12 @@ def generate_from_video(
             results.extend(clip_results)
         return results
 
-    # 2. Fall back to channel-level YAML calibration
-    calibration = get_calibration(channel_handle)
+    # 2. Fall back to channel-level or auto-proposed calibration
+    calibration = _resolve_video_calibration(
+        video_id=video_id,
+        channel_handle=channel_handle,
+    )
     if calibration is None:
-        logger.error(
-            f"No calibration found for {channel_handle}. "
-            f"Run auto-segment + auto-calibrate, or 'pipeline calibrate' first."
-        )
         return []
 
     generator = OverlayClipGenerator(
