@@ -2,6 +2,7 @@ name: argus_small
 vision_encoder:
   model_name: facebook/dinov2-small
   frozen: true
+  unfreeze_last_n: 0
   embed_dim: 384
 temporal:
   type: mamba2
@@ -12,6 +13,12 @@ temporal:
 move_head:
   vocab_size: 1970
   hidden_dim: 256
+pooling:
+  type: mean
+  square_size: 8
+square_head:
+  enabled: false
+  num_classes: 13
 board_detector:
   num_queries: 32
   hidden_dim: 256

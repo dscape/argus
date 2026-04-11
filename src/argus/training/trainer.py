@@ -19,6 +19,7 @@ from torch.optim.lr_scheduler import (
 )
 from torch.utils.data import DataLoader
 
+from argus.device import resolve_device
 from argus.eval.metrics import compute_move_metrics
 from argus.model.argus_model import ArgusModel
 from argus.model.losses import ArgusLoss
@@ -66,9 +67,10 @@ class Trainer:
         output_dir: str = "outputs",
         save_every: int = 5,
         use_wandb: bool = False,
-        device: str | torch.device = "cuda",
+        device: str | torch.device = "auto",
     ) -> None:
-        self.model = model.to(device)
+        resolved_device = resolve_device(device)
+        self.model = model.to(resolved_device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.clip_grad_norm = clip_grad_norm
@@ -78,13 +80,14 @@ class Trainer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.save_every = save_every
         self.use_wandb = use_wandb
-        self.device = torch.device(device)
+        self.device = torch.device(resolved_device)
 
         # Loss
         lw = loss_weights or {}
         self.criterion = ArgusLoss(
             w_move=lw.get("move", 1.0),
             w_detect=lw.get("detect", 0.5),
+            w_square=lw.get("square", 0.0),
             w_bbox=lw.get("bbox", 0.0),
             w_identity=lw.get("identity", 0.0),
         )
@@ -136,7 +139,7 @@ class Trainer:
         # Mixed precision
         self.use_amp = precision in ("fp16", "bf16")
         self.amp_dtype = torch.bfloat16 if precision == "bf16" else torch.float16
-        self.scaler = GradScaler(str(device), enabled=(precision == "fp16"))
+        self.scaler = GradScaler(self.device.type, enabled=(precision == "fp16"))
 
         # Logging
         if use_wandb:
@@ -181,9 +184,11 @@ class Trainer:
             "total": [],
             "move": [],
             "detect": [],
+            "square": [],
         }
         epoch_metrics: dict[str, list[float]] = {
             "move_acc": [],
+            "square_acc": [],
         }
 
         self.optimizer.zero_grad()
@@ -196,6 +201,9 @@ class Trainer:
             detect_targets = batch["detect_targets"].to(self.device)
             legal_masks = batch["legal_masks"].to(self.device)
             move_mask = batch["move_mask"].to(self.device)
+            square_targets = batch.get("square_targets")
+            if square_targets is not None:
+                square_targets = square_targets.to(self.device)
 
             with autocast(device_type=self.device.type, dtype=self.amp_dtype, enabled=self.use_amp):
                 output = self.model(crops=frames, legal_masks=legal_masks)
@@ -211,6 +219,8 @@ class Trainer:
                     detect_targets=detect_targets,
                     move_mask=move_mask,
                     legal_masks=legal_masks,
+                    square_logits=output.square_logits,
+                    square_targets=square_targets,
                 )
 
             loss = losses["total"] / self.gradient_accumulation
@@ -240,6 +250,17 @@ class Trainer:
                     preds, move_targets, detect_logits, detect_targets, move_mask
                 )
                 epoch_metrics["move_acc"].append(metrics.get("move_accuracy", 0.0))
+                if output.square_logits is not None and square_targets is not None:
+                    square_preds = output.square_logits.argmax(dim=-1)
+                    valid_squares = square_targets != -100
+                    if valid_squares.any():
+                        square_acc = (
+                            (square_preds[valid_squares] == square_targets[valid_squares])
+                            .float()
+                            .mean()
+                            .item()
+                        )
+                        epoch_metrics["square_acc"].append(square_acc)
 
             # Logging
             if self.use_wandb and self.global_step % 10 == 0:
@@ -262,6 +283,7 @@ class Trainer:
         all_detect_logits: list[torch.Tensor] = []
         all_detect_targets: list[torch.Tensor] = []
         all_move_masks: list[torch.Tensor] = []
+        square_accuracies: list[float] = []
         total_loss = 0.0
         count = 0
 
@@ -271,6 +293,9 @@ class Trainer:
             detect_targets = batch["detect_targets"].to(self.device)
             legal_masks = batch["legal_masks"].to(self.device)
             move_mask = batch["move_mask"].to(self.device)
+            square_targets = batch.get("square_targets")
+            if square_targets is not None:
+                square_targets = square_targets.to(self.device)
 
             output = self.model(crops=frames, legal_masks=legal_masks)
 
@@ -284,6 +309,8 @@ class Trainer:
                 detect_targets=detect_targets,
                 move_mask=move_mask,
                 legal_masks=legal_masks,
+                square_logits=output.square_logits,
+                square_targets=square_targets,
             )
             total_loss += losses["total"].item()
             count += 1
@@ -294,6 +321,17 @@ class Trainer:
             all_detect_logits.append(detect_logits.cpu())
             all_detect_targets.append(detect_targets.cpu())
             all_move_masks.append(move_mask.cpu())
+            if output.square_logits is not None and square_targets is not None:
+                square_preds = output.square_logits.argmax(dim=-1)
+                valid_squares = square_targets != -100
+                if valid_squares.any():
+                    square_accuracy = (
+                        (square_preds[valid_squares] == square_targets[valid_squares])
+                        .float()
+                        .mean()
+                        .item()
+                    )
+                    square_accuracies.append(square_accuracy)
 
         preds = torch.cat(all_preds)
         targets = torch.cat(all_targets)
@@ -302,6 +340,8 @@ class Trainer:
         m_masks = torch.cat(all_move_masks)
 
         metrics = compute_move_metrics(preds, targets, d_logits, d_targets, m_masks)
+        if square_accuracies:
+            metrics["square_accuracy"] = sum(square_accuracies) / len(square_accuracies)
         metrics["val_loss"] = total_loss / max(count, 1)
 
         if self.use_wandb:
@@ -319,6 +359,9 @@ class Trainer:
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict(),
         }
+        model_config = getattr(self.model, "model_config", None)
+        if model_config is not None:
+            checkpoint["model_config"] = model_config
         if metrics:
             checkpoint["metrics"] = metrics
         torch.save(checkpoint, ckpt_path)

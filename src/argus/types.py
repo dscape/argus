@@ -79,6 +79,9 @@ class ModelOutput:
     # Move detection (did a move occur?)
     detect_logits: torch.Tensor  # (B, T, num_boards)
 
+    # Dense board-state supervision (single-board experiments)
+    square_logits: torch.Tensor | None = None  # (B, T, 64, num_square_classes)
+
     # Board detection (Phase 2+)
     board_bboxes: torch.Tensor | None = None  # (B, T, num_queries, 4)
     board_confidence: torch.Tensor | None = None  # (B, T, num_queries)

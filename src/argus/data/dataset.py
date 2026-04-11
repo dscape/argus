@@ -9,6 +9,8 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
+from argus.chess.board_state import fen_to_square_targets
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,6 +51,10 @@ class ArgusDataset(Dataset):  # type: ignore[type-arg]
         move_targets = clip_data["move_targets"].to(torch.long)  # (T,)
         detect_targets = clip_data["detect_targets"].to(torch.float32)  # (T,)
         legal_masks = clip_data["legal_masks"].to(torch.bool)  # (T, VOCAB_SIZE)
+        square_targets = _build_square_targets(clip_data)
+
+        if self.transform is not None:
+            frames = self.transform(frames)
 
         # Pad or truncate to clip_length
         T = frames.shape[0]
@@ -57,24 +63,33 @@ class ArgusDataset(Dataset):  # type: ignore[type-arg]
             move_targets = _pad_tensor(move_targets, self.clip_length, dim=0)
             detect_targets = _pad_tensor(detect_targets, self.clip_length, dim=0)
             legal_masks = _pad_tensor(legal_masks, self.clip_length, dim=0)
+            if square_targets is not None:
+                square_targets = _pad_tensor(
+                    square_targets,
+                    self.clip_length,
+                    dim=0,
+                    fill_value=-100,
+                )
         elif T > self.clip_length:
             frames = frames[: self.clip_length]
             move_targets = move_targets[: self.clip_length]
             detect_targets = detect_targets[: self.clip_length]
             legal_masks = legal_masks[: self.clip_length]
+            if square_targets is not None:
+                square_targets = square_targets[: self.clip_length]
 
         move_mask = _derive_move_mask(detect_targets)
 
-        if self.transform is not None:
-            frames = self.transform(frames)
-
-        return {
+        sample = {
             "frames": frames,
             "move_targets": move_targets,
             "detect_targets": detect_targets,
             "legal_masks": legal_masks,
             "move_mask": move_mask,
         }
+        if square_targets is not None:
+            sample["square_targets"] = square_targets
+        return sample
 
 
 class ArgusInMemoryDataset(Dataset):  # type: ignore[type-arg]
@@ -99,6 +114,10 @@ class ArgusInMemoryDataset(Dataset):  # type: ignore[type-arg]
         move_targets = clip["move_targets"].to(torch.long)
         detect_targets = clip["detect_targets"].to(torch.float32)
         legal_masks = clip["legal_masks"].to(torch.bool)
+        square_targets = _build_square_targets(clip)
+
+        if self.transform is not None:
+            frames = self.transform(frames)
 
         T = frames.shape[0]
         if T < self.clip_length:
@@ -106,24 +125,33 @@ class ArgusInMemoryDataset(Dataset):  # type: ignore[type-arg]
             move_targets = _pad_tensor(move_targets, self.clip_length, dim=0)
             detect_targets = _pad_tensor(detect_targets, self.clip_length, dim=0)
             legal_masks = _pad_tensor(legal_masks, self.clip_length, dim=0)
+            if square_targets is not None:
+                square_targets = _pad_tensor(
+                    square_targets,
+                    self.clip_length,
+                    dim=0,
+                    fill_value=-100,
+                )
         elif T > self.clip_length:
             frames = frames[: self.clip_length]
             move_targets = move_targets[: self.clip_length]
             detect_targets = detect_targets[: self.clip_length]
             legal_masks = legal_masks[: self.clip_length]
+            if square_targets is not None:
+                square_targets = square_targets[: self.clip_length]
 
         move_mask = _derive_move_mask(detect_targets)
 
-        if self.transform is not None:
-            frames = self.transform(frames)
-
-        return {
+        sample = {
             "frames": frames,
             "move_targets": move_targets,
             "detect_targets": detect_targets,
             "legal_masks": legal_masks,
             "move_mask": move_mask,
         }
+        if square_targets is not None:
+            sample["square_targets"] = square_targets
+        return sample
 
 
 def _prepare_frames(frames: torch.Tensor) -> torch.Tensor:
@@ -138,12 +166,33 @@ def _derive_move_mask(detect_targets: torch.Tensor) -> torch.Tensor:
     return detect_targets > 0.5
 
 
-def _pad_tensor(tensor: torch.Tensor, target_len: int, dim: int = 0) -> torch.Tensor:
-    """Pad a tensor along a given dimension to target_len with zeros."""
+def _build_square_targets(clip_data: dict[str, Any]) -> torch.Tensor | None:
+    fens = clip_data.get("fens")
+    if fens is None:
+        return None
+    board_flipped = clip_data.get("board_flipped", False)
+    if isinstance(board_flipped, torch.Tensor):
+        board_flipped = bool(board_flipped.item())
+    targets = [fen_to_square_targets(fen, board_flipped=bool(board_flipped)) for fen in fens]
+    return torch.stack(targets)
+
+
+def _pad_tensor(
+    tensor: torch.Tensor,
+    target_len: int,
+    dim: int = 0,
+    fill_value: int | float = 0,
+) -> torch.Tensor:
+    """Pad a tensor along a given dimension to target_len."""
     current_len = tensor.shape[dim]
     if current_len >= target_len:
         return tensor
     pad_size = list(tensor.shape)
     pad_size[dim] = target_len - current_len
-    padding = torch.zeros(pad_size, dtype=tensor.dtype, device=tensor.device)
+    padding = torch.full(
+        pad_size,
+        fill_value=fill_value,
+        dtype=tensor.dtype,
+        device=tensor.device,
+    )
     return torch.cat([tensor, padding], dim=dim)

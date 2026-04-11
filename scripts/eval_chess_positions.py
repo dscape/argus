@@ -36,6 +36,8 @@ from pipeline.overlay.chess_positions_data import (
 from pipeline.overlay.grid_detector import GridResult
 from pipeline.overlay.piece_classifier import read_fen_with_grid
 
+from argus.device import resolve_device
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -190,7 +192,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate piece classifier on chess-positions")
     parser.add_argument("data_dir", type=str, help="Path to chess-positions test/ directory")
     parser.add_argument("--limit", type=int, default=None, help="Max boards to evaluate")
-    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--add-failures",
@@ -214,7 +216,7 @@ def main() -> None:
     passes, failures = evaluate(
         data_dir,
         limit=args.limit,
-        device=args.device,
+        device=resolve_device(args.device),
         seed=args.seed,
     )
 

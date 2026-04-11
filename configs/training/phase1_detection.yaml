@@ -14,7 +14,8 @@ clip_grad_norm: 1.0
 precision: bf16
 loss_weights:
   move: 1.0
-  detect: 0.5
+  detect: 5.0
+  square: 0.0
   bbox: 0.0
   identity: 0.0
 wandb:

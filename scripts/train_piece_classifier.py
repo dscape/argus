@@ -38,6 +38,8 @@ from pipeline.overlay.square_classifier_model import (
     TinySquareClassifier,
 )
 
+from argus.device import resolve_device
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -323,7 +325,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--label-smoothing", type=float, default=0.0)
     parser.add_argument("--synthetic-train-samples", type=int, default=1200)
@@ -341,7 +343,7 @@ def main() -> None:
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    device = torch.device(args.device)
+    device = torch.device(resolve_device(args.device))
 
     logger.info("Loading datasets at %dx%d…", INPUT_SIZE, INPUT_SIZE)
     synthetic_train, synthetic_val = _load_synthetic_splits(

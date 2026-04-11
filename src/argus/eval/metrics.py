@@ -17,6 +17,7 @@ def compute_move_metrics(
     detect_logits: torch.Tensor,
     detect_targets: torch.Tensor,
     move_mask: torch.Tensor,
+    detect_threshold: float = 0.5,
 ) -> dict[str, float]:
     """Compute move-level metrics.
 
@@ -26,6 +27,7 @@ def compute_move_metrics(
         detect_logits: (B, T) move detection logits.
         detect_targets: (B, T) binary detection targets.
         move_mask: (B, T) True where a move occurred.
+        detect_threshold: Probability threshold for detection metrics.
 
     Returns:
         Dict of metric name -> value.
@@ -40,7 +42,7 @@ def compute_move_metrics(
         metrics["move_accuracy"] = 0.0
 
     # Move Detection Precision / Recall / F1
-    detect_preds = (torch.sigmoid(detect_logits) > 0.5).float()
+    detect_preds = (torch.sigmoid(detect_logits) > detect_threshold).float()
     detect_gt = detect_targets.float()
 
     tp = ((detect_preds == 1) & (detect_gt == 1)).float().sum().item()

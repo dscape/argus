@@ -8,6 +8,7 @@ from pathlib import Path
 import torch
 
 from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
+from argus.device import resolve_device
 from argus.inference.tracker import MultiGameTracker
 from argus.model.argus_model import ArgusModel
 from argus.types import GameTrack
@@ -26,14 +27,15 @@ class InferencePipeline:
     def __init__(
         self,
         model: ArgusModel,
-        device: str | torch.device = "cuda",
+        device: str | torch.device = "auto",
         detect_threshold: float = 0.5,
         move_confidence_threshold: float = 0.3,
         fps: float = 1.0,
     ) -> None:
-        self.model = model.to(device)
+        resolved_device = resolve_device(device)
+        self.model = model.to(resolved_device)
         self.model.eval()
-        self.device = torch.device(device)
+        self.device = torch.device(resolved_device)
         self.detect_threshold = detect_threshold
         self.move_confidence_threshold = move_confidence_threshold
         self.fps = fps

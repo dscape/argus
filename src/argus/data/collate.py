@@ -26,13 +26,16 @@ def argus_collate_fn(
     legal_masks = torch.stack([s["legal_masks"] for s in batch])
     move_mask = torch.stack([s["move_mask"] for s in batch])
 
-    return {
+    collated = {
         "frames": frames,
         "move_targets": move_targets,
         "detect_targets": detect_targets,
         "legal_masks": legal_masks,
         "move_mask": move_mask,
     }
+    if "square_targets" in batch[0]:
+        collated["square_targets"] = torch.stack([s["square_targets"] for s in batch])
+    return collated
 
 
 def multi_board_collate_fn(

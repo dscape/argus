@@ -7,6 +7,7 @@ import sys
 
 import torch
 
+from argus.device import resolve_device
 from argus.inference.pipeline import InferencePipeline
 from argus.model.argus_model import ArgusModel
 
@@ -24,15 +25,15 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--output-dir", type=str, default="output_pgn")
     parser.add_argument("--fps", type=float, default=1.0)
-    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--detect-threshold", type=float, default=0.5)
     parser.add_argument("--confidence-threshold", type=float, default=0.3)
     args = parser.parse_args()
 
-    device = args.device if torch.cuda.is_available() else "cpu"
+    device = resolve_device(args.device)
 
-    model = ArgusModel(use_detector=False)
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=True)
+    model = ArgusModel.from_config(checkpoint.get("model_config"))
     model.load_state_dict(checkpoint["model_state_dict"])
     logger.info(f"Loaded model from {args.checkpoint}")
 

@@ -33,16 +33,19 @@ class ArgusLoss(nn.Module):
         self,
         w_move: float = 1.0,
         w_detect: float = 0.5,
+        w_square: float = 0.0,
         w_bbox: float = 0.0,
         w_identity: float = 0.0,
     ) -> None:
         super().__init__()
         self.w_move = w_move
         self.w_detect = w_detect
+        self.w_square = w_square
         self.w_bbox = w_bbox
         self.w_identity = w_identity
         self.move_loss = nn.CrossEntropyLoss(reduction="mean")
         self.detect_loss = FocalLoss()
+        self.square_loss = nn.CrossEntropyLoss(ignore_index=-100, reduction="mean")
 
     def forward(
         self,
@@ -52,6 +55,8 @@ class ArgusLoss(nn.Module):
         detect_targets: torch.Tensor,
         move_mask: torch.Tensor | None = None,
         legal_masks: torch.Tensor | None = None,
+        square_logits: torch.Tensor | None = None,
+        square_targets: torch.Tensor | None = None,
         bbox_pred: torch.Tensor | None = None,
         bbox_target: torch.Tensor | None = None,
         identity_pred: torch.Tensor | None = None,
@@ -74,6 +79,14 @@ class ArgusLoss(nn.Module):
 
         losses["detect"] = self.detect_loss(detect_logits, detect_targets.float())
 
+        if self.w_square > 0 and square_logits is not None and square_targets is not None:
+            losses["square"] = self.square_loss(
+                square_logits.reshape(-1, square_logits.shape[-1]),
+                square_targets.reshape(-1),
+            )
+        else:
+            losses["square"] = torch.tensor(0.0, device=device)
+
         if self.w_bbox > 0 and bbox_pred is not None and bbox_target is not None:
             losses["bbox"] = self._bbox_loss(bbox_pred, bbox_target)
         else:
@@ -87,6 +100,7 @@ class ArgusLoss(nn.Module):
         losses["total"] = (
             self.w_move * losses["move"]
             + self.w_detect * losses["detect"]
+            + self.w_square * losses["square"]
             + self.w_bbox * losses["bbox"]
             + self.w_identity * losses["identity"]
         )

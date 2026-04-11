@@ -24,6 +24,8 @@ from torch.utils.data import DataLoader, random_split  # noqa: E402
 
 from argus.data.collate import argus_collate_fn  # noqa: E402
 from argus.data.dataset import ArgusDataset, ArgusInMemoryDataset  # noqa: E402
+from argus.data.transforms import ValidationTransform  # noqa: E402
+from argus.device import resolve_device  # noqa: E402
 from argus.model.argus_model import ArgusModel  # noqa: E402
 from argus.training.trainer import Trainer, compute_num_optimizer_steps  # noqa: E402
 
@@ -49,12 +51,13 @@ def _compute_split_lengths(total_clips: int, requested_val_clips: int) -> tuple[
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
 def main(cfg: DictConfig) -> None:
     logger.info(f"Training config: {cfg.training.name}")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = resolve_device()
     logger.info(f"Using device: {device}")
 
     clip_length = cfg.data.get("clip_length", 16)
     seed = cfg.get("seed", 42)
     data_dir = cfg.data.get("data_dir", None)
+    transform = ValidationTransform()
 
     if data_dir is not None:
         # Load pre-generated data from disk (use make datagen first)
@@ -65,7 +68,7 @@ def main(cfg: DictConfig) -> None:
         if not train_dir.exists():
             # Flat directory: split by ratio
             logger.info(f"Loading data from {data_dir}...")
-            full_ds = ArgusDataset(data_dir, clip_length=clip_length)
+            full_ds = ArgusDataset(data_dir, clip_length=clip_length, transform=transform)
             requested_val = int(cfg.data.get("num_val_clips", 100))
             num_train, num_val = _compute_split_lengths(len(full_ds), requested_val)
             logger.info(
@@ -81,8 +84,8 @@ def main(cfg: DictConfig) -> None:
         else:
             # Separate train/val directories
             logger.info(f"Loading train from {train_dir}, val from {val_dir}...")
-            train_ds = ArgusDataset(train_dir, clip_length=clip_length)
-            val_ds = ArgusDataset(val_dir, clip_length=clip_length)
+            train_ds = ArgusDataset(train_dir, clip_length=clip_length, transform=transform)
+            val_ds = ArgusDataset(val_dir, clip_length=clip_length, transform=transform)
     else:
         # Generate synthetic data on-the-fly
         from argus.datagen.synth import generate_dataset
@@ -100,11 +103,20 @@ def main(cfg: DictConfig) -> None:
             num_clips=total_clips,
             clip_length=clip_length,
             image_size=image_size,
+            frames_per_move=cfg.data.get("frames_per_move", 4),
+            augment=cfg.data.get("augment", True),
+            occlusion_prob=cfg.data.get("occlusion_prob", 0.2),
+            illegal_clip_prob=cfg.data.get("illegal_clip_prob", 0.0),
+            min_moves=cfg.data.get("min_moves", 10),
+            max_moves=cfg.data.get("max_moves", 80),
+            game_source=cfg.data.get("game_source", "random"),
+            pgn_path=cfg.data.get("pgn_path", None),
+            min_elo=cfg.data.get("min_elo", 1500),
             seed=seed,
         )
         logger.info(f"Generated {len(clips)} clips")
 
-        dataset = ArgusInMemoryDataset(clips=clips, clip_length=clip_length)
+        dataset = ArgusInMemoryDataset(clips=clips, clip_length=clip_length, transform=transform)
         train_ds, val_ds = random_split(dataset, [num_train_clips, num_val_clips])
 
     train_loader = DataLoader(
@@ -124,6 +136,8 @@ def main(cfg: DictConfig) -> None:
         pin_memory=True,
     )
 
+    pooling_cfg = cfg.model.get("pooling", {})
+    square_head_cfg = cfg.model.get("square_head", {})
     model = ArgusModel(
         vision_encoder_name=cfg.model.vision_encoder.model_name,
         vision_embed_dim=cfg.model.vision_encoder.embed_dim,
@@ -133,8 +147,23 @@ def main(cfg: DictConfig) -> None:
         temporal_d_state=cfg.model.temporal.d_state,
         temporal_expand=cfg.model.temporal.expand,
         move_vocab_size=cfg.model.move_head.vocab_size,
+        pooling_type=pooling_cfg.get("type", "mean"),
+        square_pool_size=pooling_cfg.get("square_size", 8),
+        square_head_enabled=square_head_cfg.get("enabled", False),
+        square_vocab_size=square_head_cfg.get("num_classes", 13),
         use_detector=False,
     )
+
+    unfreeze_last_n = int(cfg.model.vision_encoder.get("unfreeze_last_n", 0))
+    if unfreeze_last_n > 0:
+        model.vision_encoder.unfreeze_last_n_layers(unfreeze_last_n)
+        logger.info("Unfroze last %d vision encoder layer(s)", unfreeze_last_n)
+
+    init_checkpoint = cfg.get("init_checkpoint")
+    if init_checkpoint:
+        checkpoint = torch.load(init_checkpoint, map_location=device, weights_only=True)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        logger.info("Initialized model weights from %s", init_checkpoint)
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -150,6 +179,12 @@ def main(cfg: DictConfig) -> None:
         steps_per_epoch,
         total_steps,
     )
+    if total_steps < 200:
+        logger.warning(
+            "Only %d optimizer steps configured; "
+            "treat this as a debugging probe, not a convergence run",
+            total_steps,
+        )
 
     trainer = Trainer(
         model=model,

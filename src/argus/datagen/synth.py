@@ -31,7 +31,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 from argus.chess.constraint_mask import get_legal_mask
 from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
-from argus.data.pgn_sampler import sample_random_game
+from argus.data.pgn_sampler import generate_game_dataset, sample_random_game
 from argus.datagen.board_themes import BoardTheme, select_random_theme
 from argus.datagen.lighting import LightingConfig, randomize_lighting
 from argus.datagen.piece_renderer import (
@@ -397,7 +397,7 @@ def generate_clip(
     frames_per_move: int = 4,
     augment: bool = True,
     occlusion_prob: float = 0.2,
-    illegal_clip_prob: float = 0.2,
+    illegal_clip_prob: float = 0.0,
     seed: int | None = None,
     quality: str = "training",
     server: BlenderServerClient | None = None,
@@ -590,6 +590,7 @@ def generate_clip(
         "legal_masks": torch.stack(legal_masks),
         "move_mask": torch.tensor(move_mask_list, dtype=torch.bool),
         "fens": fens,
+        "board_flipped": flipped,
     }
 
 
@@ -598,6 +599,8 @@ def _save_clip(clip: dict[str, Any], out: Path, clip_num: int) -> None:
     save_dict = {k: v for k, v in clip.items() if isinstance(v, torch.Tensor)}
     if "fens" in clip:
         save_dict["fens"] = clip["fens"]
+    if "board_flipped" in clip:
+        save_dict["board_flipped"] = clip["board_flipped"]
     torch.save(save_dict, out / f"clip_{clip_num:06d}.pt")
 
 
@@ -608,15 +611,19 @@ def generate_dataset(
     frames_per_move: int = 4,
     augment: bool = True,
     occlusion_prob: float = 0.2,
-    illegal_clip_prob: float = 0.2,
+    illegal_clip_prob: float = 0.0,
     min_moves: int = 10,
     max_moves: int = 80,
+    game_source: str = "random",
+    pgn_path: str | Path | None = None,
+    min_elo: int = 1500,
     output_dir: str | Path | None = None,
     seed: int = 42,
     on_progress: Callable[[int, int], None] | None = None,
     quality: str = "training",
     num_workers: int = 1,
     cancel_check: Callable[[], bool] | None = None,
+    server: BlenderServerClient | None = None,
 ) -> list[dict[str, Any]]:
     """Generate a dataset of training clips with Blender 3D rendering.
 
@@ -630,17 +637,26 @@ def generate_dataset(
         illegal_clip_prob: Probability of illegal move injection per clip.
         min_moves: Minimum game length.
         max_moves: Maximum game length.
+        game_source: ``random`` or ``pgn_file``.
+        pgn_path: Optional PGN file path when using ``game_source='pgn_file'``.
+        min_elo: Minimum average ELO when sampling PGN games.
         output_dir: If set, save clips to disk incrementally.
         seed: Random seed.
         on_progress: Optional callback(completed, total).
         quality: Render quality preset ('training' or 'high').
         num_workers: Number of parallel Blender render workers.
         cancel_check: Optional callable returning True to stop generation early.
+        server: Optional persistent Blender server client, mainly for tests.
     """
     from argus.datagen.blender_server import BlenderServerClient
 
     rng = random.Random(seed)
     clips: list[dict[str, Any]] = []
+
+    if game_source not in {"random", "pgn_file"}:
+        raise ValueError(f"Unsupported game_source: {game_source}")
+    if game_source == "pgn_file" and pgn_path is None:
+        raise ValueError("pgn_path is required when game_source='pgn_file'")
 
     out: Path | None = None
     clip_offset = 0
@@ -658,15 +674,30 @@ def generate_dataset(
             if nums:
                 clip_offset = max(nums) + 1
 
+    if game_source == "pgn_file":
+        games = generate_game_dataset(
+            num_games=num_clips,
+            pgn_path=pgn_path,
+            min_moves=min_moves,
+            max_moves=max_moves,
+            min_elo=min_elo,
+            seed=seed,
+        )
+    else:
+        games = []
+
     # Pre-compute all clip parameters for deterministic RNG
     clip_params = []
     for i in range(num_clips):
         game_seed = rng.randint(0, 2**31)
-        moves = sample_random_game(
-            min_moves=min_moves,
-            max_moves=max_moves,
-            seed=game_seed,
-        )
+        if game_source == "pgn_file":
+            moves = games[i]
+        else:
+            moves = sample_random_game(
+                min_moves=min_moves,
+                max_moves=max_moves,
+                seed=game_seed,
+            )
         if len(moves) < min_moves:
             continue
         max_start = max(0, len(moves) - clip_length // max(frames_per_move, 1))
@@ -674,8 +705,7 @@ def generate_dataset(
         clip_params.append((i, moves, start_move, game_seed))
 
     # Connect to external BlenderServer (started via `make blender-server`)
-    server = None
-    if augment:
+    if server is None and augment:
         try:
             server = BlenderServerClient.connect()
         except ConnectionError:

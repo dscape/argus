@@ -9,6 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
+from argus.device import resolve_device
 from argus.eval.metrics import (
     compute_move_accuracy_topk,
     compute_move_metrics,
@@ -46,12 +47,12 @@ class Evaluator:
     def __init__(
         self,
         model: ArgusModel,
-        device: str | torch.device = "cuda",
+        device: str | torch.device = "auto",
         frame_tolerance: int = 3,
         detect_threshold: float = 0.5,
     ) -> None:
         self.model = model
-        self.device = torch.device(device)
+        self.device = torch.device(resolve_device(device))
         self.frame_tolerance = frame_tolerance
         self.detect_threshold = detect_threshold
         self.vocab = get_vocabulary()
@@ -95,7 +96,12 @@ class Evaluator:
 
             # Per-batch move metrics
             batch_metrics = compute_move_metrics(
-                preds, move_targets, detect_logits, detect_targets, move_mask
+                preds,
+                move_targets,
+                detect_logits,
+                detect_targets,
+                move_mask,
+                detect_threshold=self.detect_threshold,
             )
             all_move_accs.append(batch_metrics["move_accuracy"])
             all_detect_prec.append(batch_metrics["move_detection_precision"])

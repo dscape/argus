@@ -6,4 +6,5 @@ defaults:
   - _self_
 
 seed: 42
+init_checkpoint: null
 output_dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
