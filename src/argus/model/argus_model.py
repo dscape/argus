@@ -22,7 +22,7 @@ class ArgusModel(nn.Module):
     def __init__(
         self,
         vision_encoder_name: str = "facebook/dinov2-base",
-        vision_embed_dim: int = 768,
+        vision_embed_dim: int | None = 768,
         frozen_vision: bool = True,
         temporal_d_model: int = 512,
         temporal_n_layers: int = 6,
@@ -39,11 +39,30 @@ class ArgusModel(nn.Module):
         square_head_enabled: bool = False,
         square_vocab_size: int = 13,
         use_detector: bool = False,
+        vision_encoder_type: str = "dinov2",
+        vision_feature_layer_indices: list[int] | tuple[int, ...] | None = None,
+        vision_output_grid_size: int = 14,
     ) -> None:
         super().__init__()
+        self.use_detector = use_detector
+        self.vision_encoder = VisionEncoder(
+            model_name=vision_encoder_name,
+            frozen=frozen_vision,
+            embed_dim=vision_embed_dim,
+            encoder_type=vision_encoder_type,
+            feature_layer_indices=vision_feature_layer_indices,
+            output_grid_size=vision_output_grid_size,
+        )
+        resolved_embed_dim = self.vision_encoder.embed_dim
+        feature_layers = None
+        if vision_feature_layer_indices is not None:
+            feature_layers = [int(idx) for idx in vision_feature_layer_indices]
         self._model_config = {
             "vision_encoder_name": vision_encoder_name,
-            "vision_embed_dim": vision_embed_dim,
+            "vision_encoder_type": vision_encoder_type,
+            "vision_embed_dim": resolved_embed_dim,
+            "vision_feature_layer_indices": feature_layers,
+            "vision_output_grid_size": vision_output_grid_size,
             "frozen_vision": frozen_vision,
             "temporal_d_model": temporal_d_model,
             "temporal_n_layers": temporal_n_layers,
@@ -61,14 +80,8 @@ class ArgusModel(nn.Module):
             "square_vocab_size": square_vocab_size,
             "use_detector": use_detector,
         }
-        self.use_detector = use_detector
-        self.vision_encoder = VisionEncoder(
-            model_name=vision_encoder_name,
-            frozen=frozen_vision,
-            embed_dim=vision_embed_dim,
-        )
         self.patch_pooling = PatchPoolingHead(
-            embed_dim=vision_embed_dim,
+            embed_dim=resolved_embed_dim,
             pooling_type=pooling_type,
             square_size=square_pool_size,
         )
@@ -77,11 +90,11 @@ class ArgusModel(nn.Module):
             n_layers=temporal_n_layers,
             d_state=temporal_d_state,
             expand=temporal_expand,
-            input_dim=vision_embed_dim,
+            input_dim=resolved_embed_dim,
         )
         self.move_head = MoveHead(hidden_dim=temporal_d_model, vocab_size=move_vocab_size)
         self.square_head = (
-            SquareHead(embed_dim=vision_embed_dim, num_classes=square_vocab_size)
+            SquareHead(embed_dim=resolved_embed_dim, num_classes=square_vocab_size)
             if square_head_enabled
             else None
         )
@@ -92,7 +105,7 @@ class ArgusModel(nn.Module):
                 num_heads=detector_num_heads,
                 num_decoder_layers=detector_num_layers,
                 identity_dim=identity_dim,
-                input_dim=vision_embed_dim,
+                input_dim=resolved_embed_dim,
             )
 
     def forward_single_board(

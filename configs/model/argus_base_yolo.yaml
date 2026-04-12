@@ -1,10 +1,12 @@
-name: argus_base
+name: argus_base_yolo
 vision_encoder:
-  type: dinov2
-  model_name: facebook/dinov2-base
+  type: yolo
+  model_name: weights/yolo_base/yolo11n.pt
   frozen: true
   unfreeze_last_n: 0
-  embed_dim: 768
+  embed_dim: null
+  feature_layer_indices: [16, 19, 22]
+  output_grid_size: 14
 temporal:
   type: mamba2
   d_model: 512

@@ -1,5 +1,6 @@
 name: argus_small
 vision_encoder:
+  type: dinov2
   model_name: facebook/dinov2-small
   frozen: true
   unfreeze_last_n: 0

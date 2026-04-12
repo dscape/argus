@@ -136,12 +136,17 @@ def main(cfg: DictConfig) -> None:
         pin_memory=True,
     )
 
+    vision_encoder_cfg = cfg.model.vision_encoder
     pooling_cfg = cfg.model.get("pooling", {})
     square_head_cfg = cfg.model.get("square_head", {})
+    feature_layer_indices = vision_encoder_cfg.get("feature_layer_indices")
     model = ArgusModel(
-        vision_encoder_name=cfg.model.vision_encoder.model_name,
-        vision_embed_dim=cfg.model.vision_encoder.embed_dim,
-        frozen_vision=cfg.model.vision_encoder.frozen,
+        vision_encoder_name=vision_encoder_cfg.model_name,
+        vision_encoder_type=vision_encoder_cfg.get("type", "dinov2"),
+        vision_embed_dim=vision_encoder_cfg.get("embed_dim"),
+        vision_feature_layer_indices=list(feature_layer_indices) if feature_layer_indices else None,
+        vision_output_grid_size=vision_encoder_cfg.get("output_grid_size", 14),
+        frozen_vision=vision_encoder_cfg.frozen,
         temporal_d_model=cfg.model.temporal.d_model,
         temporal_n_layers=cfg.model.temporal.n_layers,
         temporal_d_state=cfg.model.temporal.d_state,
@@ -154,7 +159,7 @@ def main(cfg: DictConfig) -> None:
         use_detector=False,
     )
 
-    unfreeze_last_n = int(cfg.model.vision_encoder.get("unfreeze_last_n", 0))
+    unfreeze_last_n = int(vision_encoder_cfg.get("unfreeze_last_n", 0))
     if unfreeze_last_n > 0:
         model.vision_encoder.unfreeze_last_n_layers(unfreeze_last_n)
         logger.info("Unfroze last %d vision encoder layer(s)", unfreeze_last_n)
