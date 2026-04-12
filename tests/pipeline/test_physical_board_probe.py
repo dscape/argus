@@ -10,3 +10,11 @@ def test_dino_patches_to_square_tokens_pools_16x16_grid_into_64_tokens() -> None
     square_tokens = dino_patches_to_square_tokens(patch_tokens)
 
     assert square_tokens.shape == (1, 64, 2)
+
+
+def test_dino_patches_to_square_tokens_accepts_plain_16x16_grid() -> None:
+    patch_tokens = torch.arange(16 * 16 * 2, dtype=torch.float32).reshape(1, 16 * 16, 2)
+
+    square_tokens = dino_patches_to_square_tokens(patch_tokens)
+
+    assert square_tokens.shape == (1, 64, 2)

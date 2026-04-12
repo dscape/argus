@@ -26,19 +26,35 @@ class PhysicalBoardStateProbe(nn.Module):
 
 
 def dino_patches_to_square_tokens(patch_tokens: torch.Tensor) -> torch.Tensor:
-    """Pool frozen DINO patch tokens into 8x8 square tokens."""
+    """Pool patch tokens into 8x8 square tokens.
+
+    Accepts either DINO-style tokens with a leading CLS token or plain square
+    grids such as the YOLO-derived frontend.
+    """
     if patch_tokens.ndim != 3:
         raise ValueError(f"Expected (B, N, D) patch tokens, got {tuple(patch_tokens.shape)}")
-    tokens = patch_tokens[:, 1:, :]
-    batch_size, patch_count, embed_dim = tokens.shape
-    grid_size = int(patch_count ** 0.5)
-    if grid_size * grid_size != patch_count:
-        raise ValueError(f"Patch count {patch_count} is not a square grid")
+
+    token_count = patch_tokens.shape[1]
+    cls_grid_size = int((token_count - 1) ** 0.5)
+    plain_grid_size = int(token_count**0.5)
+
+    if cls_grid_size * cls_grid_size == token_count - 1:
+        tokens = patch_tokens[:, 1:, :]
+        grid_size = cls_grid_size
+    elif plain_grid_size * plain_grid_size == token_count:
+        tokens = patch_tokens
+        grid_size = plain_grid_size
+    else:
+        raise ValueError(
+            f"Token count {token_count} is neither a square grid nor a square grid plus CLS"
+        )
+
     if grid_size % 8 != 0:
         raise ValueError(
             f"Patch grid {grid_size}x{grid_size} cannot map cleanly to 8x8 squares"
         )
 
+    batch_size, patch_count, embed_dim = tokens.shape
     patches_per_square = grid_size // 8
     reshaped = tokens.reshape(batch_size, grid_size, grid_size, embed_dim)
     square_tokens = reshaped.reshape(

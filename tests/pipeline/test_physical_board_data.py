@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import random
+
 import cv2
 import numpy as np
 import torch
+from PIL import Image
 from pipeline.physical.board_data import (
     INPUT_SIZE,
     PhysicalEvalBoardDataset,
     PhysicalEvalBoardRow,
     PhysicalSyntheticBoardDataset,
+    _apply_piece_rectification_artifacts,
+    augment_physical_board_image,
     preprocess_board_image,
 )
 
@@ -29,6 +34,29 @@ def test_physical_synthetic_board_dataset_returns_board_and_targets() -> None:
 
     assert image.shape == (3, 64, 64)
     assert targets.shape == (64,)
+
+
+def test_augment_physical_board_image_preserves_shape_and_dtype() -> None:
+    image = np.full((64, 64, 3), 127, dtype=np.uint8)
+
+    augmented = augment_physical_board_image(image, random.Random(7))
+
+    assert augmented.shape == image.shape
+    assert augmented.dtype == np.uint8
+
+
+def test_apply_piece_rectification_artifacts_preserves_rgba_shape() -> None:
+    piece_layer = np.zeros((64, 64, 4), dtype=np.uint8)
+    piece_layer[16:48, 28:36, :3] = 255
+    piece_layer[16:48, 28:36, 3] = 255
+
+    distorted = _apply_piece_rectification_artifacts(
+        Image.fromarray(piece_layer, "RGBA"),
+        random.Random(7),
+    )
+
+    assert distorted.size == (64, 64)
+    assert np.array(distorted).shape == piece_layer.shape
 
 
 def test_physical_eval_board_dataset_loads_rectified_boards(tmp_path) -> None:

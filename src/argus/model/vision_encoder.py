@@ -190,8 +190,6 @@ class YoloBackbone(nn.Module):
         target = self.output_grid_size
         if height == target and width == target:
             return feature_map
-        if height > target or width > target:
-            return F.adaptive_avg_pool2d(feature_map, (target, target))
         return F.interpolate(
             feature_map,
             size=(target, target),

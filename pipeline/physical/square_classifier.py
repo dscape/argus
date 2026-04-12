@@ -112,8 +112,7 @@ def _get_runtime_model(*, device: str) -> tuple[VisionEncoder, PhysicalSquareLin
         return _cached_model
 
     checkpoint = load_probe_checkpoint(weights_path)
-    model_name = str(checkpoint.get("model_name", "facebook/dinov2-base"))
-    encoder = VisionEncoder(model_name=model_name, frozen=True).to(torch.device(device))
+    encoder = VisionEncoder(**_encoder_kwargs_from_checkpoint(checkpoint)).to(torch.device(device))
     probe = PhysicalSquareLinearProbe(encoder.embed_dim)
     probe.load_state_dict(checkpoint["state_dict"])
     probe.to(torch.device(device))
@@ -121,6 +120,25 @@ def _get_runtime_model(*, device: str) -> tuple[VisionEncoder, PhysicalSquareLin
     _cached_model = (encoder, probe)
     _cached_weights_path = weights_path
     return _cached_model
+
+
+def _encoder_kwargs_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:
+    metadata = checkpoint.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    raw_feature_layer_indices = metadata.get("feature_layer_indices")
+    feature_layer_indices = None
+    if isinstance(raw_feature_layer_indices, list):
+        feature_layer_indices = [int(index) for index in raw_feature_layer_indices]
+
+    return {
+        "model_name": str(checkpoint.get("model_name", "facebook/dinov2-base")),
+        "frozen": True,
+        "encoder_type": str(metadata.get("encoder_type", "dinov2")),
+        "feature_layer_indices": feature_layer_indices,
+        "output_grid_size": int(metadata.get("output_grid_size", 14)),
+    }
 
 
 def _resolve_weights_path() -> Path:

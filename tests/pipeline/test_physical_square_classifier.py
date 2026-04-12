@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import numpy as np
-from pipeline.physical.square_classifier import _class_ids_to_board_fen
+from pipeline.physical.square_classifier import (
+    _class_ids_to_board_fen,
+    _encoder_kwargs_from_checkpoint,
+)
 
 
 def test_class_ids_to_board_fen_encodes_empty_runs() -> None:
@@ -12,6 +15,27 @@ def test_class_ids_to_board_fen_encodes_empty_runs() -> None:
     fen = _class_ids_to_board_fen(class_ids)
 
     assert fen == "r7/8/8/8/8/8/8/7R"
+
+
+def test_encoder_kwargs_from_checkpoint_reads_yolo_metadata() -> None:
+    kwargs = _encoder_kwargs_from_checkpoint(
+        {
+            "model_name": "weights/yolo_base/yolo11n.pt",
+            "metadata": {
+                "encoder_type": "yolo",
+                "feature_layer_indices": [16, 19, 22],
+                "output_grid_size": 16,
+            },
+        }
+    )
+
+    assert kwargs == {
+        "model_name": "weights/yolo_base/yolo11n.pt",
+        "frozen": True,
+        "encoder_type": "yolo",
+        "feature_layer_indices": [16, 19, 22],
+        "output_grid_size": 16,
+    }
 
 
 def test_read_fen_from_frame_returns_none_without_weights(monkeypatch) -> None:

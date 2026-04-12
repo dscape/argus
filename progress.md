@@ -60,6 +60,89 @@
   - perspective-rendered synthetic boards from `argus.datagen.synth` were an even worse match when used directly, because the real eval boards are already **rectified** while those synthetic images are not.
 - Updated assessment:
   - the next per-square step is still within the original objective, but it needs a better synthetic source: **rectified physical-board renders with realistic oblique piece appearance**, not top-down boards and not unrectified camera renders.
+- Extended the probe training scripts to support Karpathy-style diagnostics and a DINO-vs-YOLO comparison:
+  - both `scripts/train_physical_board_probe.py` and `scripts/train_physical_square_classifier.py` now support `--encoder-type {dinov2,yolo}`
+  - board probe training now supports `--synthetic-source`, `--augment`, `--class-weighting`, train-metric reporting, and saved sample boards under each run directory
+  - square probe checkpoints now store encoder metadata so runtime loading is not hard-coded to DINO
+- Fixed the YOLO vision frontend on MPS by replacing the downsample path in `src/argus/model/vision_encoder.py` with bilinear resize instead of MPS-incompatible adaptive pooling.
+- Ran an autoresearch-style logged board-probe sweep and saved the consolidated table to:
+  - `outputs/2026-04-12/physical_board_probe_sweep/results.tsv`
+  - `outputs/2026-04-12/physical_board_probe_sweep/summary.md`
+- Karpathy-style board-probe findings on rectified top-down synthetic boards:
+  - tiny-set overfit checks:
+    - DINO: `outputs/2026-04-12/physical_board_probe_overfit_dino_topdown/`
+      - train square accuracy: `0.9727`
+      - real held-out square accuracy: `0.2855`
+      - real held-out non-empty accuracy: `0.3106`
+    - YOLO: `outputs/2026-04-12/physical_board_probe_overfit_yolo_topdown/`
+      - train square accuracy: `0.8184`
+      - real held-out square accuracy: `0.6376`
+      - real held-out non-empty accuracy: `0.0069`
+      - interpretation: YOLO is mostly collapsing to `empty`
+  - honest no-augmentation runs:
+    - DINO: `outputs/2026-04-12/physical_board_probe_dino_topdown_noaug/`
+      - train square accuracy: `0.7847`
+      - real held-out square accuracy: `0.2057`
+      - real held-out non-empty accuracy: `0.2326`
+      - real held-out macro F1: `0.0580`
+    - YOLO: `outputs/2026-04-12/physical_board_probe_yolo_topdown_noaug/`
+      - train square accuracy: `0.5450`
+      - real held-out square accuracy: `0.6046`
+      - real held-out non-empty accuracy: `0.0097`
+      - real held-out macro F1: `0.0661`
+      - interpretation: overall accuracy is misleading because the model predicts empties extremely often
+  - one-complexity-at-a-time follow-ups:
+    - DINO + augmentation: `outputs/2026-04-12/physical_board_probe_dino_topdown_aug/`
+      - real held-out square accuracy: `0.3870`
+      - real held-out non-empty accuracy: `0.2214`
+      - real held-out macro F1: `0.0869`
+    - YOLO + class weighting: `outputs/2026-04-12/physical_board_probe_yolo_topdown_noaug_weighted/`
+      - real held-out square accuracy: `0.2358`
+      - real held-out non-empty accuracy: `0.1529`
+      - real held-out macro F1: `0.0965`
+    - YOLO + class weighting + augmentation: `outputs/2026-04-12/physical_board_probe_yolo_topdown_aug_weighted/`
+      - real held-out square accuracy: `0.2390`
+      - real held-out non-empty accuracy: `0.1673`
+      - real held-out macro F1: `0.0947`
+- Current interpretation of the DINO-vs-YOLO sweep:
+  - DINO is better at recovering non-empty piece signal from synthetic top-down boards.
+  - YOLO features are much more prone to the empty-square collapse unless class weighting is added.
+  - Even the best run is still far below a usable physical square reader.
+- Visual inspection result from the saved sample boards:
+  - held-out real rectified boards contain strong directional blur / resampling streaks on pieces that the current synthetic top-down generator does not reproduce.
+  - this pointed to the next synthetic-data change: add motion/anisotropic blur and rectification-like resampling artifacts before trying more model complexity.
+- Implemented that synthetic-data change in `pipeline/physical/board_data.py`:
+  - top-down synthetic boards now render at higher internal resolution when augmentation is enabled
+  - elevated piece layers get their own strip-wise affine distortion before compositing, so the board plane stays cleaner while pieces pick up rectification-like smear
+  - full-board augmentation now also adds anisotropic down/up-sampling and directional blur
+- Re-ran the board-context sweep after the artifact update:
+  - DINO + new artifact-heavy augmentation: `outputs/2026-04-12/physical_board_probe_dino_topdown_aug_v2/`
+    - real held-out square accuracy: `0.4108`
+    - real held-out non-empty accuracy: `0.2327`
+    - real held-out macro F1: `0.0964`
+  - DINO + new artifact-heavy augmentation + class weighting: `outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_v2/`
+    - real held-out square accuracy: `0.3151`
+    - real held-out non-empty accuracy: `0.2466`
+    - real held-out macro F1: `0.1064`
+    - this is the best current run on the metrics that matter most for actual board reading
+  - YOLO + new artifact-heavy augmentation + class weighting: `outputs/2026-04-12/physical_board_probe_yolo_topdown_aug_weighted_v2/`
+    - real held-out square accuracy: `0.1804`
+    - real held-out non-empty accuracy: `0.1772`
+    - real held-out macro F1: `0.0898`
+- Added an input-resolution check to the board probe script (`--input-size`) and tested a larger DINO run:
+  - `outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_336/`
+  - real held-out non-empty accuracy: `0.2207`
+  - real held-out macro F1: `0.0812`
+  - conclusion: increasing resolution alone did not fix the transfer gap on this synthetic source
+- Added an autoresearch-style sweep harness for tomorrow/overnight iteration:
+  - `scripts/sweep_physical_board_probe.py`
+  - logs experiment rows to `results.tsv` and maintains a short summary file
+  - default experiment set encodes the current DINO-vs-YOLO / augmentation / weighting / resolution checks in one place
+- Current assessment after the new artifact pass:
+  - the synthetic-data fix helped, but only modestly
+  - DINO still beats YOLO on non-empty piece signal and macro-F1
+  - the physical per-square reader is still not good enough for end-to-end use
+  - the next useful step is likely better 3D-aware rectified-piece distortion or real non-held-out labeled physical boards, not another backbone swap
 
 ### Validation
 - Passed: `make typecheck`

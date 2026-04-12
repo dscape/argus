@@ -218,6 +218,7 @@ def render_random_physical_board(
         if move in board.legal_moves:
             board.push(move)
 
+    render_size = size * 2 if augment else size
     theme = select_random_theme(rng).with_perturbation(rng)
     material = select_random_material(rng).with_perturbation(rng)
     light_dir = (
@@ -225,16 +226,18 @@ def render_random_physical_board(
         rng.uniform(-0.7, -0.3),
         rng.uniform(0.5, 1.0),
     )
-    board_rgb = render_textured_board(size=size, theme=theme, flipped=False, rng=rng)
+    board_rgb = render_textured_board(size=render_size, theme=theme, flipped=False, rng=rng)
     pieces_rgba = render_pieces_layer(
         board,
-        size=size,
+        size=render_size,
         flipped=False,
         material=material,
         light_dir=light_dir,
         cache=cache,
         rng=rng,
     )
+    if augment:
+        pieces_rgba = _apply_piece_rectification_artifacts(pieces_rgba, rng)
     board_pil = Image.fromarray(board_rgb)
     board_pil.paste(pieces_rgba, (0, 0), pieces_rgba)
     image_bgr = cv2.cvtColor(np.array(board_pil), cv2.COLOR_RGB2BGR)
@@ -245,27 +248,158 @@ def render_random_physical_board(
 
 
 def augment_physical_board_image(image_bgr: np.ndarray, rng: random.Random) -> np.ndarray:
-    """Apply photometric augmentation while preserving the rectified grid."""
-    image = image_bgr.astype(np.float32)
-    image = np.clip(image * rng.uniform(0.85, 1.15) + rng.uniform(-16.0, 16.0), 0, 255)
+    """Apply photometric and rectification-like artifacts to a rectified board."""
+    image = image_bgr.astype(np.uint8)
+
+    if rng.random() < 0.55:
+        image = _apply_resampling_artifacts(image, rng)
+
+    image_f = image.astype(np.float32)
+    image_f = np.clip(image_f * rng.uniform(0.85, 1.15) + rng.uniform(-16.0, 16.0), 0, 255)
+
+    if rng.random() < 0.25:
+        image_f = _apply_directional_blur(image_f.astype(np.uint8), rng).astype(np.float32)
 
     if rng.random() < 0.30:
         ksize = rng.choice([3, 5])
-        image = cv2.GaussianBlur(image.astype(np.uint8), (ksize, ksize), 0).astype(np.float32)
+        image_f = cv2.GaussianBlur(image_f.astype(np.uint8), (ksize, ksize), 0).astype(np.float32)
 
     if rng.random() < 0.25:
         quality = rng.randint(60, 92)
         _, encoded = cv2.imencode(
             ".jpg",
-            image.astype(np.uint8),
+            image_f.astype(np.uint8),
             [cv2.IMWRITE_JPEG_QUALITY, quality],
         )
         decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
         if decoded is not None:
-            image = decoded.astype(np.float32)
+            image_f = decoded.astype(np.float32)
 
     if rng.random() < 0.20:
-        shadow = np.linspace(rng.uniform(0.7, 1.0), rng.uniform(1.0, 1.1), image.shape[0])
-        image *= shadow[:, None, None]
+        shadow = np.linspace(rng.uniform(0.7, 1.0), rng.uniform(1.0, 1.1), image_f.shape[0])
+        image_f *= shadow[:, None, None]
 
-    return np.clip(image, 0, 255).astype(np.uint8)
+    return np.clip(image_f, 0, 255).astype(np.uint8)
+
+
+def _apply_piece_rectification_artifacts(
+    pieces_rgba: Image.Image,
+    rng: random.Random,
+) -> Image.Image:
+    """Approximate board-plane rectification artifacts on elevated pieces only."""
+    rgba = np.array(pieces_rgba, dtype=np.uint8)
+    height, width = rgba.shape[:2]
+    square_size = height // 8
+    far_to_near = rng.random() < 0.5
+    distorted = np.zeros_like(rgba)
+
+    far_scale_x = rng.uniform(1.15, 1.65)
+    near_scale_x = rng.uniform(0.95, 1.20)
+    far_shear_x = rng.uniform(-0.18, 0.18)
+    near_shear_x = rng.uniform(-0.05, 0.05)
+    far_shift_x = rng.uniform(-0.30, 0.30) * square_size
+    near_shift_x = rng.uniform(-0.08, 0.08) * square_size
+    far_shift_y = rng.uniform(-0.12, 0.03) * square_size
+    near_shift_y = rng.uniform(-0.03, 0.03) * square_size
+
+    for row in range(8):
+        y1 = row * square_size
+        y2 = y1 + square_size
+        strip = rgba[y1:y2]
+        t = row / 7.0
+        if not far_to_near:
+            t = 1.0 - t
+
+        matrix = _affine_matrix_about_center(
+            width,
+            strip.shape[0],
+            scale_x=_lerp(far_scale_x, near_scale_x, t),
+            shear_x=_lerp(far_shear_x, near_shear_x, t),
+            shift_x=_lerp(far_shift_x, near_shift_x, t),
+            shift_y=_lerp(far_shift_y, near_shift_y, t),
+        )
+        distorted[y1:y2] = cv2.warpAffine(
+            strip,
+            matrix,
+            (width, strip.shape[0]),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0, 0),
+        )
+
+    if rng.random() < 0.80:
+        distorted = _apply_directional_blur(distorted, rng, max_angle_degrees=18.0)
+
+    mix = rng.uniform(0.65, 0.90)
+    blended = np.clip(
+        rgba.astype(np.float32) * (1.0 - mix) + distorted.astype(np.float32) * mix,
+        0,
+        255,
+    ).astype(np.uint8)
+    return Image.fromarray(blended, "RGBA")
+
+
+def _apply_resampling_artifacts(image: np.ndarray, rng: random.Random) -> np.ndarray:
+    """Introduce anisotropic down/up-sampling similar to broadcast rectification."""
+    height, width = image.shape[:2]
+    down_width = max(16, int(width * rng.uniform(0.55, 0.85)))
+    down_height = max(16, int(height * rng.uniform(0.65, 0.95)))
+    downsampled = cv2.resize(
+        image,
+        (down_width, down_height),
+        interpolation=rng.choice([cv2.INTER_AREA, cv2.INTER_LINEAR]),
+    )
+    return cv2.resize(
+        downsampled,
+        (width, height),
+        interpolation=rng.choice([cv2.INTER_LINEAR, cv2.INTER_CUBIC]),
+    )
+
+
+def _apply_directional_blur(
+    image: np.ndarray,
+    rng: random.Random,
+    *,
+    max_angle_degrees: float = 12.0,
+) -> np.ndarray:
+    """Apply a mostly horizontal line blur to mimic motion or rectification smear."""
+    kernel_size = rng.choice([3, 5, 7, 9])
+    angle = rng.uniform(-max_angle_degrees, max_angle_degrees)
+    kernel = np.zeros((kernel_size, kernel_size), dtype=np.float32)
+    kernel[kernel_size // 2, :] = 1.0
+    rotation = cv2.getRotationMatrix2D(
+        ((kernel_size - 1) / 2.0, (kernel_size - 1) / 2.0),
+        angle,
+        1.0,
+    )
+    kernel = cv2.warpAffine(kernel, rotation, (kernel_size, kernel_size))
+    kernel /= max(float(kernel.sum()), 1e-6)
+
+    blurred = cv2.filter2D(image.astype(np.float32), -1, kernel)
+    mix = rng.uniform(0.35, 0.75)
+    return np.clip(image.astype(np.float32) * (1.0 - mix) + blurred * mix, 0, 255).astype(
+        np.uint8
+    )
+
+
+def _affine_matrix_about_center(
+    width: int,
+    height: int,
+    *,
+    scale_x: float = 1.0,
+    scale_y: float = 1.0,
+    shear_x: float = 0.0,
+    shift_x: float = 0.0,
+    shift_y: float = 0.0,
+) -> np.ndarray:
+    center = np.array([width / 2.0, height / 2.0], dtype=np.float32)
+    linear = np.array(
+        [[scale_x, shear_x], [0.0, scale_y]],
+        dtype=np.float32,
+    )
+    translation = center - linear @ center + np.array([shift_x, shift_y], dtype=np.float32)
+    return np.concatenate([linear, translation[:, None]], axis=1)
+
+
+def _lerp(start: float, end: float, t: float) -> float:
+    return start + (end - start) * t

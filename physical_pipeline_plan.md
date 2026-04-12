@@ -121,7 +121,17 @@ Current snapshot on this branch:
 - First baseline: frozen DINOv2 features on square crops + linear probe / shallow MLP.
 - Current result from the independent square-crop baseline on this branch: it transfers very poorly from synthetic physical square crops to held-out real broadcast squares, so it should be treated as a failed diagnostic rather than a deployable reader.
 - Board context helps somewhat, but the synthetic source also has to match the target: the real eval boards are **rectified** physical boards, so the next attempt needs rectified synthetic renders with realistic oblique 3D piece appearance.
-- Next attempt should therefore use board context over the full rectified board instead of classifying each square independently.
+- A later DINO-vs-YOLO sweep on rectified top-down synthetic boards confirmed that backbone choice is secondary to the domain gap:
+  - DINO preserves more non-empty piece signal.
+  - YOLO can look better on overall square accuracy only by collapsing toward `empty`, so non-empty accuracy and macro-F1 must remain primary diagnostics.
+- Saved sample boards from the sweep show an additional mismatch that was easy to miss from metrics alone: real rectified boards often contain strong directional blur / resampling streaks on pieces.
+- A follow-up artifact pass that added higher-resolution renders, piece-only strip-wise distortion, anisotropic resampling, and directional blur improved transfer somewhat, but the task is still far from solved.
+  - Current best run: `outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_v2/`
+  - held-out real square accuracy: `0.3151`
+  - held-out real non-empty accuracy: `0.2466`
+  - held-out real macro F1: `0.1064`
+- A higher-input-size DINO check at `336×336` did not help on the current synthetic source, so resolution alone is not the bottleneck.
+- Next attempt should therefore keep board context, but improve the synthetic rectified board generator with better 3D-aware rectified-piece distortion or add non-held-out real labeled boards before adding more model complexity.
 - Empty squares will dominate; success is not allowed to hide behind empty-square accuracy.
 - Synthetic physical renders are training fuel, not validation data.
 
@@ -170,9 +180,12 @@ Current snapshot on this branch:
 ## Diagnostic checklist per model step
 
 - Inspect raw inputs and labels by hand.
+- Save sample images from both synthetic and held-out real datasets into `outputs/` so domain mismatch is visible, not just inferred from metrics.
 - Compute trivial baselines first.
 - Overfit one tiny batch.
 - Disable augmentation for the first honest run.
+- Compare DINO vs YOLO on the same data before assuming the issue is the backbone.
 - Track both train and held-out metrics from the start.
+- Never trust overall square accuracy without non-empty accuracy and macro-F1.
 - Save failure cases and confusion matrices into `outputs/`.
 - Do not move to the next step while the current step is still information-starved.
