@@ -15,7 +15,7 @@ Physical-board vision is a separate problem from 2D overlay reading. Overlay mod
 
 - [x] Directory split started: `pipeline/physical/`, `pipeline/shared/`, local folder-level `AGENTS.md`
 - [x] Shared `BoardObservation` contract defined
-- [ ] Held-out physical square eval set populated with a few hundred manually labeled real square crops
+- [x] Held-out physical square eval set populated with manually labeled real square crops
 - [ ] Frame classification trained and validated
 - [ ] Physical board localization trained and validated
 - [ ] Physical board rectification/corner refinement trained and validated
@@ -37,6 +37,13 @@ Physical-board vision is a separate problem from 2D overlay reading. Overlay mod
 | Secondary | Store per-square confidence, not just whole-board confidence, so fusion can reason about uncertainty locally |
 
 ### Spec 0B: Held-out physical square eval set
+
+Current snapshot on this branch:
+- `846` annotated rectified board frames
+- `54,142` labeled square crops
+- `4` held-out source videos
+- held-out source video ids are now excluded structurally by `python -m pipeline physical-split-clips`
+
 
 | Field | Value |
 | --- | --- |
@@ -151,7 +158,8 @@ Physical-board vision is a separate problem from 2D overlay reading. Overlay mod
 
 1. Finish the structural split and keep the invariant enforced in code review.
 2. Populate the held-out physical eval set via dev-tools; no model training before this exists.
-3. Train the simplest possible frame classifier baseline.
+3. Export physical train/val data with `python -m pipeline physical-split-clips` so held-out eval source videos are excluded automatically.
+4. Train the simplest possible frame classifier baseline.
 4. Train board detection, then corner refinement.
 5. Train per-square classification on rectified physical boards.
 6. Re-run temporal fusion with `BoardObservation` inputs from the physical reader.

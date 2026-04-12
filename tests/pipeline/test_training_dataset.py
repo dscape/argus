@@ -64,3 +64,23 @@ def test_export_training_dataset_keeps_single_video_in_train_when_split_requeste
 
     assert len(manifest["splits"]["train"]) == 1
     assert manifest["splits"]["val"] == []
+
+
+def test_export_training_dataset_excludes_held_out_source_videos(tmp_path: Path) -> None:
+    clips_dir = tmp_path / "clips"
+    clips_dir.mkdir()
+    _write_clip(clips_dir / "clip_overlay_2wWUKmCBr6A_clip5_0.pt")
+    _write_clip(clips_dir / "clip_overlay_7RaBQag34Hk_clip26_0.pt")
+
+    output_dir = tmp_path / "dataset"
+    manifest = export_training_dataset(
+        clips_dir,
+        output_dir,
+        exclude_source_video_ids={"2wWUKmCBr6A"},
+    )
+
+    assert manifest["excluded_source_video_ids"] == ["2wWUKmCBr6A"]
+    assert manifest["excluded_clip_count"] == 1
+    assert {
+        entry["source_video_id"] for split in manifest["splits"].values() for entry in split
+    } == {"7RaBQag34Hk"}

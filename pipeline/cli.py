@@ -187,6 +187,29 @@ def cmd_split_clips(args):
     print(f"  Manifest:    {args.out_dir}/manifest.json")
 
 
+def cmd_physical_split_clips(args):
+    """Prepare a physical train/val dataset while excluding held-out eval videos."""
+    from pipeline.physical.training_dataset import export_physical_training_dataset
+
+    manifest = export_physical_training_dataset(
+        args.clips_dir,
+        args.out_dir,
+        val_fraction=args.val_fraction,
+        seed=args.seed,
+        link_mode="copy" if args.copy else "hardlink",
+    )
+    train_count = len(manifest["splits"]["train"])
+    val_count = len(manifest["splits"]["val"])
+    excluded_videos = manifest.get("excluded_source_video_ids", [])
+    excluded_clip_count = int(manifest.get("excluded_clip_count", 0))
+    print(f"Prepared physical dataset at {args.out_dir}")
+    print(f"  Train clips:         {train_count}")
+    print(f"  Val clips:           {val_count}")
+    print(f"  Excluded videos:     {len(excluded_videos)}")
+    print(f"  Excluded clip count: {excluded_clip_count}")
+    print(f"  Manifest:            {args.out_dir}/manifest.json")
+
+
 def _resolve_project_path(path: str):
     from pathlib import Path
 
@@ -1501,6 +1524,41 @@ def main():
         help="Copy files instead of hard-linking them",
     )
 
+    # physical-split-clips
+    p = subparsers.add_parser(
+        "physical-split-clips",
+        help="Prepare a physical train/val split while excluding held-out eval videos",
+    )
+    p.add_argument(
+        "--clips-dir",
+        type=str,
+        default="data/argus/train_real",
+        help="Directory containing generated clip_*.pt files",
+    )
+    p.add_argument(
+        "--out-dir",
+        type=str,
+        default="data/physical/training_dataset",
+        help="Output directory containing train/ and val/ splits",
+    )
+    p.add_argument(
+        "--val-fraction",
+        type=float,
+        default=0.2,
+        help="Fraction of source videos assigned to validation",
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for the video-level split",
+    )
+    p.add_argument(
+        "--copy",
+        action="store_true",
+        help="Copy files instead of hard-linking them",
+    )
+
     # real-data-overview
     p = subparsers.add_parser(
         "real-data-overview",
@@ -2067,6 +2125,7 @@ def main():
         "calibrate": cmd_calibrate,
         "generate-clips": cmd_generate_clips,
         "split-clips": cmd_split_clips,
+        "physical-split-clips": cmd_physical_split_clips,
         "real-data-overview": cmd_real_data_overview,
         "real-data-process": cmd_real_data_process,
         "real-data-audit": cmd_real_data_audit,

@@ -98,6 +98,39 @@ def load_board_annotation(clip_path: str, frame_index: int) -> dict[str, Any] | 
     return None
 
 
+def list_board_annotations(clip_path: str) -> list[dict[str, Any]]:
+    """Return all saved board annotations for one clip, sorted by frame."""
+    records = [
+        record
+        for record in _load_jsonl(BOARD_ANNOTATIONS_PATH)
+        if record.get("clip_path") == clip_path
+    ]
+    return sorted(records, key=lambda record: int(record.get("frame_index", -1)))
+
+
+def delete_board_annotation(clip_path: str, frame_index: int) -> bool:
+    """Delete a saved board annotation and its associated files."""
+    annotation_id = f"{Path(clip_path).stem}_frame{frame_index:04d}"
+
+    board_records = _load_jsonl(BOARD_ANNOTATIONS_PATH)
+    filtered = [r for r in board_records if r.get("annotation_id") != annotation_id]
+    if len(filtered) == len(board_records):
+        return False
+
+    _upsert_jsonl(BOARD_ANNOTATIONS_PATH, filtered)
+    _upsert_jsonl(
+        SQUARE_MANIFEST_PATH,
+        [r for r in _load_jsonl(SQUARE_MANIFEST_PATH) if r.get("annotation_id") != annotation_id],
+    )
+
+    board_path = BOARDS_DIR / f"{annotation_id}.jpg"
+    board_path.unlink(missing_ok=True)
+    for crop_path in SQUARES_DIR.glob(f"{annotation_id}_*.jpg"):
+        crop_path.unlink(missing_ok=True)
+
+    return True
+
+
 def save_board_annotation(
     image_rgb: np.ndarray,
     *,
@@ -184,16 +217,41 @@ def save_board_annotation(
     return annotation_record
 
 
+def get_saved_frame_counts_by_clip() -> dict[str, int]:
+    """Return the number of uniquely annotated frames for each clip."""
+    frame_indices_by_clip: dict[str, set[int]] = {}
+    for record in _load_jsonl(BOARD_ANNOTATIONS_PATH):
+        clip_path = record.get("clip_path")
+        if not isinstance(clip_path, str):
+            continue
+        try:
+            frame_index = int(record.get("frame_index", -1))
+        except (TypeError, ValueError):
+            continue
+        frame_indices_by_clip.setdefault(clip_path, set()).add(frame_index)
+
+    return {
+        clip_path: len(frame_indices)
+        for clip_path, frame_indices in frame_indices_by_clip.items()
+    }
+
+
+def get_held_out_source_video_ids() -> list[str]:
+    """Return sorted source video ids represented in the held-out eval set."""
+    source_video_ids = {
+        str(record["source_video_id"])
+        for record in _load_jsonl(BOARD_ANNOTATIONS_PATH)
+        if record.get("source_video_id")
+    }
+    return sorted(source_video_ids)
+
+
 def get_annotation_summary() -> dict[str, Any]:
     """Return aggregate counts for the held-out physical eval set."""
     board_records = _load_jsonl(BOARD_ANNOTATIONS_PATH)
     square_records = _load_jsonl(SQUARE_MANIFEST_PATH)
     class_counts = Counter(record["label_name"] for record in square_records if "label_name" in record)
-    source_videos = {
-        record.get("source_video_id")
-        for record in square_records
-        if record.get("source_video_id")
-    }
+    source_video_ids = get_held_out_source_video_ids()
 
     recent_annotations = sorted(
         board_records,
@@ -205,7 +263,8 @@ def get_annotation_summary() -> dict[str, Any]:
         "dataset_root": str(DATASET_ROOT.relative_to(_PROJECT_ROOT)),
         "board_annotation_count": len(board_records),
         "square_crop_count": len(square_records),
-        "source_video_count": len(source_videos),
+        "source_video_count": len(source_video_ids),
+        "source_video_ids": source_video_ids,
         "class_counts": {name: int(class_counts.get(name, 0)) for name in SQUARE_CLASS_NAMES},
         "recent_annotations": recent_annotations,
     }

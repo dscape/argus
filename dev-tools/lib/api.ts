@@ -3,6 +3,7 @@ import type {
   CalibrationEntry,
   ClipAnnotationResponse,
   ClipInspectResponse,
+  DetectedMove,
   VideoSession,
   FrameOverlayResponse,
   VideoMoveDetectionResponse,
@@ -1468,6 +1469,9 @@ export interface PhysicalEvalClip {
   modified_at: string;
   source_video_id: string | null;
   clip_id: number | null;
+  annotated_frame_count: number;
+  num_frames: number | null;
+  fully_annotated: boolean;
 }
 
 export interface PhysicalEvalAnnotation {
@@ -1490,6 +1494,15 @@ export interface PhysicalEvalSummary {
   source_video_count: number;
   class_counts: Record<string, number>;
   recent_annotations: PhysicalEvalAnnotation[];
+}
+
+export interface PhysicalEvalMoveCorrections {
+  frame_replay_fens: Array<string | null>;
+  moves: DetectedMove[];
+  total_moves: number;
+  replay_valid: boolean;
+  replay_error: string | null;
+  manual_move_frames: number[];
 }
 
 export async function listPhysicalEvalClips(
@@ -1517,6 +1530,26 @@ export async function getPhysicalEvalAnnotation(
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   return data.annotation ?? null;
+}
+
+export async function deletePhysicalEvalAnnotation(
+  clipPath: string,
+  frameIndex: number,
+): Promise<{ summary: PhysicalEvalSummary }> {
+  const params = new URLSearchParams({ clip_path: clipPath, frame_index: String(frameIndex) });
+  const res = await fetch(`/api/physical-eval/annotation?${params}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPhysicalEvalMoveCorrections(
+  sessionId: string,
+  clipPath: string,
+): Promise<PhysicalEvalMoveCorrections> {
+  const params = new URLSearchParams({ session_id: sessionId, clip_path: clipPath });
+  const res = await fetch(`/api/physical-eval/corrections?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function rectifyPhysicalEvalFrame(body: {

@@ -53,6 +53,7 @@ export interface DetectedMove {
   side_to_move: "white" | "black" | null;
   fen_before: string | null;
   fen_after: string | null;
+  is_manual?: boolean;
 }
 
 export interface ClipInspectResponse {

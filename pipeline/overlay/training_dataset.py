@@ -21,6 +21,7 @@ def export_training_dataset(
     val_fraction: float = 0.2,
     seed: int = 42,
     link_mode: str = "hardlink",
+    exclude_source_video_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Export a video-disjoint train/val split from generated clip files."""
     clips_root = Path(clips_dir)
@@ -29,9 +30,20 @@ def export_training_dataset(
     if not clip_paths:
         raise ValueError(f"No clip files found in {clips_root}")
 
+    excluded_ids = set(exclude_source_video_ids or set())
     clips_by_video: dict[str, list[Path]] = defaultdict(list)
+    excluded_clips: list[Path] = []
     for clip_path in clip_paths:
-        clips_by_video[infer_source_video_id(clip_path)].append(clip_path)
+        source_video_id = infer_source_video_id(clip_path)
+        if source_video_id in excluded_ids:
+            excluded_clips.append(clip_path)
+            continue
+        clips_by_video[source_video_id].append(clip_path)
+
+    if not clips_by_video:
+        raise ValueError(
+            "All clip files were excluded by source video id; no training clips remain"
+        )
 
     video_ids = sorted(clips_by_video)
     rng = random.Random(seed)
@@ -65,6 +77,8 @@ def export_training_dataset(
         "seed": seed,
         "val_fraction": val_fraction,
         "link_mode": link_mode,
+        "excluded_source_video_ids": sorted(excluded_ids),
+        "excluded_clip_count": len(excluded_clips),
         "splits": {
             "train": train_entries,
             "val": val_entries,

@@ -1,6 +1,6 @@
 """Endpoints for building the held-out physical-board square eval set."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
@@ -48,6 +48,30 @@ async def get_frame_annotation(clip_path: str, frame_index: int):
             frame_index,
         )
     }
+
+
+@router.get("/corrections")
+async def get_move_corrections(session_id: str, clip_path: str):
+    try:
+        return await run_in_threadpool(
+            physical_eval_service.get_move_corrections,
+            session_id,
+            clip_path,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.delete("/annotation")
+async def delete_annotation(clip_path: str, frame_index: int):
+    summary = await run_in_threadpool(
+        physical_eval_service.delete_annotation,
+        clip_path,
+        frame_index,
+    )
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Annotation not found")
+    return {"summary": summary}
 
 
 @router.post("/rectify")
