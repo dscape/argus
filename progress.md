@@ -26,6 +26,41 @@
   - new command: `python -m pipeline physical-split-clips`
   - this excludes source video ids found in `data/physical/eval/board_annotations.jsonl` from the exported physical train/val split.
 
+### Physical square-classification baseline
+- Added dedicated physical square-classification code under:
+  - `pipeline/physical/square_data.py`
+  - `pipeline/physical/square_probe.py`
+  - `pipeline/physical/square_classifier.py`
+  - `scripts/train_physical_square_classifier.py`
+- Added held-out exclusion-aware training split support via:
+  - `pipeline/physical/training_dataset.py`
+  - `python -m pipeline physical-split-clips`
+- Baseline report outputs:
+  - `outputs/2026-04-12/physical_square_probe_smoke/`
+  - `outputs/2026-04-12/physical_square_probe_baseline/`
+- First frozen-DINO square-crop linear-probe result (synthetic train -> held-out real eval subset):
+  - synthetic val accuracy: `0.5077`
+  - held-out real square accuracy: `0.0589`
+  - held-out real non-empty accuracy: `0.0534`
+  - held-out real macro F1: `0.0378`
+  - held-out real board exact match: `0.0176`
+- Conclusion:
+  - a frozen DINOv2 linear probe on independent physical square crops is not remotely good enough
+  - the next physical per-square attempt should use **board context** rather than treating every square independently
+- Added a board-context frozen DINO probe baseline under:
+  - `pipeline/physical/board_data.py`
+  - `pipeline/physical/board_probe.py`
+  - `scripts/train_physical_board_probe.py`
+- Board-context results:
+  - top-down synthetic board renders improved transfer over independent square crops but are still bad:
+    - `outputs/2026-04-12/physical_board_probe_large/`
+    - held-out real square accuracy: `0.2451`
+    - held-out real non-empty accuracy: `0.2355`
+    - held-out real macro F1: `0.0773`
+  - perspective-rendered synthetic boards from `argus.datagen.synth` were an even worse match when used directly, because the real eval boards are already **rectified** while those synthetic images are not.
+- Updated assessment:
+  - the next per-square step is still within the original objective, but it needs a better synthetic source: **rectified physical-board renders with realistic oblique piece appearance**, not top-down boards and not unrectified camera renders.
+
 ### Validation
 - Passed: `make typecheck`
 - Passed: `make lint`

@@ -11,7 +11,12 @@ import numpy as np
 class BoardLocalization:
     """Physical-board location in one frame."""
 
-    corners: tuple[tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]]
+    corners: tuple[
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+    ]
     confidence: float
 
 

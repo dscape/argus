@@ -1,0 +1,271 @@
+"""Datasets and rendering helpers for physical-board state probes."""
+
+from __future__ import annotations
+
+import json
+import random
+from dataclasses import dataclass
+from pathlib import Path
+
+import chess
+import cv2
+import numpy as np
+import torch
+from PIL import Image
+from torch.utils.data import Dataset
+
+from argus.chess.board_state import fen_to_square_targets
+from argus.data.pgn_sampler import sample_random_game
+from argus.datagen.board_themes import render_textured_board, select_random_theme
+from argus.datagen.piece_renderer import (
+    PieceRenderCache,
+    render_pieces_layer,
+    select_random_material,
+)
+from argus.datagen.synth import generate_dataset as generate_synthetic_clips
+from pipeline.shared import SQUARE_CLASS_NAMES
+
+INPUT_SIZE = 224
+NUM_SQUARE_CLASSES = len(SQUARE_CLASS_NAMES)
+_IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406), dtype=torch.float32).view(3, 1, 1)
+_IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225), dtype=torch.float32).view(3, 1, 1)
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_EVAL_ROOT = _PROJECT_ROOT / "data" / "physical" / "eval"
+
+
+@dataclass(frozen=True)
+class PhysicalEvalBoardRow:
+    annotation_id: str
+    board_path: str
+    labels: tuple[int, ...]
+    source_video_id: str | None
+
+
+class PhysicalSyntheticBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+    """Random physical-board renders with exact square-state targets."""
+
+    def __init__(
+        self,
+        *,
+        num_positions: int,
+        image_size: int = INPUT_SIZE,
+        seed: int = 42,
+        augment: bool = True,
+        min_moves: int = 10,
+        max_moves: int = 80,
+        min_ply: int = 8,
+    ) -> None:
+        self.num_positions = num_positions
+        self.image_size = image_size
+        self.seed = seed
+        self.augment = augment
+        self.min_moves = min_moves
+        self.max_moves = max_moves
+        self.min_ply = min_ply
+        self._piece_cache = PieceRenderCache()
+
+    def __len__(self) -> int:
+        return self.num_positions
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        image_bgr, targets = render_random_physical_board(
+            size=self.image_size,
+            seed=self.seed + index,
+            augment=self.augment,
+            min_moves=self.min_moves,
+            max_moves=self.max_moves,
+            min_ply=self.min_ply,
+            cache=self._piece_cache,
+        )
+        return preprocess_board_image(image_bgr, size=self.image_size), targets
+
+
+class PhysicalSyntheticRenderedBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+    """Perspective-rendered 3D synthetic boards from the physical synthetic pipeline."""
+
+    def __init__(
+        self,
+        *,
+        num_positions: int,
+        image_size: int = INPUT_SIZE,
+        seed: int = 42,
+        augment: bool = True,
+        min_moves: int = 10,
+        max_moves: int = 80,
+        occlusion_prob: float = 0.2,
+    ) -> None:
+        clips = generate_synthetic_clips(
+            num_clips=num_positions,
+            clip_length=1,
+            image_size=image_size,
+            frames_per_move=4,
+            augment=augment,
+            occlusion_prob=occlusion_prob,
+            min_moves=min_moves,
+            max_moves=max_moves,
+            seed=seed,
+        )
+        self.samples: list[tuple[torch.Tensor, torch.Tensor]] = []
+        for clip in clips:
+            frames = clip["frames"]
+            fens = clip.get("fens") or []
+            board_flipped = bool(clip.get("board_flipped", False))
+            if frames.shape[0] == 0 or not fens:
+                continue
+            frame = frames[0]
+            if frame.dtype != torch.float32:
+                frame = frame.to(torch.float32)
+            targets = fen_to_square_targets(fens[0], board_flipped=board_flipped)
+            self.samples.append((normalize_rgb_tensor(frame), targets))
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.samples[index]
+
+
+class PhysicalEvalBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+    """Held-out real rectified boards saved by the physical annotation workflow."""
+
+    def __init__(
+        self,
+        *,
+        eval_root: str | Path = _DEFAULT_EVAL_ROOT,
+        image_size: int = INPUT_SIZE,
+        rows: list[PhysicalEvalBoardRow] | None = None,
+    ) -> None:
+        self.eval_root = Path(eval_root)
+        self.image_size = image_size
+        self.rows = rows or load_eval_board_rows(self.eval_root)
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        row = self.rows[index]
+        image = cv2.imread(str(_PROJECT_ROOT / row.board_path), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError(f"Failed to load rectified board image: {row.board_path}")
+        targets = torch.tensor(row.labels, dtype=torch.long)
+        return preprocess_board_image(image, size=self.image_size), targets
+
+
+def load_eval_board_rows(
+    eval_root: str | Path = _DEFAULT_EVAL_ROOT,
+) -> list[PhysicalEvalBoardRow]:
+    annotations_path = Path(eval_root) / "board_annotations.jsonl"
+    if not annotations_path.exists():
+        raise ValueError(f"Physical eval board annotations not found: {annotations_path}")
+
+    rows: list[PhysicalEvalBoardRow] = []
+    for line in annotations_path.read_text().splitlines():
+        if not line.strip():
+            continue
+        payload = json.loads(line)
+        raw_labels = payload.get("labels")
+        if not isinstance(raw_labels, list) or len(raw_labels) != 64:
+            continue
+        if any(label is None for label in raw_labels):
+            continue
+        rows.append(
+            PhysicalEvalBoardRow(
+                annotation_id=str(payload["annotation_id"]),
+                board_path=str(payload["rectified_board_path"]),
+                labels=tuple(int(label) for label in raw_labels),
+                source_video_id=(
+                    str(payload["source_video_id"])
+                    if payload.get("source_video_id") is not None
+                    else None
+                ),
+            )
+        )
+    return rows
+
+
+def preprocess_board_image(image_bgr: np.ndarray, *, size: int = INPUT_SIZE) -> torch.Tensor:
+    """Resize BGR input, convert to RGB, and apply DINO/ImageNet normalization."""
+    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    interpolation = cv2.INTER_AREA if min(rgb.shape[:2]) >= size else cv2.INTER_LINEAR
+    resized = cv2.resize(rgb, (size, size), interpolation=interpolation)
+    tensor = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
+    return normalize_rgb_tensor(tensor)
+
+
+def normalize_rgb_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    """Apply ImageNet normalization to an RGB tensor in [0, 1]."""
+    return (tensor - _IMAGENET_MEAN) / _IMAGENET_STD
+
+
+def render_random_physical_board(
+    *,
+    size: int,
+    seed: int,
+    augment: bool,
+    min_moves: int,
+    max_moves: int,
+    min_ply: int,
+    cache: PieceRenderCache | None = None,
+) -> tuple[np.ndarray, torch.Tensor]:
+    """Render one synthetic physical board plus 64 square targets."""
+    rng = random.Random(seed)
+    moves = sample_random_game(min_moves=min_moves, max_moves=max_moves, seed=seed)
+    board = chess.Board()
+    lower_bound = min(min_ply, len(moves))
+    ply = rng.randint(lower_bound, len(moves)) if moves else 0
+    for move_uci in moves[:ply]:
+        move = chess.Move.from_uci(move_uci)
+        if move in board.legal_moves:
+            board.push(move)
+
+    theme = select_random_theme(rng).with_perturbation(rng)
+    material = select_random_material(rng).with_perturbation(rng)
+    light_dir = (
+        rng.uniform(-0.5, 0.5),
+        rng.uniform(-0.7, -0.3),
+        rng.uniform(0.5, 1.0),
+    )
+    board_rgb = render_textured_board(size=size, theme=theme, flipped=False, rng=rng)
+    pieces_rgba = render_pieces_layer(
+        board,
+        size=size,
+        flipped=False,
+        material=material,
+        light_dir=light_dir,
+        cache=cache,
+        rng=rng,
+    )
+    board_pil = Image.fromarray(board_rgb)
+    board_pil.paste(pieces_rgba, (0, 0), pieces_rgba)
+    image_bgr = cv2.cvtColor(np.array(board_pil), cv2.COLOR_RGB2BGR)
+    if augment:
+        image_bgr = augment_physical_board_image(image_bgr, rng)
+    targets = fen_to_square_targets(board.fen(), board_flipped=False)
+    return image_bgr, targets
+
+
+def augment_physical_board_image(image_bgr: np.ndarray, rng: random.Random) -> np.ndarray:
+    """Apply photometric augmentation while preserving the rectified grid."""
+    image = image_bgr.astype(np.float32)
+    image = np.clip(image * rng.uniform(0.85, 1.15) + rng.uniform(-16.0, 16.0), 0, 255)
+
+    if rng.random() < 0.30:
+        ksize = rng.choice([3, 5])
+        image = cv2.GaussianBlur(image.astype(np.uint8), (ksize, ksize), 0).astype(np.float32)
+
+    if rng.random() < 0.25:
+        quality = rng.randint(60, 92)
+        _, encoded = cv2.imencode(
+            ".jpg",
+            image.astype(np.uint8),
+            [cv2.IMWRITE_JPEG_QUALITY, quality],
+        )
+        decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+        if decoded is not None:
+            image = decoded.astype(np.float32)
+
+    if rng.random() < 0.20:
+        shadow = np.linspace(rng.uniform(0.7, 1.0), rng.uniform(1.0, 1.1), image.shape[0])
+        image *= shadow[:, None, None]
+
+    return np.clip(image, 0, 255).astype(np.uint8)

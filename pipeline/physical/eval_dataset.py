@@ -93,7 +93,9 @@ def extract_square_crops(board_rgb: np.ndarray) -> list[np.ndarray]:
 def load_board_annotation(clip_path: str, frame_index: int) -> dict[str, Any] | None:
     """Return the saved board annotation for one clip frame, if present."""
     for record in _load_jsonl(BOARD_ANNOTATIONS_PATH):
-        if record.get("clip_path") == clip_path and int(record.get("frame_index", -1)) == frame_index:
+        record_clip_path = record.get("clip_path")
+        record_frame_index = int(record.get("frame_index", -1))
+        if record_clip_path == clip_path and record_frame_index == frame_index:
             return record
     return None
 
@@ -203,16 +205,21 @@ def save_board_annotation(
         )
     )
 
-    _upsert_jsonl(
-        BOARD_ANNOTATIONS_PATH,
-        [record for record in _load_jsonl(BOARD_ANNOTATIONS_PATH) if record.get("annotation_id") != annotation_id]
-        + [annotation_record],
-    )
-    _upsert_jsonl(
-        SQUARE_MANIFEST_PATH,
-        [record for record in _load_jsonl(SQUARE_MANIFEST_PATH) if record.get("annotation_id") != annotation_id]
-        + square_records,
-    )
+    board_rows = [
+        record
+        for record in _load_jsonl(BOARD_ANNOTATIONS_PATH)
+        if record.get("annotation_id") != annotation_id
+    ]
+    board_rows.append(annotation_record)
+    _upsert_jsonl(BOARD_ANNOTATIONS_PATH, board_rows)
+
+    square_rows = [
+        record
+        for record in _load_jsonl(SQUARE_MANIFEST_PATH)
+        if record.get("annotation_id") != annotation_id
+    ]
+    square_rows.extend(square_records)
+    _upsert_jsonl(SQUARE_MANIFEST_PATH, square_rows)
 
     return annotation_record
 
@@ -250,7 +257,9 @@ def get_annotation_summary() -> dict[str, Any]:
     """Return aggregate counts for the held-out physical eval set."""
     board_records = _load_jsonl(BOARD_ANNOTATIONS_PATH)
     square_records = _load_jsonl(SQUARE_MANIFEST_PATH)
-    class_counts = Counter(record["label_name"] for record in square_records if "label_name" in record)
+    class_counts = Counter(
+        record["label_name"] for record in square_records if "label_name" in record
+    )
     source_video_ids = get_held_out_source_video_ids()
 
     recent_annotations = sorted(

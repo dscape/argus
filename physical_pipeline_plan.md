@@ -119,7 +119,9 @@ Current snapshot on this branch:
 ### Notes
 
 - First baseline: frozen DINOv2 features on square crops + linear probe / shallow MLP.
-- Only after that works: board-context model over the full rectified board.
+- Current result from the independent square-crop baseline on this branch: it transfers very poorly from synthetic physical square crops to held-out real broadcast squares, so it should be treated as a failed diagnostic rather than a deployable reader.
+- Board context helps somewhat, but the synthetic source also has to match the target: the real eval boards are **rectified** physical boards, so the next attempt needs rectified synthetic renders with realistic oblique 3D piece appearance.
+- Next attempt should therefore use board context over the full rectified board instead of classifying each square independently.
 - Empty squares will dominate; success is not allowed to hide behind empty-square accuracy.
 - Synthetic physical renders are training fuel, not validation data.
 
