@@ -12,13 +12,11 @@ from pathlib import Path
 
 import torch
 from PIL import Image
-from torch.utils.data import Dataset
+from torch.utils.data import ConcatDataset, Dataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline.physical.board_data import (
-    INPUT_SIZE as DEFAULT_INPUT_SIZE,
-)
+from pipeline.physical.board_data import INPUT_SIZE as DEFAULT_INPUT_SIZE
 from pipeline.physical.board_data import (
     PhysicalEvalBoardDataset,
     PhysicalSyntheticBoardDataset,
@@ -30,6 +28,7 @@ from pipeline.physical.board_probe import (
     save_board_probe_checkpoint,
     train_board_probe,
 )
+from pipeline.physical.real_board_data import PhysicalRealBoardDataset
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 from argus.device import resolve_device
@@ -65,7 +64,7 @@ def main() -> None:
     encoder = VisionEncoder(**encoder_kwargs).to(device)
     encoder.eval()
 
-    train_dataset = build_synthetic_dataset(
+    synthetic_train_dataset = build_synthetic_dataset(
         synthetic_source=args.synthetic_source,
         num_positions=args.synthetic_train_positions,
         image_size=args.input_size,
@@ -88,13 +87,33 @@ def main() -> None:
     eval_dataset = PhysicalEvalBoardDataset(image_size=args.input_size)
     eval_annotation_ids = [row.annotation_id for row in eval_dataset.rows]
 
+    real_train_dataset: PhysicalRealBoardDataset | None = None
+    train_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]] = synthetic_train_dataset
+    if args.real_train_max_frames > 0:
+        real_train_dataset = PhysicalRealBoardDataset(
+            clips_dir=args.real_train_clips_dir,
+            image_size=args.input_size,
+            frame_stride=args.real_train_frame_stride,
+            max_frames=args.real_train_max_frames,
+            seed=args.seed,
+        )
+        if len(real_train_dataset) > 0:
+            train_dataset = ConcatDataset([synthetic_train_dataset, real_train_dataset])
+
     if args.save_samples > 0:
         save_board_samples(
-            train_dataset,
+            synthetic_train_dataset,
             output_dir,
             count=args.save_samples,
             prefix="synthetic_train",
         )
+        if real_train_dataset is not None and len(real_train_dataset) > 0:
+            save_board_samples(
+                real_train_dataset,
+                output_dir,
+                count=args.save_samples,
+                prefix="real_train",
+            )
         save_board_samples(
             val_dataset,
             output_dir,
@@ -165,6 +184,7 @@ def main() -> None:
             "output_grid_size": encoder_kwargs.get("output_grid_size"),
             "synthetic_source": args.synthetic_source,
             "synthetic_train_positions": args.synthetic_train_positions,
+            "real_train_positions": 0 if real_train_dataset is None else len(real_train_dataset),
             "synthetic_val_positions": args.synthetic_val_positions,
             "synthetic_min_moves": args.synthetic_min_moves,
             "synthetic_max_moves": args.synthetic_max_moves,
@@ -190,6 +210,7 @@ def main() -> None:
         "augment": args.augment,
         "class_weighting": args.class_weighting,
         "synthetic_train_positions": args.synthetic_train_positions,
+        "real_train_positions": 0 if real_train_dataset is None else len(real_train_dataset),
         "synthetic_val_positions": args.synthetic_val_positions,
         "synthetic_min_moves": args.synthetic_min_moves,
         "synthetic_max_moves": args.synthetic_max_moves,
@@ -216,6 +237,7 @@ def main() -> None:
         f"- train augmentation: `{args.augment}`",
         f"- class weighting: `{args.class_weighting}`",
         f"- synthetic train positions: `{args.synthetic_train_positions}`",
+        f"- real train positions: `{0 if real_train_dataset is None else len(real_train_dataset)}`",
         f"- synthetic val positions: `{args.synthetic_val_positions}`",
         f"- real eval positions: `{len(eval_dataset)}`",
         f"- train square accuracy: `{train_metrics.accuracy:.4f}`",
@@ -263,6 +285,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--synthetic-train-positions", type=int, default=1200)
     parser.add_argument("--synthetic-val-positions", type=int, default=300)
+    parser.add_argument("--real-train-clips-dir", type=Path, default=Path("data/argus/train_real"))
+    parser.add_argument("--real-train-max-frames", type=int, default=0)
+    parser.add_argument("--real-train-frame-stride", type=int, default=4)
     parser.add_argument("--synthetic-min-moves", type=int, default=12)
     parser.add_argument("--synthetic-max-moves", type=int, default=80)
     parser.add_argument("--synthetic-min-ply", type=int, default=8)
@@ -373,7 +398,7 @@ def save_board_samples(
     sample_dir = output_dir / "samples" / prefix
     sample_dir.mkdir(parents=True, exist_ok=True)
     manifest: list[dict[str, object]] = []
-    row_metadata = dataset.rows if isinstance(dataset, PhysicalEvalBoardDataset) else None
+    row_metadata = getattr(dataset, "rows", None)
 
     for index in range(min(count, len(dataset))):
         image_tensor, labels = dataset[index]
@@ -384,11 +409,20 @@ def save_board_samples(
             "image": relative_to_project(image_path),
             "label_histogram": class_histogram(labels.reshape(-1)),
         }
-        if row_metadata is not None:
+        if isinstance(row_metadata, list) and index < len(row_metadata):
             row = row_metadata[index]
-            payload["annotation_id"] = row.annotation_id
-            payload["source_video_id"] = row.source_video_id
-            payload["board_path"] = row.board_path
+            if hasattr(row, "annotation_id"):
+                payload["annotation_id"] = getattr(row, "annotation_id")
+            if hasattr(row, "source_video_id"):
+                payload["source_video_id"] = getattr(row, "source_video_id")
+            if hasattr(row, "board_path"):
+                payload["board_path"] = getattr(row, "board_path")
+            if hasattr(row, "clip_path"):
+                payload["clip_path"] = getattr(row, "clip_path")
+            if hasattr(row, "frame_index"):
+                payload["frame_index"] = getattr(row, "frame_index")
+            if hasattr(row, "source_channel_handle"):
+                payload["source_channel_handle"] = getattr(row, "source_channel_handle")
         manifest.append(payload)
 
     write_json(sample_dir / "manifest.json", manifest)

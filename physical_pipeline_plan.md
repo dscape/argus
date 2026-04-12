@@ -131,7 +131,8 @@ Current snapshot on this branch:
   - held-out real non-empty accuracy: `0.2466`
   - held-out real macro F1: `0.1064`
 - A higher-input-size DINO check at `336×336` did not help on the current synthetic source, so resolution alone is not the bottleneck.
-- Next attempt should therefore keep board context, but improve the synthetic rectified board generator with better 3D-aware rectified-piece distortion or add non-held-out real labeled boards before adding more model complexity.
+- Replay-derived non-held-out STL Chess Club boards can now be rectified automatically via transferred channel-level corner templates, and the current export lives under `outputs/2026-04-12/physical_real_board_dataset_export/`. This is useful infrastructure, but current corner transfer is still noisy enough that mixing the resulting pseudo-real boards into training hurts non-empty accuracy even when macro-F1 rises slightly.
+- Next attempt should therefore keep board context, but improve the synthetic rectified board generator with better 3D-aware rectified-piece distortion or improve per-clip corner transfer / real-board labeling before adding more model complexity.
 - Empty squares will dominate; success is not allowed to hide behind empty-square accuracy.
 - Synthetic physical renders are training fuel, not validation data.
 

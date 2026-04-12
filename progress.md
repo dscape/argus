@@ -134,15 +134,43 @@
   - real held-out non-empty accuracy: `0.2207`
   - real held-out macro F1: `0.0812`
   - conclusion: increasing resolution alone did not fix the transfer gap on this synthetic source
+- Added replay-derived real physical-board training data support:
+  - `pipeline/physical/real_board_data.py`
+  - builds rectified non-held-out real boards from `data/argus/train_real/` by:
+    - reconstructing per-frame display FENs from clip replay metadata
+    - transferring channel-level median board corners from the held-out eval annotations
+    - excluding held-out eval source videos structurally
+  - current pseudo-real dataset snapshot at `frame_stride=4`: `556` rectified boards from `5` non-held-out STL Chess Club source videos
+- Extended `scripts/train_physical_board_probe.py` to optionally mix those pseudo-real boards into training via:
+  - `--real-train-clips-dir`
+  - `--real-train-max-frames`
+  - `--real-train-frame-stride`
 - Added an autoresearch-style sweep harness for tomorrow/overnight iteration:
   - `scripts/sweep_physical_board_probe.py`
   - logs experiment rows to `results.tsv` and maintains a short summary file
-  - default experiment set encodes the current DINO-vs-YOLO / augmentation / weighting / resolution checks in one place
-- Current assessment after the new artifact pass:
+  - default experiment set now covers DINO-vs-YOLO, augmentation, weighting, resolution, and pseudo-real mixing checks
+- Pseudo-real mixing results:
+  - `outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_real128/`
+    - real held-out square accuracy: `0.3120`
+    - real held-out non-empty accuracy: `0.1282`
+    - real held-out macro F1: `0.1127`
+  - `outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_real556/`
+    - real held-out square accuracy: `0.2677`
+    - real held-out non-empty accuracy: `0.1470`
+    - real held-out macro F1: `0.1106`
+- Exported the current pseudo-real board set for tomorrow's iteration:
+  - `scripts/export_physical_real_board_dataset.py`
+  - exported artifact: `outputs/2026-04-12/physical_real_board_dataset_export/`
+  - current export summary: `556` rectified boards from `5` non-held-out STL Chess Club source videos
+- Interpretation of the pseudo-real results:
+  - replay-derived non-held-out real boards are useful infrastructure and worth keeping for tomorrow's iteration
+  - but transferred channel-level corners are still noisy enough that mixing this data hurts the main piece-reading metric (`non_empty_accuracy`), even when macro-F1 nudges upward
+- Current assessment after the new artifact pass and pseudo-real data pass:
   - the synthetic-data fix helped, but only modestly
   - DINO still beats YOLO on non-empty piece signal and macro-F1
+  - pseudo-real data is now available, but its corner transfer is not clean enough yet to unlock a major gain
   - the physical per-square reader is still not good enough for end-to-end use
-  - the next useful step is likely better 3D-aware rectified-piece distortion or real non-held-out labeled physical boards, not another backbone swap
+  - the next useful step is likely better 3D-aware rectified-piece distortion or better per-clip corner transfer / real-board labeling, not another backbone swap
 
 ### Validation
 - Passed: `make typecheck`
