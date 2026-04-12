@@ -1458,3 +1458,95 @@ export async function inspectAutoCalibration(
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+// ── Physical eval-set annotation ───────────────────────────
+
+export interface PhysicalEvalClip {
+  filename: string;
+  clip_path: string;
+  size_mb: number;
+  modified_at: string;
+  source_video_id: string | null;
+  clip_id: number | null;
+}
+
+export interface PhysicalEvalAnnotation {
+  annotation_id: string;
+  clip_path: string;
+  frame_index: number;
+  source_video_id: string | null;
+  corners: number[][];
+  labels: Array<number | null>;
+  labeled_square_count: number;
+  rectified_board_path: string;
+  rectified_size: number;
+  created_at: string;
+}
+
+export interface PhysicalEvalSummary {
+  dataset_root: string;
+  board_annotation_count: number;
+  square_crop_count: number;
+  source_video_count: number;
+  class_counts: Record<string, number>;
+  recent_annotations: PhysicalEvalAnnotation[];
+}
+
+export async function listPhysicalEvalClips(
+  clipsDir: string = "data/argus/train_real",
+  limit: number = 200,
+): Promise<{ clips_dir: string; clips: PhysicalEvalClip[] }> {
+  const params = new URLSearchParams({ clips_dir: clipsDir, limit: String(limit) });
+  const res = await fetch(`/api/physical-eval/clips?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPhysicalEvalSummary(): Promise<PhysicalEvalSummary> {
+  const res = await fetch("/api/physical-eval/summary");
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPhysicalEvalAnnotation(
+  clipPath: string,
+  frameIndex: number,
+): Promise<PhysicalEvalAnnotation | null> {
+  const params = new URLSearchParams({ clip_path: clipPath, frame_index: String(frameIndex) });
+  const res = await fetch(`/api/physical-eval/annotation?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.annotation ?? null;
+}
+
+export async function rectifyPhysicalEvalFrame(body: {
+  session_id: string;
+  frame_index: number;
+  corners: number[][];
+  output_size?: number;
+}): Promise<{ image_b64: string; output_size: number }> {
+  const res = await fetch("/api/physical-eval/rectify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function savePhysicalEvalAnnotation(body: {
+  session_id: string;
+  clip_path: string;
+  frame_index: number;
+  corners: number[][];
+  labels: Array<number | null>;
+  output_size?: number;
+}): Promise<{ annotation: PhysicalEvalAnnotation; summary: PhysicalEvalSummary }> {
+  const res = await fetch("/api/physical-eval/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
