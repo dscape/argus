@@ -1,4 +1,4 @@
-"""Board-state reading with overlay and VLM fallbacks."""
+"""Board-state reading with physical square-classifier and VLM fallbacks."""
 
 from __future__ import annotations
 
@@ -21,18 +21,18 @@ class BoardState:
     method: str
 
 
-def _detect_with_grid_classifier(board_crop_bgr: np.ndarray, device: str) -> BoardState | None:
-    from pipeline.overlay.piece_classifier import read_fen_from_frame
+def _detect_with_square_classifier(board_crop_bgr: np.ndarray, device: str) -> BoardState | None:
+    from pipeline.physical.square_classifier import read_fen_from_frame
 
     try:
         fen = read_fen_from_frame(board_crop_bgr, device=device)
     except Exception as exc:  # pragma: no cover - defensive logging around model runtime
-        logger.debug("Grid classifier failed: %s", exc)
+        logger.debug("Physical square classifier failed: %s", exc)
         return None
 
     if fen is None:
         return None
-    return BoardState(fen=fen, method="grid_classifier")
+    return BoardState(fen=fen, method="physical_square_classifier")
 
 
 def _detect_with_vlm(board_crop_rgb: np.ndarray, config: VideoAnalysisConfig) -> BoardState | None:
@@ -58,7 +58,7 @@ def detect_pieces(
         board_rgb = cv2.cvtColor(board_crop, cv2.COLOR_BGR2RGB)
 
     if config.use_piece_classifier:
-        result = _detect_with_grid_classifier(board_bgr, config.device)
+        result = _detect_with_square_classifier(board_bgr, config.device)
         if result is not None:
             return result
 

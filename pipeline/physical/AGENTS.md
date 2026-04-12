@@ -1,0 +1,1 @@
+Models in this folder operate only on physical over-the-board camera footage, trained on real broadcast board crops and physical-board synthetic renders rather than digital overlays; do not use them on 2D broadcast overlay boards.

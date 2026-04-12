@@ -1,0 +1,1 @@
+Models in this folder operate only on digital 2D board overlays and related broadcast graphics, trained on synthetic overlay boards plus real overlay crops extracted from overlay regions in broadcast footage; do not use them on physical camera views of real chess boards.

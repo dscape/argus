@@ -37,11 +37,12 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from pipeline.shared import NUM_SQUARE_CLASSES, SQUARE_CLASS_NAMES
+
 logger = logging.getLogger(__name__)
 
-# Class index mapping — matches CLASS_TO_PIECE in piece_classifier.py
-CLASS_NAMES = ["empty", "P", "N", "B", "R", "Q", "K", "p", "n", "b", "r", "q", "k"]
-NUM_CLASSES = len(CLASS_NAMES)
+CLASS_NAMES = SQUARE_CLASS_NAMES
+NUM_CLASSES = NUM_SQUARE_CLASSES
 
 PIECE_TYPES = [chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING]
 

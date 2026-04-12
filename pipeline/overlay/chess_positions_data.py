@@ -16,7 +16,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from pipeline.overlay.piece_classifier_data import CLASS_NAMES, NUM_CLASSES
+from pipeline.shared import NUM_SQUARE_CLASSES, SQUARE_CLASS_NAMES, fen_to_square_labels
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +26,8 @@ CHESS_POSITIONS_DIR = _PROJECT_ROOT / "data" / "overlay"
 BOARD_SIZE = 400
 SQ_SIZE = 50
 
-# Piece symbol → class index (matches CLASS_NAMES / CLASS_TO_PIECE)
-_PIECE_TO_CLASS = {
-    "P": 1, "N": 2, "B": 3, "R": 4, "Q": 5, "K": 6,
-    "p": 7, "n": 8, "b": 9, "r": 10, "q": 11, "k": 12,
-}
+CLASS_NAMES = SQUARE_CLASS_NAMES
+NUM_CLASSES = NUM_SQUARE_CLASSES
 
 
 def parse_fen_from_filename(filename: str) -> str:
@@ -41,29 +38,6 @@ def parse_fen_from_filename(filename: str) -> str:
     """
     stem = Path(filename).stem
     return stem.replace("-", "/")
-
-
-def fen_to_square_labels(fen: str) -> list[list[int]]:
-    """Convert piece-placement FEN to 8×8 grid of class indices (0–12).
-
-    Row 0 = rank 8 (top of board image).  Matches visual layout.
-    """
-    ranks = fen.split("/")
-    assert len(ranks) == 8, f"Expected 8 ranks, got {len(ranks)}: {fen}"
-
-    grid: list[list[int]] = []
-    for rank_str in ranks:
-        row: list[int] = []
-        for ch in rank_str:
-            if ch.isdigit():
-                row.extend([0] * int(ch))
-            else:
-                cls = _PIECE_TO_CLASS.get(ch)
-                assert cls is not None, f"Unknown piece char: {ch}"
-                row.append(cls)
-        assert len(row) == 8, f"Rank has {len(row)} squares: {rank_str}"
-        grid.append(row)
-    return grid
 
 
 def crop_board_squares(image: np.ndarray) -> list[list[np.ndarray]]:

@@ -20,9 +20,8 @@ from typing import overload
 import cv2
 import numpy as np
 
-from pipeline.overlay.chess_positions_data import fen_to_square_labels
 from pipeline.overlay.grid_detector import GridResult, detect_grid
-from pipeline.overlay.piece_classifier_data import NUM_CLASSES
+from pipeline.shared import NUM_SQUARE_CLASSES, fen_to_square_labels
 
 logger = logging.getLogger(__name__)
 
@@ -76,14 +75,14 @@ def sample_real_board_squares(
         targets: dict[int, int] | None = None
         per_class = None
     elif isinstance(max_per_class, int):
-        targets = {class_index: max_per_class for class_index in range(NUM_CLASSES)}
-        per_class = {class_index: [] for class_index in range(NUM_CLASSES)}
+        targets = {class_index: max_per_class for class_index in range(NUM_SQUARE_CLASSES)}
+        per_class = {class_index: [] for class_index in range(NUM_SQUARE_CLASSES)}
     else:
         targets = {
             class_index: int(max_per_class.get(class_index, 0))
-            for class_index in range(NUM_CLASSES)
+            for class_index in range(NUM_SQUARE_CLASSES)
         }
-        per_class = {class_index: [] for class_index in range(NUM_CLASSES)}
+        per_class = {class_index: [] for class_index in range(NUM_SQUARE_CLASSES)}
 
     images_list: list[np.ndarray] = []
     labels_list: list[int] = []
@@ -91,7 +90,7 @@ def sample_real_board_squares(
 
     for fname in files:
         if targets is not None and per_class is not None:
-            if all(len(per_class[c]) >= targets[c] for c in range(NUM_CLASSES)):
+            if all(len(per_class[c]) >= targets[c] for c in range(NUM_SQUARE_CLASSES)):
                 break
 
         path = data_dir / fname
@@ -127,7 +126,7 @@ def sample_real_board_squares(
         scanned += 1
 
     if targets is not None and per_class is not None:
-        for class_index in range(NUM_CLASSES):
+        for class_index in range(NUM_SQUARE_CLASSES):
             for image in per_class[class_index]:
                 images_list.append(image)
                 labels_list.append(class_index)
