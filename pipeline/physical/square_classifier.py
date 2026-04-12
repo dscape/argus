@@ -1,4 +1,4 @@
-"""Runtime physical-board square classifier backed by a frozen DINO probe."""
+"""Runtime physical-board reader backed by a frozen feature probe."""
 
 from __future__ import annotations
 
@@ -8,8 +8,11 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.nn as nn
 
 from argus.model.vision_encoder import VisionEncoder
+from pipeline.physical.board_data import preprocess_board_image
+from pipeline.physical.board_probe import PhysicalBoardStateProbe, dino_patches_to_square_tokens
 from pipeline.physical.square_data import (
     CLASS_NAMES,
     INPUT_SIZE,
@@ -24,7 +27,7 @@ WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
 _DEFAULT_WEIGHTS_PATH = WEIGHTS_DIR / "best.pt"
 _CLASS_TO_SYMBOL = {index: name for index, name in enumerate(CLASS_NAMES)}
 
-_cached_model: tuple[VisionEncoder, PhysicalSquareLinearProbe] | None = None
+_cached_model: tuple[dict[str, Any], VisionEncoder, nn.Module] | None = None
 _cached_weights_path: Path | None = None
 
 
@@ -36,24 +39,19 @@ def read_board_observation_from_frame(
 ) -> BoardObservation | None:
     """Read a rectified physical board crop into a source-agnostic observation."""
     try:
-        encoder, probe = _get_runtime_model(device=device)
+        checkpoint, encoder, probe = _get_runtime_model(device=device)
     except FileNotFoundError:
         return None
 
-    square_crops = split_rectified_board_into_squares(board_crop)
-    batch = torch.stack(
-        [preprocess_square_image(crop, size=INPUT_SIZE) for crop in square_crops],
-        dim=0,
+    logits = _predict_board_logits(
+        checkpoint=checkpoint,
+        encoder=encoder,
+        probe=probe,
+        board_crop=board_crop,
     )
-    batch = batch.to(next(probe.parameters()).device)
-    encoder.eval()
-    probe.eval()
-    with torch.no_grad():
-        embeddings = encoder.forward_pooled(batch)
-        logits = probe(embeddings)
-        probabilities = torch.softmax(logits, dim=1)
-        class_ids = probabilities.argmax(dim=1).cpu().tolist()
-        confidences = probabilities.max(dim=1).values.cpu().tolist()
+    probabilities = torch.softmax(logits, dim=1)
+    class_ids = probabilities.argmax(dim=1).cpu().tolist()
+    confidences = probabilities.max(dim=1).values.cpu().tolist()
 
     fen = _class_ids_to_board_fen(class_ids)
     return BoardObservation(
@@ -105,7 +103,40 @@ def _class_ids_to_board_fen(class_ids: list[int]) -> str:
     return "/".join(ranks)
 
 
-def _get_runtime_model(*, device: str) -> tuple[VisionEncoder, PhysicalSquareLinearProbe]:
+def _predict_board_logits(
+    *,
+    checkpoint: dict[str, Any],
+    encoder: VisionEncoder,
+    probe: nn.Module,
+    board_crop: np.ndarray,
+) -> torch.Tensor:
+    architecture = str(checkpoint.get("architecture", "square_probe"))
+    input_size = int(checkpoint.get("input_size", INPUT_SIZE))
+    probe_device = next(probe.parameters()).device
+    encoder.eval()
+    probe.eval()
+
+    with torch.no_grad():
+        if architecture == "board_probe":
+            board_tensor = preprocess_board_image(board_crop, size=input_size).unsqueeze(0)
+            board_tensor = board_tensor.to(probe_device)
+            patch_tokens = encoder.forward_patches(board_tensor)
+            square_tokens = dino_patches_to_square_tokens(patch_tokens)
+            logits = probe(square_tokens).squeeze(0).cpu()
+            return logits
+
+        square_crops = split_rectified_board_into_squares(board_crop)
+        batch = torch.stack(
+            [preprocess_square_image(crop, size=input_size) for crop in square_crops],
+            dim=0,
+        )
+        batch = batch.to(probe_device)
+        embeddings = encoder.forward_pooled(batch)
+        return probe(embeddings).cpu()
+
+
+
+def _get_runtime_model(*, device: str) -> tuple[dict[str, Any], VisionEncoder, nn.Module]:
     global _cached_model, _cached_weights_path
     weights_path = _resolve_weights_path()
     if _cached_model is not None and _cached_weights_path == weights_path:
@@ -113,13 +144,21 @@ def _get_runtime_model(*, device: str) -> tuple[VisionEncoder, PhysicalSquareLin
 
     checkpoint = load_probe_checkpoint(weights_path)
     encoder = VisionEncoder(**_encoder_kwargs_from_checkpoint(checkpoint)).to(torch.device(device))
-    probe = PhysicalSquareLinearProbe(encoder.embed_dim)
+    probe = _build_probe_from_checkpoint(checkpoint, embed_dim=encoder.embed_dim)
     probe.load_state_dict(checkpoint["state_dict"])
     probe.to(torch.device(device))
 
-    _cached_model = (encoder, probe)
+    _cached_model = (checkpoint, encoder, probe)
     _cached_weights_path = weights_path
     return _cached_model
+
+
+def _build_probe_from_checkpoint(checkpoint: dict[str, Any], *, embed_dim: int) -> nn.Module:
+    architecture = str(checkpoint.get("architecture", "square_probe"))
+    if architecture == "board_probe":
+        return PhysicalBoardStateProbe(embed_dim)
+    return PhysicalSquareLinearProbe(embed_dim)
+
 
 
 def _encoder_kwargs_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:
@@ -132,12 +171,17 @@ def _encoder_kwargs_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any
     if isinstance(raw_feature_layer_indices, list):
         feature_layer_indices = [int(index) for index in raw_feature_layer_indices]
 
+    raw_encoder_type = metadata.get("encoder_type")
+    encoder_type = str(raw_encoder_type) if raw_encoder_type is not None else "dinov2"
+    raw_output_grid_size = metadata.get("output_grid_size")
+    output_grid_size = int(raw_output_grid_size) if raw_output_grid_size is not None else 14
+
     return {
         "model_name": str(checkpoint.get("model_name", "facebook/dinov2-base")),
         "frozen": True,
-        "encoder_type": str(metadata.get("encoder_type", "dinov2")),
+        "encoder_type": encoder_type,
         "feature_layer_indices": feature_layer_indices,
-        "output_grid_size": int(metadata.get("output_grid_size", 14)),
+        "output_grid_size": output_grid_size,
     }
 
 

@@ -149,28 +149,53 @@
   - `scripts/sweep_physical_board_probe.py`
   - logs experiment rows to `results.tsv` and maintains a short summary file
   - default experiment set now covers DINO-vs-YOLO, augmentation, weighting, resolution, and pseudo-real mixing checks
-- Pseudo-real mixing results:
-  - `outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_real128/`
-    - real held-out square accuracy: `0.3120`
-    - real held-out non-empty accuracy: `0.1282`
-    - real held-out macro F1: `0.1127`
-  - `outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_real556/`
-    - real held-out square accuracy: `0.2677`
-    - real held-out non-empty accuracy: `0.1470`
-    - real held-out macro F1: `0.1106`
-- Exported the current pseudo-real board set for tomorrow's iteration:
+- Added per-clip corner refinement on top of the transferred channel template in `pipeline/physical/real_board_data.py`.
+  - this uses a bounded hill-climb on checkerboard alternation / regularity after rectification
+  - it materially improved the pseudo-real board quality over the raw channel-median corners
+- Re-exported the current pseudo-real board set for tomorrow's iteration:
   - `scripts/export_physical_real_board_dataset.py`
-  - exported artifact: `outputs/2026-04-12/physical_real_board_dataset_export/`
+  - refined export artifact: `outputs/2026-04-12/physical_real_board_dataset_export_refined/`
   - current export summary: `556` rectified boards from `5` non-held-out STL Chess Club source videos
-- Interpretation of the pseudo-real results:
-  - replay-derived non-held-out real boards are useful infrastructure and worth keeping for tomorrow's iteration
-  - but transferred channel-level corners are still noisy enough that mixing this data hurts the main piece-reading metric (`non_empty_accuracy`), even when macro-F1 nudges upward
-- Current assessment after the new artifact pass and pseudo-real data pass:
-  - the synthetic-data fix helped, but only modestly
-  - DINO still beats YOLO on non-empty piece signal and macro-F1
-  - pseudo-real data is now available, but its corner transfer is not clean enough yet to unlock a major gain
-  - the physical per-square reader is still not good enough for end-to-end use
-  - the next useful step is likely better 3D-aware rectified-piece distortion or better per-clip corner transfer / real-board labeling, not another backbone swap
+- Refined pseudo-real mixing results:
+  - `outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_real128_refined/`
+    - real held-out square accuracy: `0.3315`
+    - real held-out non-empty accuracy: `0.1639`
+    - real held-out macro F1: `0.1316`
+  - `outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_real556_refined/`
+    - real held-out square accuracy: `0.3019`
+    - real held-out non-empty accuracy: `0.1882`
+    - real held-out macro F1: `0.1412`
+- Seed sensitivity turned out to matter a lot on the refined pseudo-real mix:
+  - seed `0`: `outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_real556_refined_seed0/`
+    - real held-out square accuracy: `0.3215`
+    - real held-out non-empty accuracy: `0.2411`
+    - real held-out macro F1: `0.1663`
+  - seed `3`: `outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_real556_refined_seed3/`
+    - real held-out square accuracy: `0.2754`
+    - real held-out non-empty accuracy: `0.2530`
+    - real held-out macro F1: `0.1297`
+- Built and promoted an equal-weight ensemble of the two best refined pseudo-real seeds:
+  - builder: `scripts/build_physical_board_probe_ensemble.py`
+  - runtime weights now exist under `weights/physical/`
+  - promoted runtime checkpoint is a board-context probe ensemble, not the old square-crop probe
+  - ensemble artifact: `outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_real556_refined_ensemble/`
+  - held-out real metrics for the promoted equal-weight ensemble:
+    - square accuracy: `0.3277`
+    - non-empty accuracy: `0.2563`
+    - macro F1: `0.1487`
+- Added an explicit runtime-path evaluator:
+  - `scripts/eval_physical_board_runtime.py`
+  - runtime eval output: `outputs/2026-04-12/physical_runtime_eval.json`
+  - confirmed the committed runtime weights execute end-to-end on all `844` held-out boards with `0` missing predictions and the same metrics as the checkpoint-based eval
+- Interpretation of the refined pseudo-real results:
+  - replay-derived non-held-out real boards are no longer just future infrastructure; after corner refinement they became the best current route to better physical-board transfer
+  - the equal-weight ensemble improves both non-empty accuracy and macro F1 over the earlier single-checkpoint runtime candidates
+  - but whole-board exact match is still `0.0`, so the reader is still not solved
+- Current assessment after the refined pseudo-real pass:
+  - DINO remains the only credible backbone here; YOLO is still worse on the metrics that matter
+  - improved pseudo-real data + seed sweep + checkpoint averaging produced the strongest current runtime candidate
+  - the physical per-square reader is better than before, and now has committed runtime weights, but it is still not good enough to call solved
+  - the next useful step is likely better per-clip corner refinement / localization or genuinely labeled non-held-out real boards, not another backbone swap
 
 ### Validation
 - Passed: `make typecheck`

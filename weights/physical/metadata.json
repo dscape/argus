@@ -1,0 +1,18 @@
+{
+  "architecture": "board_probe",
+  "code_version": "v3",
+  "ensemble_members": [
+    "outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_real556_refined_seed0/board_probe.pt",
+    "outputs/2026-04-12/physical_board_probe_dino_topdown_aug_weighted_real556_refined_seed3/board_probe.pt"
+  ],
+  "ensemble_weights": [
+    0.5,
+    0.5
+  ],
+  "input_size": 224,
+  "model_name": "facebook/dinov2-base",
+  "num_classes": 13,
+  "revision": 1,
+  "runtime_format": "pytorch",
+  "version": "v3r1"
+}

@@ -29,6 +29,7 @@ from pipeline.physical.board_probe import (
     train_board_probe,
 )
 from pipeline.physical.real_board_data import PhysicalRealBoardDataset
+from pipeline.physical.square_probe import ProbeMetrics
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 from argus.device import resolve_device
@@ -39,8 +40,10 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "physical_board_probe"
+_DEFAULT_WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
 _DEFAULT_DINO_MODEL = "facebook/dinov2-base"
 _DEFAULT_YOLO_MODEL = "weights/yolo_base/yolo11n.pt"
+_MODEL_CODE_VERSION = "v2"
 _IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406), dtype=torch.float32).view(3, 1, 1)
 _IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225), dtype=torch.float32).view(3, 1, 1)
 
@@ -250,6 +253,17 @@ def main() -> None:
     ]
     (output_dir / "summary.md").write_text("\n".join(summary_lines))
 
+    if args.promote_to_weights:
+        promote_to_runtime_weights(
+            checkpoint_path=checkpoint_path,
+            encoder_kwargs=encoder_kwargs,
+            args=args,
+            real_eval_metrics=real_eval_metrics,
+            best_synth_val_accuracy=best_synth_val_accuracy,
+            held_out_eval_size=len(eval_dataset),
+            real_train_positions=0 if real_train_dataset is None else len(real_train_dataset),
+        )
+
     logger.info("Train square accuracy: %.4f", train_metrics.accuracy)
     logger.info("Synthetic val square accuracy: %.4f", synth_val_metrics.accuracy)
     logger.info("Real eval square accuracy: %.4f", real_eval_metrics.accuracy)
@@ -300,6 +314,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--save-samples", type=int, default=0)
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument(
+        "--promote-to-weights",
+        action="store_true",
+        help="Copy the trained board probe to weights/physical/ for runtime use",
+    )
     return parser
 
 
@@ -433,6 +452,58 @@ def tensor_to_rgb_image(tensor: torch.Tensor) -> Image.Image:
     rgb = (tensor * _IMAGENET_STD + _IMAGENET_MEAN).clamp(0.0, 1.0)
     array = (rgb.permute(1, 2, 0).numpy() * 255.0).round().astype("uint8")
     return Image.fromarray(array)
+
+
+def promote_to_runtime_weights(
+    *,
+    checkpoint_path: Path,
+    encoder_kwargs: dict[str, object],
+    args: argparse.Namespace,
+    real_eval_metrics: ProbeMetrics,
+    best_synth_val_accuracy: float,
+    held_out_eval_size: int,
+    real_train_positions: int,
+) -> None:
+    weights_dir = _DEFAULT_WEIGHTS_DIR
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    revision, version = next_version(weights_dir)
+    versioned_path = weights_dir / f"{version}.pt"
+    best_path = weights_dir / "best.pt"
+    versioned_path.write_bytes(checkpoint_path.read_bytes())
+    best_path.write_bytes(checkpoint_path.read_bytes())
+    metadata = {
+        "code_version": _MODEL_CODE_VERSION,
+        "revision": revision,
+        "version": version,
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "model_name": encoder_kwargs["model_name"],
+        "encoder_type": args.encoder_type,
+        "feature_layer_indices": encoder_kwargs.get("feature_layer_indices"),
+        "output_grid_size": encoder_kwargs.get("output_grid_size"),
+        "input_size": args.input_size,
+        "best_synthetic_val_accuracy": round(best_synth_val_accuracy, 4),
+        "real_eval_metrics": real_eval_metrics.to_dict(),
+        "sources": {
+            "synthetic_train_positions": args.synthetic_train_positions,
+            "synthetic_val_positions": args.synthetic_val_positions,
+            "real_train_positions": real_train_positions,
+            "held_out_eval_size": held_out_eval_size,
+        },
+        "runtime_format": "pytorch",
+        "architecture": "board_probe",
+    }
+    write_json(weights_dir / "metadata.json", metadata)
+    logger.info("Promoted runtime weights to %s", best_path)
+
+
+def next_version(weights_dir: Path) -> tuple[int, str]:
+    metadata_path = weights_dir / "metadata.json"
+    revision = 1
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text())
+        if metadata.get("code_version") == _MODEL_CODE_VERSION:
+            revision = int(metadata.get("revision", 0)) + 1
+    return revision, f"{_MODEL_CODE_VERSION}r{revision}"
 
 
 def write_json(path: Path, payload: object) -> None:

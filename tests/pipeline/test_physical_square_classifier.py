@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import numpy as np
+from pipeline.physical.board_probe import PhysicalBoardStateProbe
 from pipeline.physical.square_classifier import (
+    _build_probe_from_checkpoint,
     _class_ids_to_board_fen,
     _encoder_kwargs_from_checkpoint,
 )
@@ -36,6 +38,12 @@ def test_encoder_kwargs_from_checkpoint_reads_yolo_metadata() -> None:
         "feature_layer_indices": [16, 19, 22],
         "output_grid_size": 16,
     }
+
+
+def test_build_probe_from_checkpoint_returns_board_probe_for_board_architecture() -> None:
+    probe = _build_probe_from_checkpoint({"architecture": "board_probe"}, embed_dim=8)
+
+    assert isinstance(probe, PhysicalBoardStateProbe)
 
 
 def test_read_fen_from_frame_returns_none_without_weights(monkeypatch) -> None:

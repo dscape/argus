@@ -104,6 +104,7 @@ def load_real_board_rows(
     frame_stride: int = 4,
     max_frames: int | None = None,
     seed: int = 42,
+    refine_corners: bool = True,
 ) -> list[PhysicalRealBoardRow]:
     if frame_stride <= 0:
         raise ValueError(f"frame_stride must be > 0, got {frame_stride}")
@@ -130,6 +131,8 @@ def load_real_board_rows(
         corners = channel_templates.get(source_channel_handle)
         if corners is None:
             continue
+        if refine_corners:
+            corners = _refine_clip_corners(clip, corners)
 
         fens = replay_clip_display_fens(clip)
         move_frame_indices = set(_int_list(clip.get("move_frame_indices")))
@@ -245,6 +248,102 @@ def replay_clip_display_fens(clip: dict[str, Any]) -> list[str | None]:
         frame_fens.append(board.fen())
 
     return frame_fens
+
+
+
+def _refine_clip_corners(
+    clip: dict[str, Any],
+    initial_corners: tuple[tuple[float, float], ...],
+    *,
+    max_offset: int = 12,
+) -> tuple[tuple[float, float], ...]:
+    frames = clip.get("frames")
+    if not isinstance(frames, torch.Tensor) or frames.shape[0] == 0:
+        return initial_corners
+
+    frame = _frame_tensor_to_rgb(frames[0])
+    corners = np.asarray(initial_corners, dtype=np.float32)
+    initial = corners.copy()
+    height, width = frame.shape[:2]
+    best_score = _rectified_board_score(
+        rectify_board_image(frame, corners.tolist(), output_size=256)
+    )
+
+    for step in (4, 2, 1):
+        improved = True
+        while improved:
+            improved = False
+            for corner_index in range(4):
+                current = corners[corner_index].copy()
+                local_best_score = best_score
+                local_best_corner = current.copy()
+                for dx in (-step, 0, step):
+                    for dy in (-step, 0, step):
+                        candidate = corners.copy()
+                        candidate[corner_index] = current + np.array([dx, dy], dtype=np.float32)
+                        delta = candidate[corner_index] - initial[corner_index]
+                        if np.max(np.abs(delta)) > max_offset:
+                            continue
+                        if not _corners_are_valid(candidate, width=width, height=height):
+                            continue
+                        candidate_score = _rectified_board_score(
+                            rectify_board_image(frame, candidate.tolist(), output_size=256)
+                        )
+                        if candidate_score > local_best_score:
+                            local_best_score = candidate_score
+                            local_best_corner = candidate[corner_index].copy()
+                if local_best_score > best_score:
+                    corners[corner_index] = local_best_corner
+                    best_score = local_best_score
+                    improved = True
+
+    return tuple((float(point[0]), float(point[1])) for point in corners)
+
+
+
+def _rectified_board_score(board_rgb: np.ndarray) -> float:
+    gray = cv2.cvtColor(board_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    crop = gray[12:-12, 12:-12]
+    cell_height = crop.shape[0] // 8
+    cell_width = crop.shape[1] // 8
+    cells = crop[: cell_height * 8, : cell_width * 8].reshape(8, cell_height, 8, cell_width)
+    cells = cells.transpose(0, 2, 1, 3)
+    means = cells.mean(axis=(2, 3))
+    stds = cells.std(axis=(2, 3))
+    mask = (np.indices((8, 8)).sum(axis=0) % 2) == 0
+    return max(
+        _orientation_score(means, stds, mask),
+        _orientation_score(means, stds, ~mask),
+    )
+
+
+
+def _orientation_score(means: np.ndarray, stds: np.ndarray, mask: np.ndarray) -> float:
+    light = means[mask]
+    dark = means[~mask]
+    return float(
+        abs(light.mean() - dark.mean())
+        - 0.75 * (light.std() + dark.std())
+        - 0.25 * stds.mean()
+    )
+
+
+
+def _corners_are_valid(corners: np.ndarray, *, width: int, height: int) -> bool:
+    if (
+        (corners[:, 0] < 0).any()
+        or (corners[:, 0] > width - 1).any()
+        or (corners[:, 1] < 0).any()
+        or (corners[:, 1] > height - 1).any()
+    ):
+        return False
+
+    area = 0.0
+    for index in range(4):
+        x1, y1 = corners[index]
+        x2, y2 = corners[(index + 1) % 4]
+        area += x1 * y2 - x2 * y1
+    return abs(area) > 100.0
 
 
 
