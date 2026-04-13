@@ -18,7 +18,7 @@ from pipeline.physical.square_probe import load_probe_checkpoint
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
-_MODEL_CODE_VERSION = "v5"
+_MODEL_CODE_VERSION = "v6"
 
 
 def main() -> None:
@@ -224,6 +224,7 @@ def promote_to_runtime_weights(checkpoint_path: Path, payload: dict[str, Any]) -
         "ensemble_members": payload["metadata"].get("ensemble_members", []),
         "ensemble_weights": payload["metadata"].get("ensemble_weights", []),
         "runtime_format": "pytorch",
+        "runtime_constraints": "back_rank_pawns_and_missing_kings",
     }
     metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True))
 

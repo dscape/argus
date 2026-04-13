@@ -25,7 +25,7 @@ from pipeline.physical.square_data import (
     split_rectified_board_into_squares,
 )
 from pipeline.physical.square_probe import PhysicalSquareLinearProbe, load_probe_checkpoint
-from pipeline.shared import BoardObservation
+from pipeline.shared import BoardObservation, constrained_board_class_ids
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
@@ -56,10 +56,10 @@ def read_board_observation_from_frame(
         board_crop=board_crop,
     )
     probabilities = torch.softmax(logits, dim=1)
-    class_ids = probabilities.argmax(dim=1).cpu().tolist()
-    confidences = probabilities.max(dim=1).values.cpu().tolist()
+    class_ids = constrained_board_class_ids(logits)
+    confidences = probabilities.gather(1, class_ids.unsqueeze(1)).squeeze(1).cpu().tolist()
 
-    fen = _class_ids_to_board_fen(class_ids)
+    fen = _class_ids_to_board_fen(class_ids.cpu().tolist())
     return BoardObservation(
         fen=fen,
         square_confidences=tuple(float(value) for value in confidences),

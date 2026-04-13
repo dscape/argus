@@ -287,28 +287,40 @@
     - weights: `10,1`
   - ensemble artifact:
     - `outputs/2026-04-12/physical_board_probe_ensemble_holdoutpsr_posmlp_seed0_transformer_seed0_w10_1.pt`
-- Promoted the new runtime candidate:
-  - `weights/physical/v5r3.pt`
-  - end-to-end runtime eval: `outputs/2026-04-12/physical_runtime_eval_v8.json`
-  - square accuracy: `0.5009`
-  - non-empty accuracy: `0.4280`
-  - macro F1: `0.3143`
+- Promoted the new runtime candidate, then added a lightweight shared chess-aware postprocess on top of its logits:
+  - shared helper: `pipeline/shared/board_constraints.py`
+  - runtime now applies only two conservative constraints:
+    - back-rank pawns are reassigned to the best non-pawn class
+    - missing kings are inserted at the square with the strongest king-vs-current logit gain
+  - this deliberately does **not** try to fully legalize the whole board yet; more aggressive count caps hurt the primary metrics in quick evals
+- Promoted runtime after the code-version bump:
+  - code version: `v6`
+  - runtime artifact: `weights/physical/v6r1.pt`
+  - end-to-end runtime eval: `outputs/2026-04-13/physical_runtime_eval_v9_constrained.json`
+  - square accuracy: `0.5029`
+  - non-empty accuracy: `0.4323`
+  - macro F1: `0.3197`
   - board exact match: `0.0`
-- Interpretation of the new runtime:
-  - it is **not** better on raw square accuracy than `v5r2`, but that is acceptable here because overall square accuracy is partly driven by `empty`
-  - it **does** improve both user-priority real-board diagnostics over `v5r2`:
-    - non-empty accuracy: `0.4280` vs `0.4126`
-    - macro F1: `0.3143` vs `0.3126`
-  - this is the first concrete sign that pseudo-real source-video validation can improve the non-empty / macro trade-off even before new manual labels land
+- Interpretation of the constrained runtime:
+  - the lightweight board constraints improved **all three** main held-out metrics over the unconstrained `v5r3` runtime:
+    - square accuracy: `0.5029` vs `0.5009`
+    - non-empty accuracy: `0.4323` vs `0.4280`
+    - macro F1: `0.3197` vs `0.3143`
+  - relative to the older `v5r2` runtime, the new constrained reader is now ahead on the user-priority metrics by a clearer margin:
+    - non-empty accuracy: `0.4323` vs `0.4126`
+    - macro F1: `0.3197` vs `0.3126`
+  - full board exact match is still `0.0`, so this is still an incremental lift, not a solution
 - Updated best known committed runtime is now:
-  - `weights/physical/v5r3.pt`
-  - `outputs/2026-04-12/physical_runtime_eval_v8.json`
-  - square accuracy: `0.5009`
-  - non-empty accuracy: `0.4280`
-  - macro F1: `0.3143`
+  - `weights/physical/v6r1.pt`
+  - `outputs/2026-04-13/physical_runtime_eval_v9_constrained.json`
+  - square accuracy: `0.5029`
+  - non-empty accuracy: `0.4323`
+  - macro F1: `0.3197`
   - board exact match: `0.0`
 - New practical takeaway:
-  - manual non-held-out supervision is still the biggest expected lever, but **real-domain checkpoint selection on pseudo-real video holdouts is also worth keeping** because it already improved the metric trade-off we care about most
+  - manual non-held-out supervision is still the biggest expected lever, but the repo now has **two** cheap levers worth keeping in the loop before more labeling lands:
+    - pseudo-real source-video validation for checkpoint selection
+    - lightweight shared board-state constraints at runtime
 
 ### Validation
 - Passed: `make typecheck`

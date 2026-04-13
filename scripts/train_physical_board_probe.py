@@ -49,7 +49,7 @@ _DEFAULT_OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "physical_board_probe"
 _DEFAULT_WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
 _DEFAULT_DINO_MODEL = "facebook/dinov2-base"
 _DEFAULT_YOLO_MODEL = "weights/yolo_base/yolo11n.pt"
-_MODEL_CODE_VERSION = "v5"
+_MODEL_CODE_VERSION = "v6"
 _IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406), dtype=torch.float32).view(3, 1, 1)
 _IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225), dtype=torch.float32).view(3, 1, 1)
 
@@ -898,6 +898,7 @@ def promote_to_runtime_weights(
         },
         "runtime_format": "pytorch",
         "architecture": "board_probe",
+        "runtime_constraints": "back_rank_pawns_and_missing_kings",
     }
     write_json(weights_dir / "metadata.json", metadata)
     logger.info("Promoted runtime weights to %s", best_path)

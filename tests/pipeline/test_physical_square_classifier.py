@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import torch
 from pipeline.physical.board_probe import PhysicalBoardStateEnsembleProbe, PhysicalBoardStateProbe
 from pipeline.physical.square_classifier import (
     _build_probe_from_checkpoint,
@@ -68,6 +69,40 @@ def test_build_probe_from_checkpoint_returns_ensemble_for_logit_ensemble_archite
     )
 
     assert isinstance(probe, PhysicalBoardStateEnsembleProbe)
+
+
+def test_read_board_observation_from_frame_applies_constraints(monkeypatch) -> None:
+    import pipeline.physical.square_classifier as square_classifier
+
+    class DummyModule:
+        pass
+
+    logits = np.zeros((64, 13), dtype=np.float32)
+    logits[:, 0] = 1.0
+    logits[0, 1] = 5.0
+    logits[0, 3] = 4.0
+    logits[4, 12] = 6.0
+    logits[60, 4] = 3.0
+    logits[60, 6] = 2.5
+
+    monkeypatch.setattr(
+        square_classifier,
+        "_get_runtime_model",
+        lambda device: ({}, DummyModule(), DummyModule()),
+    )
+    monkeypatch.setattr(
+        square_classifier,
+        "_predict_board_logits",
+        lambda **kwargs: torch.tensor(logits, dtype=torch.float32),
+    )
+
+    observation = square_classifier.read_board_observation_from_frame(
+        np.zeros((64, 64, 3), dtype=np.uint8),
+    )
+
+    assert observation is not None
+    assert observation.fen.split("/", 1)[0] == "B3k3"
+    assert observation.fen.split("/")[-1] == "4K3"
 
 
 def test_read_fen_from_frame_returns_none_without_weights(monkeypatch) -> None:

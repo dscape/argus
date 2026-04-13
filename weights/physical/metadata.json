@@ -1,6 +1,6 @@
 {
   "architecture": "board_probe_ensemble",
-  "code_version": "v5",
+  "code_version": "v6",
   "encoder_type": "dinov2",
   "ensemble_members": [
     "outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_layers8_10_11_rw4_seed0/board_probe.pt",
@@ -39,7 +39,8 @@
   "num_classes": 13,
   "output_grid_size": null,
   "probe_config": null,
-  "revision": 3,
+  "revision": 1,
+  "runtime_constraints": "back_rank_pawns_and_missing_kings",
   "runtime_format": "pytorch",
-  "version": "v5r3"
+  "version": "v6r1"
 }
