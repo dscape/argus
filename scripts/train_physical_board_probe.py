@@ -898,7 +898,7 @@ def promote_to_runtime_weights(
         },
         "runtime_format": "pytorch",
         "architecture": "board_probe",
-        "runtime_constraints": "back_rank_pawns_and_missing_kings",
+        "runtime_constraints": "back_rank_pawns_and_exactly_one_king_per_color",
     }
     write_json(weights_dir / "metadata.json", metadata)
     logger.info("Promoted runtime weights to %s", best_path)

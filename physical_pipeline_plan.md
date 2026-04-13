@@ -150,7 +150,7 @@ Current snapshot on this branch:
 - Weight-space checkpoint averaging is still the wrong way to ensemble these newer heads because it drifts back toward empty-heavy behavior.
 - The current committed runtime candidate is therefore still a **logit-space** ensemble under `weights/physical/`, but it has now changed shape again after adding pseudo-real source-video validation for checkpoint selection and a lightweight shared runtime postprocess:
   - code version: `v6`
-  - runtime artifact: `weights/physical/v6r1.pt`
+  - runtime artifact: `weights/physical/v6r2.pt`
   - member families: one positional MLP plus one transformer
   - shared DINO layers: `8,10,11`
   - member checkpoints:
@@ -159,12 +159,12 @@ Current snapshot on this branch:
   - ensemble weights: `10,1`
   - runtime postprocess:
     - back-rank pawns are reassigned to the best non-pawn class
-    - missing kings are inserted at the square with the strongest king logit gain
-  - held-out runtime metrics from `outputs/2026-04-13/physical_runtime_eval_v9_constrained.json`:
-    - square accuracy: `0.5029`
-    - non-empty accuracy: `0.4323`
-    - macro F1: `0.3197`
-- Relative to `v5r2`, `v6r1` is clearly better on the diagnostics that actually matter for physical board reading (`non-empty` and `macro-F1`) even though board exact match is still `0.0`.
+    - each color is forced to have **exactly one** king by removing duplicate kings and inserting a king only when one is missing
+  - held-out runtime metrics from `outputs/2026-04-13/physical_runtime_eval_v11_exact_kings_runtime.json`:
+    - square accuracy: `0.5115`
+    - non-empty accuracy: `0.4427`
+    - macro F1: `0.3433`
+- Relative to `v5r2`, `v6r2` is clearly better on the diagnostics that actually matter for physical board reading (`non-empty` and `macro-F1`) even though board exact match is still `0.0`.
 - The repo now also has two pieces of infrastructure for the next data-centric step:
   - manual non-held-out physical board labels can be collected under `data/physical/train_manual/`
   - pseudo-real source-video holdouts can be used during training for checkpoint selection via `scripts/train_physical_board_probe.py --real-val-source-videos ... --selection-metric auto`

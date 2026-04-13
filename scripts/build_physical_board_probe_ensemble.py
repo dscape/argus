@@ -224,7 +224,7 @@ def promote_to_runtime_weights(checkpoint_path: Path, payload: dict[str, Any]) -
         "ensemble_members": payload["metadata"].get("ensemble_members", []),
         "ensemble_weights": payload["metadata"].get("ensemble_weights", []),
         "runtime_format": "pytorch",
-        "runtime_constraints": "back_rank_pawns_and_missing_kings",
+        "runtime_constraints": "back_rank_pawns_and_exactly_one_king_per_color",
     }
     metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True))
 

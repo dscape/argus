@@ -82,6 +82,8 @@ def test_read_board_observation_from_frame_applies_constraints(monkeypatch) -> N
     logits[0, 1] = 5.0
     logits[0, 3] = 4.0
     logits[4, 12] = 6.0
+    logits[5, 12] = 5.5
+    logits[5, 11] = 5.0
     logits[60, 4] = 3.0
     logits[60, 6] = 2.5
 
@@ -101,7 +103,8 @@ def test_read_board_observation_from_frame_applies_constraints(monkeypatch) -> N
     )
 
     assert observation is not None
-    assert observation.fen.split("/", 1)[0] == "B3k3"
+    assert observation.fen.split("/", 1)[0] == "B3kq2"
+    assert observation.fen.count("k") == 1
     assert observation.fen.split("/")[-1] == "4K3"
 
 

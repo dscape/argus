@@ -40,6 +40,20 @@ def test_constrained_board_class_ids_inserts_missing_white_king() -> None:
     assert int(class_ids[60].item()) == WHITE_KING
 
 
+def test_constrained_board_class_ids_removes_extra_black_kings() -> None:
+    logits = _empty_board_logits()
+    logits[4, BLACK_KING] = 6.0
+    logits[12, BLACK_KING] = 5.5
+    logits[12, 10] = 5.0
+    logits[60, WHITE_KING] = 6.0
+
+    class_ids = constrained_board_class_ids(logits)
+
+    assert int((class_ids == BLACK_KING).sum().item()) == 1
+    assert int(class_ids[4].item()) == BLACK_KING
+    assert int(class_ids[12].item()) == 10
+
+
 def test_constrained_board_class_ids_supports_batches() -> None:
     logits = torch.stack([_empty_board_logits(), _empty_board_logits()], dim=0)
     logits[:, 4, BLACK_KING] = 6.0

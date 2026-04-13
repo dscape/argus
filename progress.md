@@ -291,36 +291,50 @@
   - shared helper: `pipeline/shared/board_constraints.py`
   - runtime now applies only two conservative constraints:
     - back-rank pawns are reassigned to the best non-pawn class
-    - missing kings are inserted at the square with the strongest king-vs-current logit gain
-  - this deliberately does **not** try to fully legalize the whole board yet; more aggressive count caps hurt the primary metrics in quick evals
-- Promoted runtime after the code-version bump:
+    - each color is forced to have **exactly one** king by removing duplicate kings and inserting a king only when one is missing
+  - this still deliberately does **not** try to fully legalize the whole board; quick follow-up checks showed pawn-count and piece-count caps hurt the primary metrics
+- Promoted runtime after the exact-king fix:
   - code version: `v6`
-  - runtime artifact: `weights/physical/v6r1.pt`
-  - end-to-end runtime eval: `outputs/2026-04-13/physical_runtime_eval_v9_constrained.json`
-  - square accuracy: `0.5029`
-  - non-empty accuracy: `0.4323`
-  - macro F1: `0.3197`
+  - runtime artifact: `weights/physical/v6r2.pt`
+  - end-to-end runtime eval: `outputs/2026-04-13/physical_runtime_eval_v11_exact_kings_runtime.json`
+  - square accuracy: `0.5115`
+  - non-empty accuracy: `0.4427`
+  - macro F1: `0.3433`
   - board exact match: `0.0`
-- Interpretation of the constrained runtime:
-  - the lightweight board constraints improved **all three** main held-out metrics over the unconstrained `v5r3` runtime:
-    - square accuracy: `0.5029` vs `0.5009`
-    - non-empty accuracy: `0.4323` vs `0.4280`
-    - macro F1: `0.3197` vs `0.3143`
-  - relative to the older `v5r2` runtime, the new constrained reader is now ahead on the user-priority metrics by a clearer margin:
-    - non-empty accuracy: `0.4323` vs `0.4126`
-    - macro F1: `0.3197` vs `0.3126`
-  - full board exact match is still `0.0`, so this is still an incremental lift, not a solution
+- Interpretation of the exact-king runtime:
+  - forcing **exactly one king per color** was a much bigger win than the earlier missing-king-only postprocess because the ensemble was frequently hallucinating duplicate kings, especially extra black kings
+  - relative to the earlier constrained `v6r1` runtime, `v6r2` improves all three main held-out metrics again:
+    - square accuracy: `0.5115` vs `0.5029`
+    - non-empty accuracy: `0.4427` vs `0.4323`
+    - macro F1: `0.3433` vs `0.3197`
+  - relative to the older `v5r2` runtime, the gap on the user-priority metrics is now materially larger:
+    - non-empty accuracy: `0.4427` vs `0.4126`
+    - macro F1: `0.3433` vs `0.3126`
+  - full board exact match is still `0.0`, so this is still a meaningful lift rather than a solved reader
+- Additional follow-up checks after `v6r2`:
+  - searched the archived multilayer-DINO checkpoints again under the stronger exact-king postprocess
+  - the old reverted row-refinement checkpoint becomes surprisingly complementary in a held-out ensemble search, but it depends on reverted training code, so it was **not** promoted
+  - trained two reproducible pseudo-real-selection follow-ups that did **not** beat the current runtime:
+    - `outputs/2026-04-13/physical_board_probe_dino_topdown_transformer_real_train_split_holdoutpsr_layers8_10_11_seed0/`
+      - real eval square accuracy: `0.3416`
+      - real eval non-empty accuracy: `0.3540`
+      - real eval macro F1: `0.2367`
+    - `outputs/2026-04-13/physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_layers8_10_11_rw4_seed1/`
+      - real eval square accuracy: `0.3220`
+      - real eval non-empty accuracy: `0.2389`
+      - real eval macro F1: `0.1787`
 - Updated best known committed runtime is now:
-  - `weights/physical/v6r1.pt`
-  - `outputs/2026-04-13/physical_runtime_eval_v9_constrained.json`
-  - square accuracy: `0.5029`
-  - non-empty accuracy: `0.4323`
-  - macro F1: `0.3197`
+  - `weights/physical/v6r2.pt`
+  - `outputs/2026-04-13/physical_runtime_eval_v11_exact_kings_runtime.json`
+  - square accuracy: `0.5115`
+  - non-empty accuracy: `0.4427`
+  - macro F1: `0.3433`
   - board exact match: `0.0`
 - New practical takeaway:
   - manual non-held-out supervision is still the biggest expected lever, but the repo now has **two** cheap levers worth keeping in the loop before more labeling lands:
     - pseudo-real source-video validation for checkpoint selection
     - lightweight shared board-state constraints at runtime
+  - exact one-king enforcement is worth keeping; more aggressive static legality constraints are not obviously helping on the current frozen-feature reader
 
 ### Validation
 - Passed: `make typecheck`

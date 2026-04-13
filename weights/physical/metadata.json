@@ -39,8 +39,8 @@
   "num_classes": 13,
   "output_grid_size": null,
   "probe_config": null,
-  "revision": 1,
-  "runtime_constraints": "back_rank_pawns_and_missing_kings",
+  "revision": 2,
+  "runtime_constraints": "back_rank_pawns_and_exactly_one_king_per_color",
   "runtime_format": "pytorch",
-  "version": "v6r1"
+  "version": "v6r2"
 }
