@@ -460,6 +460,36 @@
   - while slightly regressing non-empty accuracy:
     - `0.4659` vs `0.4667`
   - this is therefore a tiny calibration lift, not a substantive change in the reader's ceiling; the remaining blocker is still supervision quality
+- Follow-up after `v7r5` calibration:
+  - searched per-source pseudo-real class-prior calibrations again and found that the tiny source `hryRA0-fqm0` was a much stronger calibration source than `psrPAoHr4wA` for the deployed objective.
+  - the important implementation detail is **where** the calibration is applied:
+    - applying the class-logit bias *before* adaptive smoothing beats applying the same bias only after smoothing, because the adaptive temporal gate now tracks the calibrated logits instead of the uncalibrated ones
+  - rejected and kept no code from several additional follow-ups while hunting this calibration source/order:
+    - uncertainty-gated calibration (worse than global bias)
+    - additional pseudo-real source combinations (all materially below the best `hryRA0-fqm0`-only calibration)
+- Promoted calibrated deployed runtime again:
+  - code version remains `v7`
+  - runtime artifact: `weights/physical/v7r6.pt`
+  - class-logit bias source: `hryRA0-fqm0`
+  - class-logit bias scale: `0.085`
+  - temporal order: applied **before** smoothing
+- End-to-end runtime evals for `v7r6`:
+  - stateless single-frame eval: `outputs/2026-04-13/physical_runtime_eval_v29_single_frame_v7r6_hrybias0085.json`
+    - square accuracy: `0.5099`
+    - non-empty accuracy: `0.4463`
+    - macro F1: `0.3628`
+  - deployed clip-ordered eval with metadata-driven adaptive smoothing: `outputs/2026-04-13/physical_runtime_eval_v30_temporal_adaptive_v7r6_hrybias0085.json`
+    - square accuracy: `0.5383`
+    - non-empty accuracy: `0.4702`
+    - macro F1: `0.3903`
+    - board exact match: `0.0`
+- Interpretation of `v7r6`:
+  - unlike `v7r5`, this is a **material** deployed lift on all three user-priority diagnostics:
+    - square accuracy: `0.5383` vs `0.5293`
+    - non-empty accuracy: `0.4702` vs `0.4659`
+    - macro F1: `0.3903` vs `0.3715`
+  - combined deployed `non_empty + macro` now rises from `0.8373` to `0.8605`
+  - board exact match is still `0.0`, so the reader is still not solved, but this is the largest deployed-runtime jump since moving from `v5r2` into the `v6`/`v7` family
 
 ### Validation
 - Passed: `make typecheck`

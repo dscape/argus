@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 from pipeline.physical.board_probe import PhysicalBoardStateEnsembleProbe, PhysicalBoardStateProbe
 from pipeline.physical.square_classifier import (
@@ -170,6 +171,61 @@ def test_read_board_observation_from_frame_applies_runtime_logit_bias(monkeypatc
     )
 
     assert observation is not None
+    assert observation.fen.split("/", 1)[0] == "B3k3"
+
+
+def test_physical_board_sequence_reader_applies_logit_bias_before_smoothing(monkeypatch) -> None:
+    import pipeline.physical.square_classifier as square_classifier
+
+    class DummyModule:
+        pass
+
+    class RecordingSmoother:
+        def __init__(self) -> None:
+            self.last_input: torch.Tensor | None = None
+
+        def reset(self) -> None:
+            self.last_input = None
+
+        def update(self, square_logits: torch.Tensor) -> torch.Tensor:
+            self.last_input = square_logits.clone()
+            return square_logits
+
+    recording_smoother = RecordingSmoother()
+    logits = np.zeros((64, 13), dtype=np.float32)
+    logits[:, 0] = 1.0
+    logits[0, 3] = 4.9
+    logits[0, 0] = 5.0
+    logits[4, 12] = 6.0
+    logits[60, 6] = 6.0
+
+    monkeypatch.setattr(
+        square_classifier,
+        "_build_temporal_smoother",
+        lambda **kwargs: recording_smoother,
+    )
+    monkeypatch.setattr(
+        square_classifier,
+        "_get_runtime_model",
+        lambda device: ({}, DummyModule(), DummyModule()),
+    )
+    monkeypatch.setattr(
+        square_classifier,
+        "_predict_board_logits",
+        lambda **kwargs: torch.tensor(logits, dtype=torch.float32),
+    )
+    monkeypatch.setattr(
+        square_classifier,
+        "load_metadata",
+        lambda: {"class_logit_bias": [0.0, 0.0, 0.0, 0.2] + [0.0] * 9},
+    )
+
+    reader = PhysicalBoardSequenceReader(device="cpu")
+    observation = reader.read_board_observation_from_frame(np.zeros((64, 64, 3), dtype=np.uint8))
+
+    assert observation is not None
+    assert recording_smoother.last_input is not None
+    assert recording_smoother.last_input[0, 3].item() == pytest.approx(5.1)
     assert observation.fen.split("/", 1)[0] == "B3k3"
 
 

@@ -119,9 +119,9 @@ class PhysicalBoardSequenceReader:
             probe=probe,
             board_crop=board_crop,
         )
+        logits = apply_board_logit_bias(logits, self._logit_bias)
         if self._smoother is not None:
             logits = self._smoother.update(logits)
-        logits = apply_board_logit_bias(logits, self._logit_bias)
         return _board_observation_from_logits(logits, timestamp_seconds=timestamp_seconds)
 
     def read_fen_from_frame(

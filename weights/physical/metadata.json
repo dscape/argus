@@ -1,25 +1,26 @@
 {
   "architecture": "board_probe_ensemble",
   "class_logit_bias": [
-    0.013890966780881921,
-    -0.002139547394768897,
-    -0.02084381151133005,
-    0.015349004756069906,
-    -0.024285372135976466,
-    -0.03638701944764813,
+    0.021971504684213015,
     0.0,
-    -0.010441401563634356,
-    0.008542963959593735,
-    -0.016594193874251494,
-    -0.037863843120287,
-    -0.00216268879233148,
+    0.0,
+    0.0,
+    -0.1345798715690096,
+    0.0,
+    0.0,
+    -0.061704644702603374,
+    0.0,
+    0.0,
+    -0.1213048880760791,
+    -1.370038138831457,
     0.0
   ],
-  "class_logit_bias_scale": 0.04,
+  "class_logit_bias_scale": 0.085,
   "class_logit_bias_source": "pseudo_real_source_prior_ratio",
   "class_logit_bias_source_videos": [
-    "psrPAoHr4wA"
+    "hryRA0-fqm0"
   ],
+  "class_logit_bias_temporal_order": "before_smoothing",
   "code_version": "v7",
   "encoder_type": "dinov2",
   "ensemble_members": [
@@ -75,8 +76,8 @@
     "low_alpha": 0.02,
     "mode": "adaptive_ema"
   },
-  "revision": 5,
+  "revision": 6,
   "runtime_constraints": "back_rank_pawns_and_exactly_one_king_per_color",
   "runtime_format": "pytorch",
-  "version": "v7r5"
+  "version": "v7r6"
 }
