@@ -165,6 +165,16 @@ Current snapshot on this branch:
     - non-empty accuracy: `0.4427`
     - macro F1: `0.3433`
 - Relative to `v5r2`, `v6r2` is clearly better on the diagnostics that actually matter for physical board reading (`non-empty` and `macro-F1`) even though board exact match is still `0.0`.
+- A quick temporal-stability diagnostic on the held-out physical clips showed that the current reader is flickering far more than the real boards (`13.45%` predicted square-flip rate vs `0.25%` ground truth), so lightweight sequence smoothing is now justified rather than speculative.
+- The repo therefore now also has a minimal temporal baseline on top of the same `v6r2` weights:
+  - shared helper: `pipeline/shared/board_smoothing.py`
+  - stateful runtime reader: `pipeline.physical.square_classifier.PhysicalBoardSequenceReader`
+  - hybrid full-frame runtime now keeps a causal EMA over physical board logits across consecutive physical frames
+  - held-out clip-ordered eval with `--temporal-ema-alpha 0.1`: `outputs/2026-04-13/physical_runtime_eval_v12_temporal_ema01.json`
+    - square accuracy: `0.5347`
+    - non-empty accuracy: `0.4557`
+    - macro F1: `0.3578`
+  - a quick greedy legal-move candidate filter did not beat plain EMA, so it was not kept
 - The repo now also has two pieces of infrastructure for the next data-centric step:
   - manual non-held-out physical board labels can be collected under `data/physical/train_manual/`
   - pseudo-real source-video holdouts can be used during training for checkpoint selection via `scripts/train_physical_board_probe.py --real-val-source-videos ... --selection-metric auto`

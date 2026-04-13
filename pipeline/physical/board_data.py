@@ -40,6 +40,8 @@ class PhysicalEvalBoardRow:
     board_path: str
     labels: tuple[int, ...]
     source_video_id: str | None
+    clip_path: str | None = None
+    frame_index: int | None = None
 
 
 class PhysicalSyntheticBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
@@ -202,6 +204,14 @@ def load_annotated_board_rows(annotation_root: str | Path) -> list[PhysicalEvalB
                 source_video_id=(
                     str(payload["source_video_id"])
                     if payload.get("source_video_id") is not None
+                    else None
+                ),
+                clip_path=(
+                    str(payload["clip_path"]) if payload.get("clip_path") is not None else None
+                ),
+                frame_index=(
+                    int(payload["frame_index"])
+                    if payload.get("frame_index") is not None
                     else None
                 ),
             )

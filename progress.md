@@ -323,18 +323,37 @@
       - real eval square accuracy: `0.3220`
       - real eval non-empty accuracy: `0.2389`
       - real eval macro F1: `0.1787`
-- Updated best known committed runtime is now:
+- Updated best known committed **single-frame** runtime is now:
   - `weights/physical/v6r2.pt`
   - `outputs/2026-04-13/physical_runtime_eval_v11_exact_kings_runtime.json`
   - square accuracy: `0.5115`
   - non-empty accuracy: `0.4427`
   - macro F1: `0.3433`
   - board exact match: `0.0`
+- Measured temporal instability on the held-out physical clips before building any new fusion logic:
+  - current `v6r2` predictions flip on `13.45%` of square-to-square frame transitions
+  - ground-truth labels flip on only `0.25%`
+  - predicted square states are therefore flickering about `54×` more often than the real boards
+- Added a lightweight temporal smoothing baseline for physical runtime:
+  - shared helper: `pipeline/shared/board_smoothing.py`
+  - stateful runtime reader: `pipeline.physical.square_classifier.PhysicalBoardSequenceReader`
+  - hybrid full-frame path now keeps a causal EMA over physical board logits across consecutive physical frames
+  - `scripts/eval_physical_board_runtime.py` now supports `--temporal-ema-alpha`
+- Held-out clip-ordered runtime eval with causal EMA smoothing (`alpha=0.1`):
+  - `outputs/2026-04-13/physical_runtime_eval_v12_temporal_ema01.json`
+  - square accuracy: `0.5347`
+  - non-empty accuracy: `0.4557`
+  - macro F1: `0.3578`
+  - board exact match: `0.0`
+- Follow-up check after the EMA win:
+  - a quick greedy legal-move candidate filter on top of the EMA-smoothed logits did **not** improve over plain EMA, so that extra logic was not kept
 - New practical takeaway:
-  - manual non-held-out supervision is still the biggest expected lever, but the repo now has **two** cheap levers worth keeping in the loop before more labeling lands:
+  - manual non-held-out supervision is still the biggest expected lever, but the repo now has **three** cheap levers worth keeping in the loop before more labeling lands:
     - pseudo-real source-video validation for checkpoint selection
     - lightweight shared board-state constraints at runtime
+    - causal temporal smoothing over clip-ordered physical board logits
   - exact one-king enforcement is worth keeping; more aggressive static legality constraints are not obviously helping on the current frozen-feature reader
+  - temporal fusion now looks genuinely promising because the current reader is very noisy over time rather than merely stable-and-wrong
 
 ### Validation
 - Passed: `make typecheck`

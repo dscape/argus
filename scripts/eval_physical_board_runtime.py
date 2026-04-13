@@ -13,7 +13,10 @@ import cv2
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.physical.board_data import PhysicalEvalBoardDataset
-from pipeline.physical.square_classifier import read_board_observation_from_frame
+from pipeline.physical.square_classifier import (
+    PhysicalBoardSequenceReader,
+    read_board_observation_from_frame,
+)
 from pipeline.physical.square_probe import evaluate_probe
 from pipeline.shared import SQUARE_CLASS_NAMES
 
@@ -25,20 +28,44 @@ _CLASS_NAME_TO_INDEX = {name: index for index, name in enumerate(SQUARE_CLASS_NA
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate physical runtime reader")
     parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--temporal-ema-alpha", type=float, default=0.0)
     parser.add_argument("--output", type=Path, default=_DEFAULT_OUTPUT_PATH)
     args = parser.parse_args()
 
     dataset = PhysicalEvalBoardDataset()
+    rows = sorted(
+        dataset.rows,
+        key=lambda row: (
+            row.clip_path or row.annotation_id,
+            -1 if row.frame_index is None else row.frame_index,
+            row.annotation_id,
+        ),
+    )
+    sequence_reader = None
+    current_clip_key = None
+    if args.temporal_ema_alpha > 0.0:
+        sequence_reader = PhysicalBoardSequenceReader(
+            device=args.device,
+            ema_alpha=args.temporal_ema_alpha,
+        )
+
     board_annotation_ids: list[str] = []
     predicted_labels: list[int] = []
     target_labels: list[int] = []
     missing_predictions = 0
 
-    for row in dataset.rows:
+    for row in rows:
         image = cv2.imread(str(_PROJECT_ROOT / row.board_path), cv2.IMREAD_COLOR)
         if image is None:
             raise ValueError(f"Failed to load board image: {row.board_path}")
-        observation = read_board_observation_from_frame(image, device=args.device)
+        if sequence_reader is not None:
+            clip_key = row.clip_path or row.annotation_id
+            if clip_key != current_clip_key:
+                sequence_reader.reset()
+                current_clip_key = clip_key
+            observation = sequence_reader.read_board_observation_from_frame(image)
+        else:
+            observation = read_board_observation_from_frame(image, device=args.device)
         if observation is None:
             missing_predictions += 1
             continue
@@ -68,6 +95,7 @@ def main() -> None:
     report = {
         "missing_predictions": missing_predictions,
         "evaluated_boards": len(predicted_labels) // 64,
+        "temporal_ema_alpha": args.temporal_ema_alpha,
         "metrics": metrics.to_dict(),
     }
     output_path = args.output.resolve()

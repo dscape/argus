@@ -25,11 +25,16 @@ from pipeline.physical.square_data import (
     split_rectified_board_into_squares,
 )
 from pipeline.physical.square_probe import PhysicalSquareLinearProbe, load_probe_checkpoint
-from pipeline.shared import BoardObservation, constrained_board_class_ids
+from pipeline.shared import (
+    BoardLogitsExponentialSmoother,
+    BoardObservation,
+    constrained_board_class_ids,
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
 _DEFAULT_WEIGHTS_PATH = WEIGHTS_DIR / "best.pt"
+_DEFAULT_TEMPORAL_EMA_ALPHA = 0.1
 _CLASS_TO_SYMBOL = {index: name for index, name in enumerate(CLASS_NAMES)}
 
 _cached_model: tuple[dict[str, Any], VisionEncoder, nn.Module] | None = None
@@ -55,17 +60,7 @@ def read_board_observation_from_frame(
         probe=probe,
         board_crop=board_crop,
     )
-    probabilities = torch.softmax(logits, dim=1)
-    class_ids = constrained_board_class_ids(logits)
-    confidences = probabilities.gather(1, class_ids.unsqueeze(1)).squeeze(1).cpu().tolist()
-
-    fen = _class_ids_to_board_fen(class_ids.cpu().tolist())
-    return BoardObservation(
-        fen=fen,
-        square_confidences=tuple(float(value) for value in confidences),
-        timestamp_seconds=timestamp_seconds,
-        source="physical",
-    )
+    return _board_observation_from_logits(logits, timestamp_seconds=timestamp_seconds)
 
 
 def read_fen_from_frame(
@@ -81,6 +76,60 @@ def read_fen_from_frame(
         device=device,
     )
     return None if observation is None else observation.fen
+
+
+class PhysicalBoardSequenceReader:
+    """Stateful physical-board reader with optional causal logit smoothing."""
+
+    def __init__(
+        self,
+        *,
+        device: str = "cpu",
+        ema_alpha: float | None = _DEFAULT_TEMPORAL_EMA_ALPHA,
+    ) -> None:
+        self.device = device
+        self._smoother = (
+            None
+            if ema_alpha is None or ema_alpha <= 0.0
+            else BoardLogitsExponentialSmoother(alpha=ema_alpha)
+        )
+
+    def reset(self) -> None:
+        if self._smoother is not None:
+            self._smoother.reset()
+
+    def read_board_observation_from_frame(
+        self,
+        board_crop: np.ndarray,
+        *,
+        timestamp_seconds: float = 0.0,
+    ) -> BoardObservation | None:
+        try:
+            checkpoint, encoder, probe = _get_runtime_model(device=self.device)
+        except FileNotFoundError:
+            return None
+
+        logits = _predict_board_logits(
+            checkpoint=checkpoint,
+            encoder=encoder,
+            probe=probe,
+            board_crop=board_crop,
+        )
+        if self._smoother is not None:
+            logits = self._smoother.update(logits)
+        return _board_observation_from_logits(logits, timestamp_seconds=timestamp_seconds)
+
+    def read_fen_from_frame(
+        self,
+        board_crop: np.ndarray,
+        *,
+        timestamp_seconds: float = 0.0,
+    ) -> str | None:
+        observation = self.read_board_observation_from_frame(
+            board_crop,
+            timestamp_seconds=timestamp_seconds,
+        )
+        return None if observation is None else observation.fen
 
 
 def _class_ids_to_board_fen(class_ids: list[int]) -> str:
@@ -107,6 +156,23 @@ def _class_ids_to_board_fen(class_ids: list[int]) -> str:
             rank_parts.append(str(empty_run))
         ranks.append("".join(rank_parts) or "8")
     return "/".join(ranks)
+
+
+def _board_observation_from_logits(
+    square_logits: torch.Tensor,
+    *,
+    timestamp_seconds: float,
+) -> BoardObservation:
+    probabilities = torch.softmax(square_logits, dim=1)
+    class_ids = constrained_board_class_ids(square_logits)
+    confidences = probabilities.gather(1, class_ids.unsqueeze(1)).squeeze(1).cpu().tolist()
+    fen = _class_ids_to_board_fen(class_ids.cpu().tolist())
+    return BoardObservation(
+        fen=fen,
+        square_confidences=tuple(float(value) for value in confidences),
+        timestamp_seconds=timestamp_seconds,
+        source="physical",
+    )
 
 
 def _predict_board_logits(

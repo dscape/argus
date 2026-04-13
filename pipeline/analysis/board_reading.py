@@ -93,9 +93,16 @@ class OverlayFrameReader:
 class HybridFrameReader(OverlayFrameReader):
     """Overlay-first reader with segmentation and VLM fallbacks."""
 
+    def __init__(self, config: VideoAnalysisConfig) -> None:
+        super().__init__(config)
+        from pipeline.physical.square_classifier import PhysicalBoardSequenceReader
+
+        self._physical_reader = PhysicalBoardSequenceReader(device=config.device)
+
     def read(self, frame_rgb: np.ndarray) -> FrameReadResult:
         result = super().read(frame_rgb)
         if result.fen is not None:
+            self._physical_reader.reset()
             return result
 
         from pipeline.analysis.board_segmenter import segment_board
@@ -103,15 +110,20 @@ class HybridFrameReader(OverlayFrameReader):
 
         segment = segment_board(frame_rgb, self.config)
         if segment is None:
+            self._physical_reader.reset()
             return FrameReadResult(fen=None, method=None)
 
         state = detect_pieces(
             segment.cropped_board,
             self.config,
             segmenter_method=segment.method,
+            physical_sequence_reader=self._physical_reader,
         )
         if state is None or not _fen_looks_plausible(state.fen):
+            self._physical_reader.reset()
             return FrameReadResult(fen=None, method=None)
+        if state.method != "physical_square_classifier":
+            self._physical_reader.reset()
 
         return FrameReadResult(fen=state.fen, method=f"hybrid_{state.method}")
 

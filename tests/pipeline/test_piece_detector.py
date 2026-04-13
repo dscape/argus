@@ -30,6 +30,23 @@ def test_detect_with_square_classifier_uses_physical_module(monkeypatch) -> None
     )
 
 
+def test_detect_with_square_classifier_uses_sequence_reader_when_provided() -> None:
+    class DummySequenceReader:
+        def read_fen_from_frame(self, _board_crop: np.ndarray) -> str:
+            return chess.STARTING_BOARD_FEN
+
+    result = _detect_with_square_classifier(
+        np.zeros((32, 32, 3), dtype=np.uint8),
+        device="cpu",
+        sequence_reader=DummySequenceReader(),
+    )
+
+    assert result == BoardState(
+        fen=chess.STARTING_BOARD_FEN,
+        method="physical_square_classifier",
+    )
+
+
 def test_detect_pieces_falls_back_to_vlm_when_physical_classifier_has_no_model(
     monkeypatch,
 ) -> None:

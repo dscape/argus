@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -21,11 +22,19 @@ class BoardState:
     method: str
 
 
-def _detect_with_square_classifier(board_crop_bgr: np.ndarray, device: str) -> BoardState | None:
+def _detect_with_square_classifier(
+    board_crop_bgr: np.ndarray,
+    device: str,
+    *,
+    sequence_reader: Any | None = None,
+) -> BoardState | None:
     from pipeline.physical.square_classifier import read_fen_from_frame
 
     try:
-        fen = read_fen_from_frame(board_crop_bgr, device=device)
+        if sequence_reader is None:
+            fen = read_fen_from_frame(board_crop_bgr, device=device)
+        else:
+            fen = sequence_reader.read_fen_from_frame(board_crop_bgr)
     except Exception as exc:  # pragma: no cover - defensive logging around model runtime
         logger.debug("Physical square classifier failed: %s", exc)
         return None
@@ -46,6 +55,8 @@ def detect_pieces(
     board_crop: np.ndarray,
     config: VideoAnalysisConfig,
     segmenter_method: str = "",
+    *,
+    physical_sequence_reader: Any | None = None,
 ) -> BoardState | None:
     """Detect pieces on a board crop and return a FEN string."""
     import cv2
@@ -58,7 +69,11 @@ def detect_pieces(
         board_rgb = cv2.cvtColor(board_crop, cv2.COLOR_BGR2RGB)
 
     if config.use_piece_classifier:
-        result = _detect_with_square_classifier(board_bgr, config.device)
+        result = _detect_with_square_classifier(
+            board_bgr,
+            config.device,
+            sequence_reader=physical_sequence_reader,
+        )
         if result is not None:
             return result
 
