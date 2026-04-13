@@ -1,4 +1,4 @@
-"""Helpers for building the held-out physical-board square evaluation set."""
+"""Helpers for manually labeled non-held-out physical-board training data."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import numpy as np
 from pipeline.physical import annotation_dataset
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATASET_ROOT = _PROJECT_ROOT / "data" / "physical" / "eval"
+DATASET_ROOT = _PROJECT_ROOT / "data" / "physical" / "train_manual"
 BOARDS_DIR = DATASET_ROOT / "boards"
 SQUARES_DIR = DATASET_ROOT / "squares"
 BOARD_ANNOTATIONS_PATH = DATASET_ROOT / "board_annotations.jsonl"
@@ -68,7 +68,7 @@ def save_board_annotation(
         squares_dir=SQUARES_DIR,
         board_annotations_path=BOARD_ANNOTATIONS_PATH,
         square_manifest_path=SQUARE_MANIFEST_PATH,
-        split="eval_holdout",
+        split="train_manual",
         image_rgb=image_rgb,
         clip_path=clip_path,
         frame_index=frame_index,
@@ -85,7 +85,7 @@ def get_saved_frame_counts_by_clip() -> dict[str, int]:
 
 
 
-def get_held_out_source_video_ids() -> list[str]:
+def get_source_video_ids() -> list[str]:
     return annotation_dataset.get_source_video_ids(BOARD_ANNOTATIONS_PATH)
 
 

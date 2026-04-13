@@ -11,12 +11,17 @@ import {
   clipSourceVideoUrl,
   deleteClipSession,
   deletePhysicalEvalAnnotation,
+  deletePhysicalTrainAnnotation,
   getClipInfo,
   getPhysicalEvalAnnotation,
   getPhysicalEvalMoveCorrections,
+  getPhysicalTrainAnnotation,
+  getPhysicalTrainMoveCorrections,
   loadClipFromPath,
   rectifyPhysicalEvalFrame,
+  rectifyPhysicalTrainFrame,
   savePhysicalEvalAnnotation,
+  savePhysicalTrainAnnotation,
   type PhysicalEvalAnnotation,
   type PhysicalEvalMoveCorrections,
 } from "@/lib/api";
@@ -101,12 +106,47 @@ function matchesSavedLabels(labels: Array<number | null>, savedLabels: Array<num
   return labels.length === savedLabels.length && labels.every((label, index) => label === savedLabels[index]);
 }
 
-interface Props {
-  filename: string;
+type PhysicalAnnotationMode = "eval" | "train";
+
+interface PhysicalAnnotationModeConfig {
+  indexHref: string;
+  indexLabel: string;
+  getAnnotation: typeof getPhysicalEvalAnnotation;
+  getMoveCorrections: typeof getPhysicalEvalMoveCorrections;
+  rectifyFrame: typeof rectifyPhysicalEvalFrame;
+  saveAnnotation: typeof savePhysicalEvalAnnotation;
+  deleteAnnotation: typeof deletePhysicalEvalAnnotation;
 }
 
-export function PhysicalAnnotationPage({ filename }: Props) {
+const MODE_CONFIG: Record<PhysicalAnnotationMode, PhysicalAnnotationModeConfig> = {
+  eval: {
+    indexHref: "/annotate/physical",
+    indexLabel: "All eval clips",
+    getAnnotation: getPhysicalEvalAnnotation,
+    getMoveCorrections: getPhysicalEvalMoveCorrections,
+    rectifyFrame: rectifyPhysicalEvalFrame,
+    saveAnnotation: savePhysicalEvalAnnotation,
+    deleteAnnotation: deletePhysicalEvalAnnotation,
+  },
+  train: {
+    indexHref: "/annotate/physical-train",
+    indexLabel: "All train clips",
+    getAnnotation: getPhysicalTrainAnnotation,
+    getMoveCorrections: getPhysicalTrainMoveCorrections,
+    rectifyFrame: rectifyPhysicalTrainFrame,
+    saveAnnotation: savePhysicalTrainAnnotation,
+    deleteAnnotation: deletePhysicalTrainAnnotation,
+  },
+};
+
+interface Props {
+  filename: string;
+  mode?: PhysicalAnnotationMode;
+}
+
+export function PhysicalAnnotationPage({ filename, mode = "eval" }: Props) {
   const clipPath = `data/argus/train_real/${filename}`;
+  const modeConfig = MODE_CONFIG[mode];
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [clipInfo, setClipInfo] = useState<ClipInspectResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -143,7 +183,9 @@ export function PhysicalAnnotationPage({ filename }: Props) {
   if (loading) {
     return (
       <div className="space-y-4">
-        <Link href="/annotate/physical" className="text-sm text-blue-500 hover:underline">&larr; All clips</Link>
+        <Link href={modeConfig.indexHref} className="text-sm text-blue-500 hover:underline">
+          &larr; {modeConfig.indexLabel}
+        </Link>
         <p className="text-sm text-muted-foreground">Loading {filename}&hellip;</p>
       </div>
     );
@@ -152,13 +194,23 @@ export function PhysicalAnnotationPage({ filename }: Props) {
   if (error || !clipInfo || !sessionId) {
     return (
       <div className="space-y-4">
-        <Link href="/annotate/physical" className="text-sm text-blue-500 hover:underline">&larr; All clips</Link>
+        <Link href={modeConfig.indexHref} className="text-sm text-blue-500 hover:underline">
+          &larr; {modeConfig.indexLabel}
+        </Link>
         <p className="text-sm text-destructive">{error ?? "Failed to load clip"}</p>
       </div>
     );
   }
 
-  return <AnnotationContent filename={filename} clipPath={clipPath} sessionId={sessionId} clipInfo={clipInfo} />;
+  return (
+    <AnnotationContent
+      filename={filename}
+      clipPath={clipPath}
+      sessionId={sessionId}
+      clipInfo={clipInfo}
+      modeConfig={modeConfig}
+    />
+  );
 }
 
 function AnnotationContent({
@@ -166,11 +218,13 @@ function AnnotationContent({
   clipPath,
   sessionId,
   clipInfo,
+  modeConfig,
 }: {
   filename: string;
   clipPath: string;
   sessionId: string;
   clipInfo: ClipInspectResponse;
+  modeConfig: PhysicalAnnotationModeConfig;
 }) {
   const [selectedFrame, setSelectedFrame] = useState(0);
   const [corners, setCorners] = useState<Array<{ x: number; y: number }>>([]);
@@ -201,7 +255,7 @@ function AnnotationContent({
 
   const refreshMoveCorrections = useCallback(async () => {
     try {
-      const nextCorrections = await getPhysicalEvalMoveCorrections(sessionId, clipPath);
+      const nextCorrections = await modeConfig.getMoveCorrections(sessionId, clipPath);
       setMoveCorrections(nextCorrections);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load manual move corrections");
@@ -313,7 +367,7 @@ function AnnotationContent({
       latestRectifyRequestIdRef.current = requestId;
       setRectifying(true);
       try {
-        const result = await rectifyPhysicalEvalFrame({
+        const result = await modeConfig.rectifyFrame({
           session_id: sessionId,
           frame_index: selectedFrame,
           corners: nextCorners.map((p) => [p.x, p.y]),
@@ -489,7 +543,7 @@ function AnnotationContent({
     if (!canSave) return null;
     setSaving(true);
     try {
-      const result = await savePhysicalEvalAnnotation({
+      const result = await modeConfig.saveAnnotation({
         session_id: sessionId,
         clip_path: clipPath,
         frame_index: selectedFrame,
@@ -518,7 +572,7 @@ function AnnotationContent({
     if (!existingAnnotation) return;
     setDeleting(true);
     try {
-      await deletePhysicalEvalAnnotation(clipPath, selectedFrame);
+      await modeConfig.deleteAnnotation(clipPath, selectedFrame);
       resetCorners();
       await refreshMoveCorrections();
       toast.success("Annotation deleted");
@@ -535,7 +589,7 @@ function AnnotationContent({
     let cancelled = false;
     void (async () => {
       try {
-        const ann = await getPhysicalEvalAnnotation(clipPath, selectedFrame);
+        const ann = await modeConfig.getAnnotation(clipPath, selectedFrame);
         if (cancelled) return;
         setExistingAnnotation(ann);
         if (ann) {
@@ -567,7 +621,9 @@ function AnnotationContent({
       {/* Header row: nav + actions */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <Link href="/annotate/physical" className="text-xs text-blue-500 hover:underline">&larr; All clips</Link>
+          <Link href={modeConfig.indexHref} className="text-xs text-blue-500 hover:underline">
+            &larr; {modeConfig.indexLabel}
+          </Link>
           <span className="font-mono text-sm font-medium">{filename}</span>
           <Badge variant="secondary" className="text-[10px]">{frameCount} frames</Badge>
           <Badge variant="secondary" className="text-[10px]">{effectiveTotalMoves} moves</Badge>

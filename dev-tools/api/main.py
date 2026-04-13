@@ -15,7 +15,13 @@ logging.basicConfig(
 from fastapi.middleware.cors import CORSMiddleware
 from pipeline.db.connection import migrate
 
-from api.routers.annotate import calibration, overlay_bbox, physical_eval, video_session
+from api.routers.annotate import (
+    calibration,
+    overlay_bbox,
+    physical_eval,
+    physical_train,
+    video_session,
+)
 from api.routers.data import clips, real, synthetic
 from api.routers.evaluate import models, overlay
 from api.routers.videos import crawl
@@ -44,6 +50,7 @@ app.include_router(overlay.router, prefix="/api/overlay", tags=["overlay"])
 app.include_router(calibration.router, prefix="/api/calibration", tags=["calibration"])
 app.include_router(overlay_bbox.router, prefix="/api/overlay-bbox", tags=["overlay-bbox"])
 app.include_router(physical_eval.router, prefix="/api/physical-eval", tags=["physical-eval"])
+app.include_router(physical_train.router, prefix="/api/physical-train", tags=["physical-train"])
 app.include_router(clips.router, prefix="/api/clips", tags=["clips"])
 app.include_router(video_session.router, prefix="/api/video", tags=["video"])
 app.include_router(synthetic.router, prefix="/api/synthetic", tags=["synthetic"])

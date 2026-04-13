@@ -10,6 +10,7 @@ from pipeline.physical.board_data import (
     INPUT_SIZE,
     PhysicalEvalBoardDataset,
     PhysicalEvalBoardRow,
+    PhysicalManualTrainBoardDataset,
     PhysicalSyntheticBoardDataset,
     _apply_piece_rectification_artifacts,
     augment_physical_board_image,
@@ -70,6 +71,37 @@ def test_physical_eval_board_dataset_loads_rectified_boards(tmp_path) -> None:
             PhysicalEvalBoardRow(
                 annotation_id="ann-1",
                 board_path="data/physical/eval/boards/sample.jpg",
+                labels=tuple([0] * 64),
+                source_video_id="video-1",
+            )
+        ],
+        image_size=32,
+    )
+
+    import pipeline.physical.board_data as board_data
+
+    original_root = board_data._PROJECT_ROOT
+    board_data._PROJECT_ROOT = project_root
+    try:
+        image, targets = dataset[0]
+    finally:
+        board_data._PROJECT_ROOT = original_root
+
+    assert image.shape == (3, 32, 32)
+    assert targets.shape == (64,)
+
+
+def test_physical_manual_train_board_dataset_loads_rectified_boards(tmp_path) -> None:
+    project_root = tmp_path
+    board_path = project_root / "data" / "physical" / "train_manual" / "boards" / "sample.jpg"
+    board_path.parent.mkdir(parents=True)
+    assert cv2.imwrite(str(board_path), np.full((32, 32, 3), 127, dtype=np.uint8))
+
+    dataset = PhysicalManualTrainBoardDataset(
+        rows=[
+            PhysicalEvalBoardRow(
+                annotation_id="ann-1",
+                board_path="data/physical/train_manual/boards/sample.jpg",
                 labels=tuple([0] * 64),
                 source_video_id="video-1",
             )

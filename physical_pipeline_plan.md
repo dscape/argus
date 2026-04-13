@@ -158,7 +158,11 @@ Current snapshot on this branch:
     - non-empty accuracy: `0.4126`
     - macro F1: `0.3126`
 - That is still far from the target, but it is the strongest current board-context reader and the best committed end-to-end runtime candidate for physical boards. The runtime path is explicitly evaluable via `scripts/eval_physical_board_runtime.py`.
-- Next attempt should still prioritize better in-domain real supervision and better localization / corner quality before more backbone work. The multilayer-DINO gains show there was still frozen-feature headroom, but board exact match staying at `0.0` means the task is still mostly data-limited.
+- The repo now also has explicit infrastructure for the next data-centric step:
+  - manual non-held-out physical board labels can be collected under `data/physical/train_manual/`
+  - dev-tools route: `/annotate/physical-train`
+  - training ingestion path: `PhysicalManualTrainBoardDataset` plus `scripts/train_physical_board_probe.py --manual-train-root ...`
+- Follow-up experiments after `v5r2` did not find another easy frozen-feature win. The practical next attempt should therefore prioritize **manual non-held-out real supervision** and better localization / corner quality before more backbone work.
 - Empty squares will dominate; success is not allowed to hide behind empty-square accuracy.
 - Synthetic physical renders are training fuel, not validation data.
 

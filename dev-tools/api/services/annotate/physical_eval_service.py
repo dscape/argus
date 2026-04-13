@@ -30,64 +30,27 @@ def list_clip_files(
     *,
     limit: int = 200,
 ) -> dict[str, Any]:
-    directory = _resolve_within_project(clips_dir)
-    if not directory.exists():
-        return {"clips_dir": str(directory.relative_to(_PROJECT_ROOT)), "clips": []}
+    return _list_clip_files(eval_dataset, clips_dir, limit=limit)
 
-    saved_frame_counts = eval_dataset.get_saved_frame_counts_by_clip()
-    clips: list[dict[str, Any]] = []
-    for path in sorted(directory.glob("clip_*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]:
-        stat = path.stat()
-        match = _REAL_CLIP_RE.match(path.name)
-        relative_clip_path = str(path.relative_to(_PROJECT_ROOT))
-        annotated_frame_count = saved_frame_counts.get(relative_clip_path, 0)
-        num_frames = _get_clip_num_frames(path) if annotated_frame_count > 0 else None
-        fully_annotated = bool(num_frames and annotated_frame_count >= num_frames)
-        clips.append(
-            {
-                "filename": path.name,
-                "clip_path": relative_clip_path,
-                "size_mb": round(stat.st_size / 1024 / 1024, 2),
-                "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-                "source_video_id": match.group("video_id") if match else None,
-                "clip_id": int(match.group("clip_id")) if match else None,
-                "annotated_frame_count": annotated_frame_count,
-                "num_frames": num_frames,
-                "fully_annotated": fully_annotated,
-            }
-        )
-
-    return {
-        "clips_dir": str(directory.relative_to(_PROJECT_ROOT)),
-        "clips": clips,
-    }
 
 
 def get_annotation_summary() -> dict[str, Any]:
-    return eval_dataset.get_annotation_summary()
+    return _get_annotation_summary(eval_dataset)
+
 
 
 def get_frame_annotation(clip_path: str, frame_index: int) -> dict[str, Any] | None:
-    resolved = _resolve_within_project(clip_path)
-    return eval_dataset.load_board_annotation(str(resolved.relative_to(_PROJECT_ROOT)), frame_index)
+    return _get_frame_annotation(eval_dataset, clip_path, frame_index)
+
 
 
 def get_move_corrections(session_id: str, clip_path: str) -> dict[str, Any]:
-    resolved = _resolve_within_project(clip_path)
-    relative_clip_path = str(resolved.relative_to(_PROJECT_ROOT))
-    clip_info = clip_service.inspect(session_id)
-    annotations = eval_dataset.list_board_annotations(relative_clip_path)
-    return _build_move_corrections(clip_info, annotations)
+    return _get_move_corrections(eval_dataset, session_id, clip_path)
+
 
 
 def delete_annotation(clip_path: str, frame_index: int) -> dict[str, Any] | None:
-    resolved = _resolve_within_project(clip_path)
-    deleted = eval_dataset.delete_board_annotation(
-        str(resolved.relative_to(_PROJECT_ROOT)), frame_index
-    )
-    if not deleted:
-        return None
-    return eval_dataset.get_annotation_summary()
+    return _delete_annotation(eval_dataset, clip_path, frame_index)
 
 
 def rectify_frame(
@@ -118,10 +81,121 @@ def save_annotation(
     *,
     output_size: int = eval_dataset.DEFAULT_BOARD_SIZE,
 ) -> dict[str, Any]:
+    return _save_annotation(
+        eval_dataset,
+        session_id,
+        clip_path,
+        frame_index,
+        corners,
+        labels,
+        output_size=output_size,
+    )
+
+
+def _list_clip_files(
+    dataset_module: Any,
+    clips_dir: str,
+    *,
+    limit: int,
+    exclude_source_video_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    directory = _resolve_within_project(clips_dir)
+    if not directory.exists():
+        return {"clips_dir": str(directory.relative_to(_PROJECT_ROOT)), "clips": []}
+
+    saved_frame_counts = dataset_module.get_saved_frame_counts_by_clip()
+    clips: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("clip_*.pt"), key=lambda p: p.stat().st_mtime, reverse=True):
+        match = _REAL_CLIP_RE.match(path.name)
+        source_video_id = match.group("video_id") if match else None
+        if source_video_id is not None and exclude_source_video_ids and source_video_id in exclude_source_video_ids:
+            continue
+
+        stat = path.stat()
+        relative_clip_path = str(path.relative_to(_PROJECT_ROOT))
+        annotated_frame_count = saved_frame_counts.get(relative_clip_path, 0)
+        num_frames = _get_clip_num_frames(path) if annotated_frame_count > 0 else None
+        fully_annotated = bool(num_frames and annotated_frame_count >= num_frames)
+        clips.append(
+            {
+                "filename": path.name,
+                "clip_path": relative_clip_path,
+                "size_mb": round(stat.st_size / 1024 / 1024, 2),
+                "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                "source_video_id": source_video_id,
+                "clip_id": int(match.group("clip_id")) if match else None,
+                "annotated_frame_count": annotated_frame_count,
+                "num_frames": num_frames,
+                "fully_annotated": fully_annotated,
+            }
+        )
+        if len(clips) >= limit:
+            break
+
+    return {
+        "clips_dir": str(directory.relative_to(_PROJECT_ROOT)),
+        "clips": clips,
+    }
+
+
+
+def _get_annotation_summary(dataset_module: Any) -> dict[str, Any]:
+    return dataset_module.get_annotation_summary()
+
+
+
+def _get_frame_annotation(
+    dataset_module: Any,
+    clip_path: str,
+    frame_index: int,
+) -> dict[str, Any] | None:
+    resolved = _resolve_within_project(clip_path)
+    return dataset_module.load_board_annotation(str(resolved.relative_to(_PROJECT_ROOT)), frame_index)
+
+
+
+def _get_move_corrections(
+    dataset_module: Any,
+    session_id: str,
+    clip_path: str,
+) -> dict[str, Any]:
+    resolved = _resolve_within_project(clip_path)
+    relative_clip_path = str(resolved.relative_to(_PROJECT_ROOT))
+    clip_info = clip_service.inspect(session_id)
+    annotations = dataset_module.list_board_annotations(relative_clip_path)
+    return _build_move_corrections(clip_info, annotations)
+
+
+
+def _delete_annotation(
+    dataset_module: Any,
+    clip_path: str,
+    frame_index: int,
+) -> dict[str, Any] | None:
+    resolved = _resolve_within_project(clip_path)
+    deleted = dataset_module.delete_board_annotation(
+        str(resolved.relative_to(_PROJECT_ROOT)), frame_index
+    )
+    if not deleted:
+        return None
+    return dataset_module.get_annotation_summary()
+
+
+
+def _save_annotation(
+    dataset_module: Any,
+    session_id: str,
+    clip_path: str,
+    frame_index: int,
+    corners: list[list[float]],
+    labels: list[int | None],
+    *,
+    output_size: int,
+) -> dict[str, Any]:
     resolved_clip_path = _resolve_within_project(clip_path)
     image_rgb = _get_clip_frame_rgb(session_id, frame_index)
     source_video_id = _source_video_id_from_path(resolved_clip_path)
-    annotation = eval_dataset.save_board_annotation(
+    annotation = dataset_module.save_board_annotation(
         image_rgb,
         clip_path=str(resolved_clip_path.relative_to(_PROJECT_ROOT)),
         frame_index=frame_index,
@@ -132,8 +206,9 @@ def save_annotation(
     )
     return {
         "annotation": annotation,
-        "summary": eval_dataset.get_annotation_summary(),
+        "summary": dataset_module.get_annotation_summary(),
     }
+
 
 
 def _build_move_corrections(

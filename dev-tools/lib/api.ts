@@ -1583,3 +1583,82 @@ export async function savePhysicalEvalAnnotation(body: {
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+export async function listPhysicalTrainClips(
+  clipsDir: string = "data/argus/train_real",
+  limit: number = 200,
+): Promise<{ clips_dir: string; clips: PhysicalEvalClip[] }> {
+  const params = new URLSearchParams({ clips_dir: clipsDir, limit: String(limit) });
+  const res = await fetch(`/api/physical-train/clips?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPhysicalTrainSummary(): Promise<PhysicalEvalSummary> {
+  const res = await fetch("/api/physical-train/summary");
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPhysicalTrainAnnotation(
+  clipPath: string,
+  frameIndex: number,
+): Promise<PhysicalEvalAnnotation | null> {
+  const params = new URLSearchParams({ clip_path: clipPath, frame_index: String(frameIndex) });
+  const res = await fetch(`/api/physical-train/annotation?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.annotation ?? null;
+}
+
+export async function deletePhysicalTrainAnnotation(
+  clipPath: string,
+  frameIndex: number,
+): Promise<{ summary: PhysicalEvalSummary }> {
+  const params = new URLSearchParams({ clip_path: clipPath, frame_index: String(frameIndex) });
+  const res = await fetch(`/api/physical-train/annotation?${params}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPhysicalTrainMoveCorrections(
+  sessionId: string,
+  clipPath: string,
+): Promise<PhysicalEvalMoveCorrections> {
+  const params = new URLSearchParams({ session_id: sessionId, clip_path: clipPath });
+  const res = await fetch(`/api/physical-train/corrections?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function rectifyPhysicalTrainFrame(body: {
+  session_id: string;
+  frame_index: number;
+  corners: number[][];
+  output_size?: number;
+}): Promise<{ image_b64: string; output_size: number }> {
+  const res = await fetch("/api/physical-train/rectify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function savePhysicalTrainAnnotation(body: {
+  session_id: string;
+  clip_path: string;
+  frame_index: number;
+  corners: number[][];
+  labels: Array<number | null>;
+  output_size?: number;
+}): Promise<{ annotation: PhysicalEvalAnnotation; summary: PhysicalEvalSummary }> {
+  const res = await fetch("/api/physical-train/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}

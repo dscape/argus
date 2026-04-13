@@ -31,6 +31,7 @@ _IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406), dtype=torch.float32).view(3
 _IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225), dtype=torch.float32).view(3, 1, 1)
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_EVAL_ROOT = _PROJECT_ROOT / "data" / "physical" / "eval"
+_DEFAULT_MANUAL_TRAIN_ROOT = _PROJECT_ROOT / "data" / "physical" / "train_manual"
 
 
 @dataclass(frozen=True)
@@ -125,19 +126,19 @@ class PhysicalSyntheticRenderedBoardDataset(Dataset[tuple[torch.Tensor, torch.Te
         return self.samples[index]
 
 
-class PhysicalEvalBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
-    """Held-out real rectified boards saved by the physical annotation workflow."""
+class PhysicalAnnotatedBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+    """Rectified boards loaded from one physical annotation root."""
 
     def __init__(
         self,
         *,
-        eval_root: str | Path = _DEFAULT_EVAL_ROOT,
+        annotation_root: str | Path,
         image_size: int = INPUT_SIZE,
         rows: list[PhysicalEvalBoardRow] | None = None,
     ) -> None:
-        self.eval_root = Path(eval_root)
+        self.annotation_root = Path(annotation_root)
         self.image_size = image_size
-        self.rows = rows or load_eval_board_rows(self.eval_root)
+        self.rows = rows or load_annotated_board_rows(self.annotation_root)
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -151,12 +152,37 @@ class PhysicalEvalBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         return preprocess_board_image(image, size=self.image_size), targets
 
 
-def load_eval_board_rows(
-    eval_root: str | Path = _DEFAULT_EVAL_ROOT,
-) -> list[PhysicalEvalBoardRow]:
-    annotations_path = Path(eval_root) / "board_annotations.jsonl"
+class PhysicalEvalBoardDataset(PhysicalAnnotatedBoardDataset):
+    """Held-out real rectified boards saved by the physical annotation workflow."""
+
+    def __init__(
+        self,
+        *,
+        eval_root: str | Path = _DEFAULT_EVAL_ROOT,
+        image_size: int = INPUT_SIZE,
+        rows: list[PhysicalEvalBoardRow] | None = None,
+    ) -> None:
+        super().__init__(annotation_root=eval_root, image_size=image_size, rows=rows)
+
+
+class PhysicalManualTrainBoardDataset(PhysicalAnnotatedBoardDataset):
+    """Manually labeled non-held-out boards for physical training."""
+
+    def __init__(
+        self,
+        *,
+        annotation_root: str | Path = _DEFAULT_MANUAL_TRAIN_ROOT,
+        image_size: int = INPUT_SIZE,
+        rows: list[PhysicalEvalBoardRow] | None = None,
+    ) -> None:
+        super().__init__(annotation_root=annotation_root, image_size=image_size, rows=rows)
+
+
+
+def load_annotated_board_rows(annotation_root: str | Path) -> list[PhysicalEvalBoardRow]:
+    annotations_path = Path(annotation_root) / "board_annotations.jsonl"
     if not annotations_path.exists():
-        raise ValueError(f"Physical eval board annotations not found: {annotations_path}")
+        raise ValueError(f"Physical board annotations not found: {annotations_path}")
 
     rows: list[PhysicalEvalBoardRow] = []
     for line in annotations_path.read_text().splitlines():
@@ -181,6 +207,13 @@ def load_eval_board_rows(
             )
         )
     return rows
+
+
+
+def load_eval_board_rows(
+    eval_root: str | Path = _DEFAULT_EVAL_ROOT,
+) -> list[PhysicalEvalBoardRow]:
+    return load_annotated_board_rows(eval_root)
 
 
 def preprocess_board_image(image_bgr: np.ndarray, *, size: int = INPUT_SIZE) -> torch.Tensor:

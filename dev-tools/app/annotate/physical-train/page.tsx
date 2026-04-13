@@ -5,16 +5,16 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 
-import { listPhysicalEvalClips, type PhysicalEvalClip } from "@/lib/api";
+import { listPhysicalTrainClips, type PhysicalEvalClip } from "@/lib/api";
 
-export default function PhysicalAnnotationIndexPage() {
+export default function PhysicalTrainAnnotationIndexPage() {
   const [clips, setClips] = useState<PhysicalEvalClip[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     void (async () => {
       try {
-        const data = await listPhysicalEvalClips();
+        const data = await listPhysicalTrainClips();
         setClips(data.clips);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Failed to load clips");
@@ -29,17 +29,19 @@ export default function PhysicalAnnotationIndexPage() {
   }
 
   if (clips.length === 0) {
-    return <div className="text-sm text-muted-foreground">No held-out eval clips found in data/argus/train_real.</div>;
+    return <div className="text-sm text-muted-foreground">No eligible non-held-out clips found in data/argus/train_real.</div>;
   }
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">{clips.length} held-out eval clips in <code>data/argus/train_real</code></p>
+      <p className="text-sm text-muted-foreground">
+        {clips.length} non-held-out clips in <code>data/argus/train_real</code>
+      </p>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {clips.map((clip) => (
           <Link
             key={clip.clip_path}
-            href={`/annotate/physical/${encodeURIComponent(clip.filename)}`}
+            href={`/annotate/physical-train/${encodeURIComponent(clip.filename)}`}
             className="rounded border p-3 text-sm hover:bg-muted/40 transition-colors block"
           >
             <div className="flex items-start justify-between gap-2">

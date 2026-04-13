@@ -248,6 +248,33 @@
   - multilayer frozen DINO + stronger heads + logit ensembling is the strongest physical runtime path so far by a wide margin
   - the physical per-square reader is materially better than before, but it is still not good enough to call solved
   - board exact match staying at `0.0` means the next bottleneck is still real-domain supervision quality / localization quality, not another obvious head tweak
+- Added manual non-held-out training annotation infrastructure so the next real-data step is no longer blocked on ad hoc scripts:
+  - shared physical annotation storage helpers: `pipeline/physical/annotation_dataset.py`
+  - dedicated manual-train annotation root: `pipeline/physical/manual_train_dataset.py`
+  - dev-tools API/router support: `/api/physical-train/*`
+  - UI routes:
+    - `/annotate/physical-train`
+    - `/annotate/physical-train/[filename]`
+  - train-mode clip listing excludes held-out eval source videos automatically, so new manual labels stay on the training side of the split
+- Extended board-probe training to ingest future manual labels directly:
+  - `pipeline/physical/board_data.py` now supports generic annotated-board datasets plus `PhysicalManualTrainBoardDataset`
+  - `scripts/train_physical_board_probe.py` now accepts:
+    - `--manual-train-root`
+    - `--manual-train-max-boards`
+    - `--manual-train-loss-weight`
+- Follow-up experiments after the new runtime push did **not** beat the current committed `v5r2` runtime yet:
+  - row-level per-frame corner refinement hurt transfer on sampled runs
+  - agreement-filtered pseudo-real subsets and hierarchical occupied/color/type heads did not beat the current best metrics on the main objective
+  - pseudo-real-heavy and synthetic-light variants shifted trade-offs but did not produce a strictly better committed runtime
+- Updated best known committed runtime remains:
+  - `weights/physical/v5r2.pt`
+  - `outputs/2026-04-12/physical_runtime_eval_v7.json`
+  - square accuracy: `0.5171`
+  - non-empty accuracy: `0.4126`
+  - macro F1: `0.3126`
+  - board exact match: `0.0`
+- New practical takeaway:
+  - the most credible next lever is now **manual non-held-out real board supervision**, and the repo finally has the annotation + training-ingest path to do it cleanly
 
 ### Validation
 - Passed: `make typecheck`

@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pipeline.physical.board_data import INPUT_SIZE as DEFAULT_INPUT_SIZE
 from pipeline.physical.board_data import (
     PhysicalEvalBoardDataset,
+    PhysicalManualTrainBoardDataset,
     PhysicalSyntheticBoardDataset,
     PhysicalSyntheticRenderedBoardDataset,
 )
@@ -92,7 +93,8 @@ def main() -> None:
     eval_annotation_ids = [row.annotation_id for row in eval_dataset.rows]
 
     real_train_dataset: PhysicalRealBoardDataset | None = None
-    train_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]] = synthetic_train_dataset
+    manual_train_dataset: PhysicalManualTrainBoardDataset | None = None
+    train_parts: list[Dataset[tuple[torch.Tensor, torch.Tensor]]] = [synthetic_train_dataset]
     if args.real_train_max_frames > 0:
         real_train_dataset = PhysicalRealBoardDataset(
             clips_dir=args.real_train_clips_dir,
@@ -103,7 +105,24 @@ def main() -> None:
             exclude_move_neighborhood=args.real_train_exclude_move_neighborhood,
         )
         if len(real_train_dataset) > 0:
-            train_dataset = ConcatDataset([synthetic_train_dataset, real_train_dataset])
+            train_parts.append(real_train_dataset)
+    if args.manual_train_max_boards > 0:
+        manual_train_dataset = build_manual_train_dataset(
+            annotation_root=args.manual_train_root,
+            image_size=args.input_size,
+            max_boards=args.manual_train_max_boards,
+            seed=args.seed,
+        )
+        if manual_train_dataset is not None and len(manual_train_dataset) > 0:
+            train_parts.append(manual_train_dataset)
+    train_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]]
+    if len(train_parts) == 1:
+        train_dataset = train_parts[0]
+    else:
+        train_dataset = ConcatDataset(train_parts)
+
+    real_train_positions = 0 if real_train_dataset is None else len(real_train_dataset)
+    manual_train_positions = 0 if manual_train_dataset is None else len(manual_train_dataset)
 
     if args.save_samples > 0:
         save_board_samples(
@@ -118,6 +137,13 @@ def main() -> None:
                 output_dir,
                 count=args.save_samples,
                 prefix="real_train",
+            )
+        if manual_train_dataset is not None and len(manual_train_dataset) > 0:
+            save_board_samples(
+                manual_train_dataset,
+                output_dir,
+                count=args.save_samples,
+                prefix="manual_train",
             )
         save_board_samples(
             val_dataset,
@@ -157,8 +183,10 @@ def main() -> None:
     class_weights = build_class_weights(train_labels, mode=args.class_weighting)
     board_weights = build_board_weights(
         synthetic_count=len(synthetic_train_dataset),
-        real_count=0 if real_train_dataset is None else len(real_train_dataset),
+        real_count=real_train_positions,
+        manual_count=manual_train_positions,
         real_loss_weight=args.real_loss_weight,
+        manual_loss_weight=args.manual_train_loss_weight,
     )
     probe, best_synth_val_accuracy = train_board_probe(
         train_tokens,
@@ -201,7 +229,8 @@ def main() -> None:
             "output_grid_size": encoder_kwargs.get("output_grid_size"),
             "synthetic_source": args.synthetic_source,
             "synthetic_train_positions": args.synthetic_train_positions,
-            "real_train_positions": 0 if real_train_dataset is None else len(real_train_dataset),
+            "real_train_positions": real_train_positions,
+            "manual_train_positions": manual_train_positions,
             "synthetic_val_positions": args.synthetic_val_positions,
             "synthetic_min_moves": args.synthetic_min_moves,
             "synthetic_max_moves": args.synthetic_max_moves,
@@ -210,6 +239,12 @@ def main() -> None:
             "class_weighting": args.class_weighting,
             "real_train_exclude_move_neighborhood": args.real_train_exclude_move_neighborhood,
             "real_loss_weight": args.real_loss_weight,
+            "manual_train_root": (
+                relative_to_project(args.manual_train_root)
+                if args.manual_train_root is not None
+                else None
+            ),
+            "manual_train_loss_weight": args.manual_train_loss_weight,
             "head_type": args.head_type,
             "hidden_dim": args.hidden_dim,
             "transformer_layers": args.transformer_layers,
@@ -242,12 +277,19 @@ def main() -> None:
         "transformer_ff_dim": args.transformer_ff_dim,
         "dropout": args.dropout,
         "synthetic_train_positions": args.synthetic_train_positions,
-        "real_train_positions": 0 if real_train_dataset is None else len(real_train_dataset),
+        "real_train_positions": real_train_positions,
+        "manual_train_positions": manual_train_positions,
         "synthetic_val_positions": args.synthetic_val_positions,
         "synthetic_min_moves": args.synthetic_min_moves,
         "synthetic_max_moves": args.synthetic_max_moves,
         "synthetic_min_ply": args.synthetic_min_ply,
         "real_train_exclude_move_neighborhood": args.real_train_exclude_move_neighborhood,
+        "manual_train_root": (
+            relative_to_project(args.manual_train_root)
+            if args.manual_train_root is not None
+            else None
+        ),
+        "manual_train_loss_weight": args.manual_train_loss_weight,
         "real_eval_positions": len(eval_dataset),
         "train_label_histogram": class_histogram(train_labels.reshape(-1)),
         "synthetic_val_label_histogram": class_histogram(val_labels.reshape(-1)),
@@ -276,7 +318,8 @@ def main() -> None:
         f"- class weighting: `{args.class_weighting}`",
         f"- real move exclusion: `{args.real_train_exclude_move_neighborhood}`",
         f"- synthetic train positions: `{args.synthetic_train_positions}`",
-        f"- real train positions: `{0 if real_train_dataset is None else len(real_train_dataset)}`",
+        f"- real train positions: `{real_train_positions}`",
+        f"- manual train positions: `{manual_train_positions}`",
         f"- synthetic val positions: `{args.synthetic_val_positions}`",
         f"- real eval positions: `{len(eval_dataset)}`",
         f"- train square accuracy: `{train_metrics.accuracy:.4f}`",
@@ -298,7 +341,8 @@ def main() -> None:
             real_eval_metrics=real_eval_metrics,
             best_synth_val_accuracy=best_synth_val_accuracy,
             held_out_eval_size=len(eval_dataset),
-            real_train_positions=0 if real_train_dataset is None else len(real_train_dataset),
+            real_train_positions=real_train_positions,
+            manual_train_positions=manual_train_positions,
         )
 
     logger.info("Train square accuracy: %.4f", train_metrics.accuracy)
@@ -352,7 +396,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--real-train-max-frames", type=int, default=0)
     parser.add_argument("--real-train-frame-stride", type=int, default=4)
     parser.add_argument("--real-train-exclude-move-neighborhood", type=int, default=-1)
+    parser.add_argument(
+        "--manual-train-root",
+        type=Path,
+        default=Path("data/physical/train_manual"),
+    )
+    parser.add_argument("--manual-train-max-boards", type=int, default=0)
     parser.add_argument("--real-loss-weight", type=float, default=1.0)
+    parser.add_argument("--manual-train-loss-weight", type=float, default=1.0)
     parser.add_argument("--synthetic-min-moves", type=int, default=12)
     parser.add_argument("--synthetic-max-moves", type=int, default=80)
     parser.add_argument("--synthetic-min-ply", type=int, default=8)
@@ -458,15 +509,50 @@ def build_board_weights(
     *,
     synthetic_count: int,
     real_count: int,
+    manual_count: int,
     real_loss_weight: float,
+    manual_loss_weight: float,
 ) -> torch.Tensor | None:
-    if real_count <= 0:
+    total_count = synthetic_count + real_count + manual_count
+    if total_count == synthetic_count:
         return None
     if real_loss_weight <= 0.0:
         raise ValueError(f"real_loss_weight must be > 0, got {real_loss_weight}")
-    weights = torch.ones(synthetic_count + real_count, dtype=torch.float32)
-    weights[synthetic_count:] = real_loss_weight
+    if manual_loss_weight <= 0.0:
+        raise ValueError(f"manual_train_loss_weight must be > 0, got {manual_loss_weight}")
+    weights = torch.ones(total_count, dtype=torch.float32)
+    real_start = synthetic_count
+    real_end = real_start + real_count
+    if real_count > 0:
+        weights[real_start:real_end] = real_loss_weight
+    if manual_count > 0:
+        weights[real_end:] = manual_loss_weight
     return weights
+
+
+def build_manual_train_dataset(
+    *,
+    annotation_root: Path,
+    image_size: int,
+    max_boards: int,
+    seed: int,
+) -> PhysicalManualTrainBoardDataset | None:
+    if max_boards <= 0 or not annotation_root.exists():
+        return None
+    dataset = PhysicalManualTrainBoardDataset(
+        annotation_root=annotation_root,
+        image_size=image_size,
+    )
+    if len(dataset.rows) <= max_boards:
+        return dataset
+    rng = torch.Generator().manual_seed(seed)
+    indices = torch.randperm(len(dataset.rows), generator=rng).tolist()[:max_boards]
+    sampled_rows = [dataset.rows[index] for index in indices]
+    return PhysicalManualTrainBoardDataset(
+        annotation_root=annotation_root,
+        image_size=image_size,
+        rows=sampled_rows,
+    )
 
 
 def class_histogram(labels: torch.Tensor) -> dict[str, int]:
@@ -534,6 +620,7 @@ def promote_to_runtime_weights(
     best_synth_val_accuracy: float,
     held_out_eval_size: int,
     real_train_positions: int,
+    manual_train_positions: int,
 ) -> None:
     weights_dir = _DEFAULT_WEIGHTS_DIR
     weights_dir.mkdir(parents=True, exist_ok=True)
@@ -559,6 +646,7 @@ def promote_to_runtime_weights(
             "synthetic_train_positions": args.synthetic_train_positions,
             "synthetic_val_positions": args.synthetic_val_positions,
             "real_train_positions": real_train_positions,
+            "manual_train_positions": manual_train_positions,
             "held_out_eval_size": held_out_eval_size,
         },
         "runtime_format": "pytorch",
