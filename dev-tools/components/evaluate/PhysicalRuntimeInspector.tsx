@@ -1,359 +1,783 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import PhysicalRuntimeCard from "@/components/evaluate/PhysicalRuntimeCard";
 import {
   getModelVersions,
-  listPhysicalEvalClips,
-  renderPhysicalRuntimeVisualization,
-  type PhysicalEvalClip,
-  type PhysicalRuntimeVisualizationResponse,
+  createPhysicalRuntimeSession,
+  inspectPhysicalRuntimeFrame,
+  listPhysicalRuntimeSessions,
+  physicalRuntimeSessionImageUrl,
+  samplePhysicalRuntimeFrames,
+  savePhysicalRuntimeEval,
+  updatePhysicalRuntimePins,
+  type PhysicalRuntimeEvalResult,
+  type PhysicalRuntimeSession,
 } from "@/lib/api";
 
-function parsePositiveInteger(value: string | null, fallback: number) {
+interface EvalPoint {
+  id: number;
+  evaluated_at: string;
+  accuracy: number;
+  sample_size: number;
+  notes: string | null;
+  per_class: {
+    non_empty_accuracy?: number;
+    exact_match_rate?: number;
+    elapsed_ms_avg?: number;
+    images_per_minute?: number;
+    stateless_square_accuracy?: number;
+    stateless_non_empty_accuracy?: number;
+    stateless_exact_match_rate?: number;
+  } | null;
+}
+
+interface PhysicalRuntimeInspectorProps {
+  initialSession?: {
+    id: string;
+    results: PhysicalRuntimeEvalResult[];
+    square_accuracy: number | null;
+    non_empty_accuracy: number | null;
+    exact_match_rate: number | null;
+    pin_state: Record<string, boolean>;
+    created_at: string;
+  };
+}
+
+interface BatchSummary {
+  totalFrames: number;
+  totalSquares: number;
+  temporalCorrectSquares: number;
+  statelessCorrectSquares: number;
+  nonEmptySquares: number;
+  temporalNonEmptyCorrect: number;
+  statelessNonEmptyCorrect: number;
+  temporalSquareAccuracy: number;
+  statelessSquareAccuracy: number;
+  temporalNonEmptyAccuracy: number | null;
+  statelessNonEmptyAccuracy: number | null;
+  temporalExactFrames: number;
+  statelessExactFrames: number;
+  temporalBetterFrames: number;
+  temporalWorseFrames: number;
+  avgElapsedMs: number;
+}
+
+function parsePositiveInteger(value: string, fallback: number) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   const rounded = Math.floor(parsed);
   return rounded > 0 ? rounded : fallback;
 }
 
-function parseNonNegativeInteger(value: string | null, fallback: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const rounded = Math.floor(parsed);
-  return rounded >= 0 ? rounded : fallback;
+function resultKey(result: PhysicalRuntimeEvalResult): string {
+  return result.annotation_id;
 }
 
-function average(values: number[]) {
-  if (values.length === 0) return 0;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+function formatPercent(value: number | null | undefined) {
+  if (value == null) return "-";
+  return `${(value * 100).toFixed(1)}%`;
 }
 
-function formatDelta(value: number) {
-  return value > 0 ? `+${value.toFixed(1)}` : value.toFixed(1);
+function thumbnailSrc(
+  result: PhysicalRuntimeEvalResult,
+  sessionId: string | null,
+): string | null {
+  if (result.thumbnail_b64) return `data:image/png;base64,${result.thumbnail_b64}`;
+  if (sessionId && result.thumbnail_filename) {
+    return physicalRuntimeSessionImageUrl(sessionId, result.thumbnail_filename);
+  }
+  return null;
 }
 
-export default function PhysicalRuntimeInspector() {
+function computeSummary(results: PhysicalRuntimeEvalResult[]): BatchSummary | null {
+  if (results.length === 0) return null;
+
+  const totalFrames = results.length;
+  const totalSquares = totalFrames * 64;
+  const temporalCorrectSquares = results.reduce(
+    (sum, result) => sum + (64 - result.temporal_error_count),
+    0,
+  );
+  const statelessCorrectSquares = results.reduce(
+    (sum, result) => sum + (64 - result.stateless_error_count),
+    0,
+  );
+  const nonEmptySquares = results.reduce(
+    (sum, result) => sum + result.non_empty_square_count,
+    0,
+  );
+  const temporalNonEmptyCorrect = results.reduce(
+    (sum, result) => sum + result.temporal_non_empty_correct_count,
+    0,
+  );
+  const statelessNonEmptyCorrect = results.reduce(
+    (sum, result) => sum + result.stateless_non_empty_correct_count,
+    0,
+  );
+  const temporalExactFrames = results.filter((result) => result.temporal_exact_match).length;
+  const statelessExactFrames = results.filter((result) => result.stateless_exact_match).length;
+  const temporalBetterFrames = results.filter(
+    (result) => result.temporal_error_count < result.stateless_error_count,
+  ).length;
+  const temporalWorseFrames = results.filter(
+    (result) => result.temporal_error_count > result.stateless_error_count,
+  ).length;
+  const avgElapsedMs =
+    results.reduce((sum, result) => sum + result.elapsed_ms, 0) / totalFrames;
+
+  return {
+    totalFrames,
+    totalSquares,
+    temporalCorrectSquares,
+    statelessCorrectSquares,
+    nonEmptySquares,
+    temporalNonEmptyCorrect,
+    statelessNonEmptyCorrect,
+    temporalSquareAccuracy: temporalCorrectSquares / totalSquares,
+    statelessSquareAccuracy: statelessCorrectSquares / totalSquares,
+    temporalNonEmptyAccuracy:
+      nonEmptySquares > 0 ? temporalNonEmptyCorrect / nonEmptySquares : null,
+    statelessNonEmptyAccuracy:
+      nonEmptySquares > 0 ? statelessNonEmptyCorrect / nonEmptySquares : null,
+    temporalExactFrames,
+    statelessExactFrames,
+    temporalBetterFrames,
+    temporalWorseFrames,
+    avgElapsedMs,
+  };
+}
+
+function InfoIcon({ tip }: { tip: string }) {
+  return (
+    <span className="relative group inline-flex items-center ml-1 cursor-default">
+      <span className="inline-flex items-center justify-center w-4 h-4 rounded-full border text-[10px] text-muted-foreground select-none">
+        i
+      </span>
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-56 rounded bg-popover border text-popover-foreground text-xs px-2 py-1 shadow-md opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-normal">
+        {tip}
+      </span>
+    </span>
+  );
+}
+
+export default function PhysicalRuntimeInspector({
+  initialSession,
+}: PhysicalRuntimeInspectorProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const initialClipPath = searchParams.get("clip");
-  const initialFrameStart = parseNonNegativeInteger(searchParams.get("start"), 0);
-  const initialFrameCount = parsePositiveInteger(searchParams.get("count"), 8);
-
-  const [clips, setClips] = useState<PhysicalEvalClip[]>([]);
-  const [selectedClipPath, setSelectedClipPath] = useState<string | null>(initialClipPath);
-  const [frameStart, setFrameStart] = useState(initialFrameStart);
-  const [frameCount, setFrameCount] = useState(initialFrameCount);
-  const [loadingClips, setLoadingClips] = useState(true);
-  const [rendering, setRendering] = useState(false);
-  const [result, setResult] = useState<PhysicalRuntimeVisualizationResponse | null>(null);
+  const [sampleSize, setSampleSize] = useState(20);
+  const [results, setResults] = useState<PhysicalRuntimeEvalResult[]>(
+    initialSession?.results ?? [],
+  );
+  const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState({ current: 0, total: 0 });
+  const [evalHistory, setEvalHistory] = useState<EvalPoint[]>([]);
+  const [pinnedIds, setPinnedIds] = useState<Set<string>>(
+    new Set(
+      initialSession?.pin_state
+        ? Object.entries(initialSession.pin_state)
+            .filter(([, value]) => value)
+            .map(([key]) => key)
+        : [],
+    ),
+  );
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [sessionId, setSessionId] = useState<string | null>(
+    initialSession?.id ?? null,
+  );
+  const [recentSessions, setRecentSessions] = useState<PhysicalRuntimeSession[]>([]);
+  const [showSessionList, setShowSessionList] = useState(false);
+  const [emptyMessage, setEmptyMessage] = useState<string | null>(null);
   const [modelVersion, setModelVersion] = useState<string | null>(null);
-  const [lastRequestKey, setLastRequestKey] = useState<string | null>(null);
 
-  const selectedClip = useMemo(
-    () => clips.find((clip) => clip.clip_path === selectedClipPath) ?? null,
-    [clips, selectedClipPath],
+  const inspectedIds = useRef<Set<string>>(new Set());
+  const abortRef = useRef<AbortController | null>(null);
+  const sessionListRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    fetchHistory();
+    getModelVersions().then((versions) => setModelVersion(versions.physical ?? null));
+  }, []);
+
+  useEffect(() => {
+    if (initialSession || !searchParams.toString()) return;
+    if (!["clip", "start", "count"].some((key) => searchParams.has(key))) return;
+    router.replace("/evaluate/physical", { scroll: false });
+  }, [initialSession, router, searchParams]);
+
+  useEffect(() => {
+    if (!showSessionList) return;
+    const handleClick = (event: MouseEvent) => {
+      if (
+        sessionListRef.current &&
+        !sessionListRef.current.contains(event.target as Node)
+      ) {
+        setShowSessionList(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showSessionList]);
+
+  async function fetchHistory() {
+    try {
+      const res = await fetch("/api/models/evaluations?model_name=physical");
+      if (res.ok) {
+        const data = await res.json();
+        setEvalHistory(data.evaluations);
+      }
+    } catch (error) {
+      console.warn("Failed to fetch evaluation history:", error);
+    }
+  }
+
+  async function fetchRecentSessions() {
+    try {
+      const { sessions } = await listPhysicalRuntimeSessions(20);
+      setRecentSessions(sessions);
+      setShowSessionList(true);
+    } catch (error) {
+      console.warn("Failed to fetch sessions:", error);
+    }
+  }
+
+  const togglePin = useCallback(
+    (annotationId: string) => {
+      setPinnedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(annotationId)) next.delete(annotationId);
+        else next.add(annotationId);
+
+        if (sessionId) {
+          updatePhysicalRuntimePins(sessionId, {
+            [annotationId]: !prev.has(annotationId),
+          }).catch(() => {});
+        }
+        return next;
+      });
+      setExpandedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(annotationId);
+        return next;
+      });
+    },
+    [sessionId],
   );
 
-  const summary = useMemo(() => {
-    if (!result || result.frames.length === 0) return null;
-    const statelessErrors = result.frames.map((frame) => frame.stateless_error_count);
-    const temporalErrors = result.frames.map((frame) => frame.temporal_error_count);
-    const statelessConfidences = result.frames.map((frame) => frame.stateless_mean_confidence);
-    const temporalConfidences = result.frames.map((frame) => frame.temporal_mean_confidence);
-    const temporalBetterFrames = result.frames.filter(
-      (frame) => frame.temporal_error_count < frame.stateless_error_count,
-    ).length;
-    const temporalWorseFrames = result.frames.filter(
-      (frame) => frame.temporal_error_count > frame.stateless_error_count,
-    ).length;
+  const toggleExpand = useCallback((annotationId: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(annotationId)) next.delete(annotationId);
+      else next.add(annotationId);
+      return next;
+    });
+  }, []);
 
-    return {
-      avgStatelessErrors: average(statelessErrors),
-      avgTemporalErrors: average(temporalErrors),
-      avgErrorDelta: average(
-        result.frames.map(
-          (frame) => frame.temporal_error_count - frame.stateless_error_count,
-        ),
-      ),
-      avgStatelessConfidence: average(statelessConfidences),
-      avgTemporalConfidence: average(temporalConfidences),
-      temporalBetterFrames,
-      temporalWorseFrames,
-    };
-  }, [result]);
+  async function runBatch() {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-  const runRender = useCallback(
-    async (overrides?: { clipPath?: string | null; frameStart?: number; frameCount?: number }) => {
-      const clipPath = overrides?.clipPath ?? selectedClipPath;
-      if (!clipPath) {
-        toast.error("Select a held-out eval clip first");
+    setLoading(true);
+    setResults([]);
+    setProgress({ current: 0, total: 0 });
+    setPinnedIds(new Set());
+    setExpandedIds(new Set());
+    setSessionId(null);
+    setEmptyMessage(null);
+
+    const collected: PhysicalRuntimeEvalResult[] = [];
+    const autoPinned = new Set<string>();
+    const batchStartTime = performance.now();
+
+    try {
+      const exclude = Array.from(inspectedIds.current);
+      const { frames } = await samplePhysicalRuntimeFrames(
+        sampleSize,
+        exclude,
+        controller.signal,
+      );
+
+      if (frames.length === 0) {
+        setEmptyMessage(
+          exclude.length > 0
+            ? "No more held-out physical validation frames are available in this browser session. Reload to start over."
+            : "No held-out physical validation frames are available. Annotate frames under data/physical/val first.",
+        );
         return;
       }
 
-      const requestedFrameStart = Math.max(0, overrides?.frameStart ?? frameStart);
-      const requestedFrameCount = Math.max(1, overrides?.frameCount ?? frameCount);
-      const requestKey = `${clipPath}:${requestedFrameStart}:${requestedFrameCount}`;
-      setLastRequestKey(requestKey);
-      setRendering(true);
-      try {
-        const nextResult = await renderPhysicalRuntimeVisualization({
-          clip_path: clipPath,
-          frame_start: requestedFrameStart,
-          frame_count: requestedFrameCount,
+      setProgress({ current: 0, total: frames.length });
+
+      for (let index = 0; index < frames.length; index += 1) {
+        if (controller.signal.aborted) break;
+
+        const result = await inspectPhysicalRuntimeFrame(frames[index].annotation_id, {
+          signal: controller.signal,
         });
-        setSelectedClipPath(nextResult.clip_path);
-        setFrameStart(nextResult.frame_start);
-        setFrameCount(nextResult.frame_count);
-        setResult(nextResult);
+        collected.push(result);
+        setResults((prev) => [...prev, result]);
+        inspectedIds.current.add(result.annotation_id);
 
-        const params = new URLSearchParams();
-        params.set("clip", nextResult.clip_path);
-        params.set("start", String(nextResult.frame_start));
-        params.set("count", String(nextResult.frame_count));
-        router.replace(`/evaluate/physical?${params.toString()}`, { scroll: false });
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Failed to render runtime view");
-      } finally {
-        setRendering(false);
-      }
-    },
-    [frameCount, frameStart, router, selectedClipPath],
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        const [clipData, versions] = await Promise.all([
-          listPhysicalEvalClips(),
-          getModelVersions(),
-        ]);
-        if (cancelled) return;
-
-        setClips(clipData.clips);
-        setModelVersion(versions.physical ?? null);
-
-        const fallbackClipPath =
-          clipData.clips.find((clip) => clip.clip_path === initialClipPath)?.clip_path
-          ?? clipData.clips[0]?.clip_path
-          ?? null;
-        setSelectedClipPath(fallbackClipPath);
-      } catch (error) {
-        if (!cancelled) {
-          toast.error(error instanceof Error ? error.message : "Failed to load held-out clips");
+        if (!result.temporal_exact_match) {
+          autoPinned.add(result.annotation_id);
+          setPinnedIds((prev) => new Set([...prev, result.annotation_id]));
         }
-      } finally {
-        if (!cancelled) setLoadingClips(false);
+
+        setProgress({ current: index + 1, total: frames.length });
       }
-    })();
 
-    return () => {
-      cancelled = true;
-    };
-  }, [initialClipPath]);
+      const summary = computeSummary(collected);
+      if (!summary) return;
 
-  useEffect(() => {
-    if (loadingClips || !selectedClipPath || result !== null || lastRequestKey !== null) return;
-    void runRender({ clipPath: selectedClipPath, frameStart, frameCount });
-  }, [frameCount, frameStart, lastRequestKey, loadingClips, result, runRender, selectedClipPath]);
+      const elapsedMin = (performance.now() - batchStartTime) / 60000;
+      const imagesPerMinute = elapsedMin > 0 ? Math.round(summary.totalFrames / elapsedMin) : null;
 
-  const canStepBackward = frameStart > 0;
-  const canStepForward = selectedClip
-    ? frameStart + frameCount < (selectedClip.num_frames ?? result?.available_frame_count ?? 0)
-    : true;
+      const saveResult = await savePhysicalRuntimeEval({
+        square_accuracy: summary.temporalSquareAccuracy,
+        non_empty_accuracy: summary.temporalNonEmptyAccuracy,
+        exact_match_rate: summary.temporalExactFrames / summary.totalFrames,
+        sample_size: summary.totalFrames,
+        elapsed_ms_avg: summary.avgElapsedMs,
+        images_per_minute: imagesPerMinute,
+        stateless_square_accuracy: summary.statelessSquareAccuracy,
+        stateless_non_empty_accuracy: summary.statelessNonEmptyAccuracy,
+        stateless_exact_match_rate: summary.statelessExactFrames / summary.totalFrames,
+        notes: modelVersion ?? undefined,
+      });
+      await fetchHistory();
 
-  if (loadingClips) {
-    return <div className="text-sm text-muted-foreground">Loading held-out physical eval clips…</div>;
+      const pinStateObj: Record<string, boolean> = {};
+      autoPinned.forEach((annotationId) => {
+        pinStateObj[annotationId] = true;
+      });
+
+      const { session_id } = await createPhysicalRuntimeSession({
+        results: collected,
+        square_accuracy: summary.temporalSquareAccuracy,
+        non_empty_accuracy: summary.temporalNonEmptyAccuracy,
+        exact_match_rate: summary.temporalExactFrames / summary.totalFrames,
+        sample_size: summary.totalFrames,
+        pin_state: pinStateObj,
+        evaluation_id: saveResult.id,
+      });
+      setSessionId(session_id);
+      router.replace(`/evaluate/physical/${session_id}`, { scroll: false });
+    } catch (error: unknown) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      const message = error instanceof Error ? error.message : "Unknown error";
+      toast.error(message);
+    } finally {
+      setLoading(false);
+    }
   }
 
-  if (clips.length === 0) {
-    return (
-      <div className="text-sm text-muted-foreground">
-        No held-out physical eval clips found in <code>data/argus/train_real</code>.
-      </div>
-    );
-  }
+  const summary = useMemo(() => computeSummary(results), [results]);
+
+  const { pinned, unpinned } = useMemo(() => {
+    const nextPinned: PhysicalRuntimeEvalResult[] = [];
+    const nextUnpinned: PhysicalRuntimeEvalResult[] = [];
+    for (const result of results) {
+      if (pinnedIds.has(resultKey(result))) nextPinned.push(result);
+      else nextUnpinned.push(result);
+    }
+    return { pinned: nextPinned, unpinned: nextUnpinned };
+  }, [results, pinnedIds]);
+
+  const chartData = [...evalHistory].reverse().map((evaluation) => ({
+    date: new Date(evaluation.evaluated_at).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    }),
+    accuracy: Math.round(evaluation.accuracy * 1000) / 10,
+    non_empty_accuracy:
+      evaluation.per_class?.non_empty_accuracy != null
+        ? Math.round(evaluation.per_class.non_empty_accuracy * 1000) / 10
+        : null,
+    exact_match_rate:
+      evaluation.per_class?.exact_match_rate != null
+        ? Math.round(evaluation.per_class.exact_match_rate * 1000) / 10
+        : null,
+    elapsed_ms_avg: evaluation.per_class?.elapsed_ms_avg ?? null,
+    images_per_minute: evaluation.per_class?.images_per_minute ?? null,
+    notes: evaluation.notes,
+    sample_size: evaluation.sample_size,
+  }));
+
+  const hasPerformanceData = chartData.some((datum) => datum.elapsed_ms_avg != null);
+  const versionLines = chartData
+    .map((datum, index) => ({ ...datum, idx: index }))
+    .filter((datum) => datum.notes && /^v\d/i.test(datum.notes));
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Physical runtime</CardTitle>
-          <CardDescription>
-            Inspect the current physical board reader on held-out eval clips frame by frame.
-            {modelVersion ? ` Runtime weights: ${modelVersion}.` : ""}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.75fr)_repeat(2,minmax(0,0.5fr))_auto]">
-            <label className="space-y-2 text-sm">
-              <span className="font-medium">Clip</span>
-              <select
-                className="h-10 w-full rounded-md border bg-background px-3"
-                value={selectedClipPath ?? ""}
-                onChange={(event) => {
-                  setSelectedClipPath(event.target.value);
-                  setFrameStart(0);
-                  setResult(null);
-                  setLastRequestKey(null);
-                }}
-              >
-                {clips.map((clip) => (
-                  <option key={clip.clip_path} value={clip.clip_path}>
-                    {clip.filename}
-                  </option>
+    <div className="space-y-4">
+      <div className="flex gap-2 items-center flex-wrap">
+        <span className="text-sm text-muted-foreground">
+          Sample from held-out physical validation frames:
+          <InfoIcon tip="Samples rectified held-out physical board annotations and compares both stateless and deployed temporal runtime predictions against ground truth one frame at a time." />
+        </span>
+        <input
+          type="number"
+          value={sampleSize}
+          onChange={(event) =>
+            setSampleSize(parsePositiveInteger(event.target.value, 20))
+          }
+          min={1}
+          max={200}
+          className="w-16 px-2 py-1.5 border rounded text-sm"
+        />
+        <button
+          onClick={runBatch}
+          disabled={loading}
+          className="px-4 py-1.5 bg-foreground text-background rounded text-sm disabled:opacity-50"
+        >
+          {loading ? "Inspecting..." : "Sample & Inspect"}
+        </button>
+        {modelVersion && (
+          <span className="text-xs text-muted-foreground font-mono">
+            model: {modelVersion}
+          </span>
+        )}
+
+        <div className="flex-1" />
+
+        <div className="relative" ref={sessionListRef}>
+          <button
+            onClick={fetchRecentSessions}
+            className="px-3 py-1.5 border rounded text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {sessionId ? <span className="font-mono">{sessionId}</span> : "Sessions"}
+          </button>
+          {showSessionList && recentSessions.length > 0 && (
+            <div className="absolute right-0 top-full mt-1 z-50 w-72 bg-background border rounded-lg shadow-lg overflow-hidden">
+              <div className="max-h-64 overflow-y-auto">
+                {recentSessions.map((session) => (
+                  <button
+                    key={session.id}
+                    onClick={() => {
+                      setShowSessionList(false);
+                      router.push(`/evaluate/physical/${session.id}`);
+                    }}
+                    className={`w-full text-left px-3 py-2 text-xs hover:bg-muted/50 transition-colors border-b last:border-b-0 ${
+                      session.id === sessionId ? "bg-muted/30" : ""
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-muted-foreground">{session.id}</span>
+                      {session.square_accuracy != null && (
+                        <span className="font-medium">
+                          {(session.square_accuracy * 100).toFixed(1)}%
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-muted-foreground mt-0.5">
+                      {new Date(session.created_at).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                      {" · "}n={session.sample_size}
+                      {session.non_empty_accuracy != null
+                        ? ` · ${(session.non_empty_accuracy * 100).toFixed(1)}% non-empty`
+                        : ""}
+                    </div>
+                  </button>
                 ))}
-              </select>
-            </label>
-            <label className="space-y-2 text-sm">
-              <span className="font-medium">Frame start</span>
-              <input
-                className="h-10 w-full rounded-md border bg-background px-3"
-                min={0}
-                step={1}
-                type="number"
-                value={frameStart}
-                onChange={(event) => setFrameStart(parseNonNegativeInteger(event.target.value, 0))}
-              />
-            </label>
-            <label className="space-y-2 text-sm">
-              <span className="font-medium">Frame count</span>
-              <input
-                className="h-10 w-full rounded-md border bg-background px-3"
-                min={1}
-                step={1}
-                type="number"
-                value={frameCount}
-                onChange={(event) => setFrameCount(parsePositiveInteger(event.target.value, 8))}
-              />
-            </label>
-            <div className="flex items-end">
-              <Button className="w-full" disabled={rendering || !selectedClipPath} onClick={() => void runRender()}>
-                {rendering ? "Rendering…" : "Render"}
-              </Button>
+              </div>
             </div>
-          </div>
+          )}
+        </div>
 
-          <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            <Button
-              variant="outline"
-              disabled={rendering || !canStepBackward}
-              onClick={() => void runRender({ frameStart: Math.max(0, frameStart - frameCount) })}
-            >
-              Previous window
-            </Button>
-            <Button
-              variant="outline"
-              disabled={rendering || !canStepForward}
-              onClick={() => void runRender({ frameStart: frameStart + frameCount })}
-            >
-              Next window
-            </Button>
-            {selectedClip && (
-              <span>
-                {selectedClip.filename} · {selectedClip.annotated_frame_count}
-                {selectedClip.num_frames ? `/${selectedClip.num_frames}` : ""} annotated frames
-              </span>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+        {sessionId && (
+          <button
+            onClick={() => navigator.clipboard.writeText(window.location.href)}
+            className="px-3 py-1.5 border rounded text-xs text-muted-foreground hover:text-foreground transition-colors"
+            title="Copy session URL"
+          >
+            Copy URL
+          </button>
+        )}
+      </div>
 
-      {summary && result && (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-          <MetricCard label="Frames rendered" value={`${result.frame_count}`} sublabel={`of ${result.available_frame_count}`} />
-          <MetricCard label="Avg stateless errors" value={summary.avgStatelessErrors.toFixed(1)} />
-          <MetricCard label="Avg temporal errors" value={summary.avgTemporalErrors.toFixed(1)} />
-          <MetricCard label="Temporal - stateless" value={formatDelta(summary.avgErrorDelta)} />
-          <MetricCard
-            label="Temporal better / worse"
-            value={`${summary.temporalBetterFrames}/${summary.temporalWorseFrames}`}
-            sublabel="frames"
-          />
-          <MetricCard
-            label="Mean conf single / temp"
-            value={`${summary.avgStatelessConfidence.toFixed(2)} / ${summary.avgTemporalConfidence.toFixed(2)}`}
-          />
+      {emptyMessage && (
+        <div className="border rounded-lg px-3 py-2 text-sm text-muted-foreground">
+          {emptyMessage}
         </div>
       )}
 
-      {result && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Contact sheet</CardTitle>
-            <CardDescription>
-              Red squares are wrong, yellow borders mark real board changes, blue borders mark
-              prediction changes.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <img
-              alt="Physical runtime contact sheet"
-              className="w-full rounded-md border"
-              src={`data:image/png;base64,${result.contact_sheet_b64}`}
+      {loading && progress.total > 0 && (
+        <div className="space-y-1">
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>Inspecting physical frames...</span>
+            <div className="flex items-center gap-2">
+              <span>
+                {progress.current}/{progress.total}
+              </span>
+              <button
+                onClick={() => abortRef.current?.abort()}
+                className="px-2 py-0.5 rounded bg-destructive text-destructive-foreground text-xs hover:bg-destructive/90"
+              >
+                Stop
+              </button>
+            </div>
+          </div>
+          <div className="h-2 bg-muted rounded overflow-hidden">
+            <div
+              className="h-full bg-foreground rounded transition-all duration-300"
+              style={{ width: `${(progress.current / progress.total) * 100}%` }}
             />
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       )}
 
-      {result && (
-        <div className="space-y-4">
-          {result.frames.map((frame) => (
-            <Card key={frame.annotation_id}>
-              <CardHeader>
-                <CardTitle className="text-base">Frame {frame.frame_index.toString().padStart(4, "0")}</CardTitle>
-                <CardDescription>
-                  gtΔ={frame.gt_change_count ?? "-"} · singleΔ={frame.stateless_change_count ?? "-"}
-                  {" "}· tempΔ={frame.temporal_change_count ?? "-"} · single err={frame.stateless_error_count}
-                  {" "}· temp err={frame.temporal_error_count}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <img
-                  alt={`Physical runtime frame ${frame.frame_index}`}
-                  className="w-full rounded-md border"
-                  loading="lazy"
-                  src={`data:image/png;base64,${frame.image_b64}`}
+      {chartData.length >= 2 && (
+        <div
+          className={`grid gap-4 ${hasPerformanceData ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}
+        >
+          <div className="border rounded-lg p-3">
+            <h3 className="text-sm font-medium mb-2">
+              Temporal square / non-empty accuracy over time
+            </h3>
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} />
+                <YAxis
+                  domain={[0, 100]}
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                  tickFormatter={(value) => `${value}%`}
+                  width={40}
                 />
-                <div className="grid gap-2 text-sm text-muted-foreground md:grid-cols-2 xl:grid-cols-4">
-                  <div>Stateless confidence: {frame.stateless_mean_confidence.toFixed(2)}</div>
-                  <div>Temporal confidence: {frame.temporal_mean_confidence.toFixed(2)}</div>
-                  <div>Rectified board: <code>{frame.board_path.split("/").at(-1)}</code></div>
-                  <div>Annotation: <code>{frame.annotation_id}</code></div>
+                <Tooltip
+                  formatter={(value, name) => [
+                    `${value}%`,
+                    name === "accuracy" ? "Square accuracy" : "Non-empty accuracy",
+                  ]}
+                  labelFormatter={(label, payload) => {
+                    const datum = payload?.[0]?.payload;
+                    return `${label}${datum?.notes ? ` — ${datum.notes}` : ""} (n=${datum?.sample_size ?? "?"})`;
+                  }}
+                />
+                {versionLines.map((line) => (
+                  <ReferenceLine
+                    key={line.idx}
+                    x={line.date}
+                    stroke="currentColor"
+                    strokeDasharray="4 4"
+                    strokeOpacity={0.4}
+                    label={{
+                      value: line.notes!.split(":")[0].trim(),
+                      position: "top",
+                      fontSize: 10,
+                      fontWeight: "bold",
+                    }}
+                  />
+                ))}
+                <Line
+                  type="monotone"
+                  dataKey="accuracy"
+                  name="Square accuracy"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                  activeDot={{ r: 5 }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="non_empty_accuracy"
+                  name="Non-empty accuracy"
+                  stroke="#22c55e"
+                  strokeWidth={1.5}
+                  dot={{ r: 2 }}
+                  strokeDasharray="4 4"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          {hasPerformanceData && (
+            <div className="border rounded-lg p-3">
+              <h3 className="text-sm font-medium mb-2">Runtime latency over time</h3>
+              <ResponsiveContainer width="100%" height={200}>
+                <LineChart data={chartData.filter((datum) => datum.elapsed_ms_avg != null)}>
+                  <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
+                  <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} />
+                  <YAxis tick={{ fontSize: 10 }} tickLine={false} width={50} />
+                  <Tooltip
+                    formatter={(value) => [`${value} ms`, "Avg inspect time"]}
+                    labelFormatter={(label, payload) => {
+                      const datum = payload?.[0]?.payload;
+                      return `${label} (n=${datum?.sample_size ?? "?"})`;
+                    }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="elapsed_ms_avg"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+      )}
+
+      {summary && (
+        <div className="border rounded-lg p-3 space-y-2 bg-background">
+          <div className="flex items-center gap-4">
+            <span className="text-sm font-medium">
+              Temporal square accuracy: {summary.temporalCorrectSquares}/{summary.totalSquares} (
+              {formatPercent(summary.temporalSquareAccuracy)})
+            </span>
+            <div className="flex-1 h-2 bg-muted rounded overflow-hidden max-w-xs">
+              <div
+                className="h-full bg-green-500 rounded"
+                style={{ width: `${summary.temporalSquareAccuracy * 100}%` }}
+              />
+            </div>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Non-empty: {summary.temporalNonEmptyCorrect}/{summary.nonEmptySquares} (
+            {formatPercent(summary.temporalNonEmptyAccuracy)}) · Exact boards: {summary.temporalExactFrames}/
+            {summary.totalFrames} ({formatPercent(summary.temporalExactFrames / summary.totalFrames)})
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Stateless square: {formatPercent(summary.statelessSquareAccuracy)} · Temporal better / worse: 
+            {summary.temporalBetterFrames}/{summary.temporalWorseFrames} frames · Avg inspect {summary.avgElapsedMs.toFixed(1)}ms
+          </div>
+        </div>
+      )}
+
+      {results.length > 0 && (
+        <div className="space-y-4">
+          {pinned.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
+                Pinned ({pinned.length})
+              </p>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {pinned.map((result) => (
+                  <PhysicalRuntimeCard
+                    key={result.annotation_id}
+                    result={result}
+                    pinned
+                    sessionId={sessionId}
+                    onPin={() => togglePin(result.annotation_id)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {unpinned.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
+                {pinned.length > 0 ? `Others (${unpinned.length})` : `${results.length} results`}
+              </p>
+
+              <div className="flex flex-wrap gap-1.5">
+                {unpinned
+                  .filter((result) => !expandedIds.has(resultKey(result)))
+                  .map((result) => {
+                    const key = resultKey(result);
+                    const src = thumbnailSrc(result, sessionId);
+                    const title = `${result.clip_filename} · frame ${result.frame_index}\n` +
+                      `${result.temporal_exact_match ? "✓ exact" : `✗ ${result.temporal_error_count} wrong`}\n` +
+                      `single ${formatPercent(result.stateless_square_accuracy)} · temp ${formatPercent(result.temporal_square_accuracy)}`;
+
+                    return (
+                      <button
+                        key={key}
+                        onClick={() =>
+                          result.temporal_exact_match ? toggleExpand(key) : togglePin(key)
+                        }
+                        title={title}
+                        className="relative w-16 h-16 rounded border overflow-hidden flex-shrink-0 transition-all hover:ring-2 hover:ring-foreground/30"
+                      >
+                        {src ? (
+                          <img
+                            src={src}
+                            alt={key}
+                            className="w-full h-full object-cover"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-muted flex items-center justify-center text-[9px] text-muted-foreground px-1 text-center">
+                            f{result.frame_index}
+                          </div>
+                        )}
+                        <div
+                          className={`absolute inset-0 ${
+                            result.temporal_exact_match ? "bg-green-500/25" : "bg-red-500/35"
+                          }`}
+                        />
+                        <span
+                          className={`absolute top-0 left-0 text-[9px] leading-none px-0.5 py-px ${
+                            result.temporal_exact_match
+                              ? "bg-green-500/80 text-white"
+                              : "bg-red-500/80 text-white"
+                          }`}
+                        >
+                          {result.temporal_exact_match ? "✓" : "✗"}
+                        </span>
+                        {!result.temporal_exact_match && (
+                          <span className="absolute bottom-0 right-0 text-[9px] leading-none bg-black/60 text-white px-0.5 py-px">
+                            {result.temporal_error_count}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+              </div>
+
+              {unpinned.filter((result) => expandedIds.has(resultKey(result))).length > 0 && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-2">
+                  {unpinned
+                    .filter((result) => expandedIds.has(resultKey(result)))
+                    .map((result) => {
+                      const key = resultKey(result);
+                      return (
+                        <div key={key} className="relative">
+                          <button
+                            onClick={() => toggleExpand(key)}
+                            className="absolute top-2 right-2 z-10 w-6 h-6 flex items-center justify-center rounded bg-muted/80 text-muted-foreground hover:text-foreground text-xs"
+                            title="Collapse"
+                          >
+                            ✕
+                          </button>
+                          <PhysicalRuntimeCard
+                            result={result}
+                            pinned={false}
+                            sessionId={sessionId}
+                            onPin={() => togglePin(key)}
+                          />
+                        </div>
+                      );
+                    })}
                 </div>
-              </CardContent>
-            </Card>
-          ))}
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  sublabel,
-}: {
-  label: string;
-  value: string;
-  sublabel?: string;
-}) {
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardDescription>{label}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-semibold tracking-tight">{value}</div>
-        {sublabel ? <div className="text-xs text-muted-foreground">{sublabel}</div> : null}
-      </CardContent>
-    </Card>
   );
 }

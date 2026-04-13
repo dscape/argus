@@ -1,13 +1,20 @@
-"""Service layer for visualizing the physical runtime reader on held-out eval clips."""
+"""Service layer for visualizing and evaluating the physical runtime reader."""
 
 from __future__ import annotations
 
 import base64
+import json
+import random
+import time
+import uuid
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from PIL import Image
-from pipeline.physical.board_data import PhysicalEvalBoardDataset
+from pipeline.db.connection import get_conn
+from pipeline.paths import PROJECT_ROOT
+from pipeline.physical.board_data import PhysicalEvalBoardDataset, PhysicalEvalBoardRow
 from pipeline.physical.runtime_visualization import (
     _collect_visualized_frames,
     _group_rows_by_clip,
@@ -15,6 +22,9 @@ from pipeline.physical.runtime_visualization import (
     render_contact_sheet,
     render_visualized_runtime_frame,
 )
+
+_SESSION_IMAGES_DIR = PROJECT_ROOT / "data" / "eval_sessions"
+_EMPTY_CLASS_ID = 0
 
 
 def render_runtime_visualization(
@@ -42,8 +52,7 @@ def render_runtime_visualization(
     )
 
     frame_images = [
-        render_visualized_runtime_frame(frame, panel_size=panel_size)
-        for frame in visualized_frames
+        render_visualized_runtime_frame(frame, panel_size=panel_size) for frame in visualized_frames
     ]
     contact_sheet = render_contact_sheet(
         frame_images,
@@ -75,6 +84,327 @@ def render_runtime_visualization(
             for frame, frame_image in zip(visualized_frames, frame_images)
         ],
     }
+
+
+def sample_runtime_frames(
+    limit: int,
+    exclude_annotation_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    if limit <= 0:
+        raise ValueError(f"limit must be > 0, got {limit}")
+
+    excluded = set(exclude_annotation_ids or [])
+    rows = [row for row in PhysicalEvalBoardDataset().rows if row.annotation_id not in excluded]
+    random.shuffle(rows)
+    sampled = rows[: min(limit, len(rows))]
+    return [
+        {
+            "annotation_id": row.annotation_id,
+            "clip_path": row.clip_path,
+            "clip_filename": _clip_filename(row),
+            "frame_index": row.frame_index,
+        }
+        for row in sampled
+    ]
+
+
+def inspect_runtime_frame(
+    *,
+    annotation_id: str,
+    panel_size: int = 240,
+    device: str = "cpu",
+) -> dict[str, Any]:
+    if panel_size <= 0:
+        raise ValueError(f"panel_size must be > 0, got {panel_size}")
+
+    selected_row, clip_rows = _find_row_and_clip_rows(annotation_id)
+    if selected_row.frame_index is None:
+        raise ValueError(f"Annotation {annotation_id} is missing frame_index")
+
+    started_at = time.perf_counter()
+    visualized_frames = _collect_visualized_frames(
+        clip_rows,
+        frame_start=int(selected_row.frame_index),
+        frame_count=1,
+        device=device,
+    )
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 1)
+
+    if len(visualized_frames) != 1:
+        raise ValueError(
+            "Expected exactly one visualized frame for "
+            f"{annotation_id}, got {len(visualized_frames)}"
+        )
+
+    frame = visualized_frames[0]
+    rendered = render_visualized_runtime_frame(frame, panel_size=panel_size)
+    non_empty_square_count = sum(int(value != _EMPTY_CLASS_ID) for value in frame.gt_class_ids)
+    temporal_non_empty_correct_count = _count_non_empty_correct(
+        frame.temporal_class_ids,
+        frame.gt_class_ids,
+    )
+    stateless_non_empty_correct_count = _count_non_empty_correct(
+        frame.stateless_class_ids,
+        frame.gt_class_ids,
+    )
+
+    return {
+        "annotation_id": frame.annotation_id,
+        "clip_path": selected_row.clip_path,
+        "clip_filename": _clip_filename(selected_row),
+        "frame_index": frame.frame_index,
+        "board_path": frame.board_path,
+        "source_video_id": selected_row.source_video_id,
+        "gt_change_count": frame.gt_change_count,
+        "stateless_change_count": frame.stateless_change_count,
+        "temporal_change_count": frame.temporal_change_count,
+        "stateless_error_count": frame.stateless_error_count,
+        "temporal_error_count": frame.temporal_error_count,
+        "stateless_square_accuracy": round((64 - frame.stateless_error_count) / 64.0, 4),
+        "temporal_square_accuracy": round((64 - frame.temporal_error_count) / 64.0, 4),
+        "non_empty_square_count": non_empty_square_count,
+        "stateless_non_empty_correct_count": stateless_non_empty_correct_count,
+        "temporal_non_empty_correct_count": temporal_non_empty_correct_count,
+        "stateless_non_empty_accuracy": round(
+            stateless_non_empty_correct_count / non_empty_square_count,
+            4,
+        )
+        if non_empty_square_count > 0
+        else None,
+        "temporal_non_empty_accuracy": round(
+            temporal_non_empty_correct_count / non_empty_square_count,
+            4,
+        )
+        if non_empty_square_count > 0
+        else None,
+        "stateless_exact_match": frame.stateless_error_count == 0,
+        "temporal_exact_match": frame.temporal_error_count == 0,
+        "stateless_mean_confidence": round(frame.stateless_mean_confidence, 4),
+        "temporal_mean_confidence": round(frame.temporal_mean_confidence, 4),
+        "elapsed_ms": elapsed_ms,
+        "thumbnail_b64": _image_to_base64(Image.fromarray(frame.crop_rgb)),
+        "image_b64": _image_to_base64(rendered),
+    }
+
+
+def save_physical_runtime_eval(
+    square_accuracy: float,
+    non_empty_accuracy: float | None,
+    exact_match_rate: float | None,
+    sample_size: int,
+    elapsed_ms_avg: float | None = None,
+    images_per_minute: int | None = None,
+    stateless_square_accuracy: float | None = None,
+    stateless_non_empty_accuracy: float | None = None,
+    stateless_exact_match_rate: float | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    per_class_data: dict[str, Any] = {}
+    if non_empty_accuracy is not None:
+        per_class_data["non_empty_accuracy"] = round(non_empty_accuracy, 4)
+    if exact_match_rate is not None:
+        per_class_data["exact_match_rate"] = round(exact_match_rate, 4)
+    if elapsed_ms_avg is not None:
+        per_class_data["elapsed_ms_avg"] = round(elapsed_ms_avg, 3)
+    if images_per_minute is not None:
+        per_class_data["images_per_minute"] = images_per_minute
+    if stateless_square_accuracy is not None:
+        per_class_data["stateless_square_accuracy"] = round(stateless_square_accuracy, 4)
+    if stateless_non_empty_accuracy is not None:
+        per_class_data["stateless_non_empty_accuracy"] = round(stateless_non_empty_accuracy, 4)
+    if stateless_exact_match_rate is not None:
+        per_class_data["stateless_exact_match_rate"] = round(stateless_exact_match_rate, 4)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO model_evaluations
+                   (model_name, sample_size, accuracy, notes, per_class)
+                   VALUES (%s, %s, %s, %s, %s)
+                   RETURNING id, evaluated_at""",
+                (
+                    "physical",
+                    sample_size,
+                    round(square_accuracy, 4),
+                    notes,
+                    json.dumps(per_class_data) if per_class_data else None,
+                ),
+            )
+            row = cur.fetchone()
+            conn.commit()
+    return {"id": row[0], "evaluated_at": str(row[1])}
+
+
+def create_physical_runtime_session(
+    results: list[dict[str, Any]],
+    square_accuracy: float | None,
+    non_empty_accuracy: float | None,
+    exact_match_rate: float | None,
+    sample_size: int,
+    pin_state: dict | None = None,
+    evaluation_id: int | None = None,
+) -> dict[str, Any]:
+    session_id = uuid.uuid4().hex[:12]
+    lightweight: list[dict[str, Any]] = []
+
+    for index, result in enumerate(results):
+        entry = dict(result)
+        annotation_id = str(entry.get("annotation_id", f"frame_{index}"))
+        if entry.get("thumbnail_b64"):
+            entry["thumbnail_filename"] = _save_session_image(
+                session_id,
+                f"{index:03d}_{_safe_filename_stem(annotation_id)}_thumb",
+                str(entry["thumbnail_b64"]),
+            )
+            entry.pop("thumbnail_b64", None)
+        if entry.get("image_b64"):
+            entry["image_filename"] = _save_session_image(
+                session_id,
+                f"{index:03d}_{_safe_filename_stem(annotation_id)}",
+                str(entry["image_b64"]),
+            )
+            entry.pop("image_b64", None)
+        lightweight.append(entry)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO physical_runtime_sessions
+                   (id, sample_size, square_accuracy, non_empty_accuracy,
+                    exact_match_rate, results, pin_state, evaluation_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    session_id,
+                    sample_size,
+                    square_accuracy,
+                    non_empty_accuracy,
+                    exact_match_rate,
+                    json.dumps(lightweight),
+                    json.dumps(pin_state or {}),
+                    evaluation_id,
+                ),
+            )
+            conn.commit()
+    return {"session_id": session_id}
+
+
+def get_physical_runtime_session(session_id: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT id, created_at, sample_size, square_accuracy,
+                          non_empty_accuracy, exact_match_rate,
+                          results, pin_state, evaluation_id
+                   FROM physical_runtime_sessions WHERE id = %s""",
+                (session_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {
+                "id": row[0],
+                "created_at": str(row[1]),
+                "sample_size": row[2],
+                "square_accuracy": row[3],
+                "non_empty_accuracy": row[4],
+                "exact_match_rate": row[5],
+                "results": row[6] if isinstance(row[6], list) else json.loads(row[6]),
+                "pin_state": row[7] if isinstance(row[7], dict) else json.loads(row[7] or "{}"),
+                "evaluation_id": row[8],
+            }
+
+
+def list_physical_runtime_sessions(limit: int = 20) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT id, created_at, sample_size, square_accuracy,
+                          non_empty_accuracy, exact_match_rate
+                   FROM physical_runtime_sessions
+                   ORDER BY created_at DESC LIMIT %s""",
+                (limit,),
+            )
+            return [
+                {
+                    "id": row[0],
+                    "created_at": str(row[1]),
+                    "sample_size": row[2],
+                    "square_accuracy": row[3],
+                    "non_empty_accuracy": row[4],
+                    "exact_match_rate": row[5],
+                }
+                for row in cur.fetchall()
+            ]
+
+
+def update_physical_runtime_pins(session_id: str, pin_state: dict[str, bool]) -> dict[str, Any]:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pin_state FROM physical_runtime_sessions WHERE id = %s",
+                (session_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return {"error": f"Session {session_id} not found"}
+
+            existing = row[0] if isinstance(row[0], dict) else json.loads(row[0] or "{}")
+            existing.update(pin_state)
+
+            cur.execute(
+                "UPDATE physical_runtime_sessions SET pin_state = %s WHERE id = %s",
+                (json.dumps(existing), session_id),
+            )
+            conn.commit()
+    return {"ok": True, "pin_state": existing}
+
+
+def get_session_image_path(session_id: str, filename: str) -> Path | None:
+    if ".." in filename or "/" in filename:
+        return None
+    path = _SESSION_IMAGES_DIR / f"phys_{session_id}" / filename
+    return path if path.exists() else None
+
+
+def _find_row_and_clip_rows(
+    annotation_id: str,
+) -> tuple[PhysicalEvalBoardRow, list[PhysicalEvalBoardRow]]:
+    dataset = PhysicalEvalBoardDataset()
+    rows_by_clip = _group_rows_by_clip(dataset.rows)
+    for clip_rows in rows_by_clip.values():
+        for row in clip_rows:
+            if row.annotation_id == annotation_id:
+                return row, clip_rows
+    raise FileNotFoundError(f"Physical validation annotation {annotation_id} not found")
+
+
+def _count_non_empty_correct(
+    predicted_class_ids: tuple[int, ...],
+    target_class_ids: tuple[int, ...],
+) -> int:
+    return sum(
+        int(predicted == target and target != _EMPTY_CLASS_ID)
+        for predicted, target in zip(predicted_class_ids, target_class_ids)
+    )
+
+
+def _clip_filename(row: PhysicalEvalBoardRow) -> str:
+    if row.clip_path:
+        return Path(row.clip_path).name
+    return Path(row.board_path).name
+
+
+def _save_session_image(session_id: str, name: str, b64_data: str) -> str:
+    out_dir = _SESSION_IMAGES_DIR / f"phys_{session_id}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{name}.png"
+    (out_dir / filename).write_bytes(base64.b64decode(b64_data))
+    return filename
+
+
+def _safe_filename_stem(value: str) -> str:
+    safe = [char if char.isalnum() or char in {"-", "_"} else "_" for char in value]
+    return "".join(safe).strip("_") or "frame"
 
 
 def _image_to_base64(image: Image.Image) -> str:

@@ -1485,6 +1485,55 @@ export interface PhysicalRuntimeVisualizationResponse {
   frames: PhysicalRuntimeVisualizationFrame[];
 }
 
+export interface PhysicalRuntimeSampleFrame {
+  annotation_id: string;
+  clip_path: string | null;
+  clip_filename: string;
+  frame_index: number | null;
+}
+
+export interface PhysicalRuntimeEvalResult {
+  annotation_id: string;
+  clip_path: string | null;
+  clip_filename: string;
+  frame_index: number;
+  board_path: string;
+  source_video_id: string | null;
+  gt_change_count: number | null;
+  stateless_change_count: number | null;
+  temporal_change_count: number | null;
+  stateless_error_count: number;
+  temporal_error_count: number;
+  stateless_square_accuracy: number;
+  temporal_square_accuracy: number;
+  non_empty_square_count: number;
+  stateless_non_empty_correct_count: number;
+  temporal_non_empty_correct_count: number;
+  stateless_non_empty_accuracy: number | null;
+  temporal_non_empty_accuracy: number | null;
+  stateless_exact_match: boolean;
+  temporal_exact_match: boolean;
+  stateless_mean_confidence: number;
+  temporal_mean_confidence: number;
+  elapsed_ms: number;
+  thumbnail_b64?: string;
+  thumbnail_filename?: string;
+  image_b64?: string;
+  image_filename?: string;
+}
+
+export interface PhysicalRuntimeSession {
+  id: string;
+  created_at: string;
+  sample_size: number;
+  square_accuracy: number | null;
+  non_empty_accuracy: number | null;
+  exact_match_rate: number | null;
+  results?: PhysicalRuntimeEvalResult[];
+  pin_state?: Record<string, boolean>;
+  evaluation_id?: number | null;
+}
+
 export async function renderPhysicalRuntimeVisualization(body: {
   clip_path?: string | null;
   frame_start: number;
@@ -1501,7 +1550,111 @@ export async function renderPhysicalRuntimeVisualization(body: {
   return res.json();
 }
 
-// ── Physical eval-set annotation ───────────────────────────
+export async function samplePhysicalRuntimeFrames(
+  limit: number,
+  exclude?: string[],
+  signal?: AbortSignal,
+): Promise<{ frames: PhysicalRuntimeSampleFrame[] }> {
+  const excludeParam = exclude && exclude.length > 0 ? `&exclude=${exclude.join(",")}` : "";
+  const res = await fetch(
+    `/api/evaluate/physical-runtime/sample?limit=${limit}${excludeParam}`,
+    { signal },
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function inspectPhysicalRuntimeFrame(
+  annotationId: string,
+  options?: { panel_size?: number; device?: string; signal?: AbortSignal },
+): Promise<PhysicalRuntimeEvalResult> {
+  const res = await fetch("/api/evaluate/physical-runtime/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      annotation_id: annotationId,
+      panel_size: options?.panel_size,
+      device: options?.device,
+    }),
+    signal: options?.signal,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function savePhysicalRuntimeEval(body: {
+  square_accuracy: number;
+  non_empty_accuracy?: number | null;
+  exact_match_rate?: number | null;
+  sample_size: number;
+  elapsed_ms_avg?: number | null;
+  images_per_minute?: number | null;
+  stateless_square_accuracy?: number | null;
+  stateless_non_empty_accuracy?: number | null;
+  stateless_exact_match_rate?: number | null;
+  notes?: string | null;
+}): Promise<{ id: number; evaluated_at: string }> {
+  const res = await fetch("/api/evaluate/physical-runtime/save-eval", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createPhysicalRuntimeSession(body: {
+  results: PhysicalRuntimeEvalResult[];
+  square_accuracy?: number | null;
+  non_empty_accuracy?: number | null;
+  exact_match_rate?: number | null;
+  sample_size?: number;
+  pin_state?: Record<string, boolean>;
+  evaluation_id?: number | null;
+}): Promise<{ session_id: string }> {
+  const res = await fetch("/api/evaluate/physical-runtime/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPhysicalRuntimeSession(
+  sessionId: string,
+): Promise<PhysicalRuntimeSession> {
+  const res = await fetch(`/api/evaluate/physical-runtime/sessions/${sessionId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listPhysicalRuntimeSessions(
+  limit = 20,
+): Promise<{ sessions: PhysicalRuntimeSession[] }> {
+  const res = await fetch(`/api/evaluate/physical-runtime/sessions?limit=${limit}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updatePhysicalRuntimePins(
+  sessionId: string,
+  pinState: Record<string, boolean>,
+): Promise<{ pin_state: Record<string, boolean> }> {
+  const res = await fetch(`/api/evaluate/physical-runtime/sessions/${sessionId}/pins`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pin_state: pinState }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export function physicalRuntimeSessionImageUrl(sessionId: string, filename: string): string {
+  return `/api/evaluate/physical-runtime/session-image/${sessionId}/${encodeURIComponent(filename)}`;
+}
+
+// ── Physical validation/train annotation ───────────────────
 
 export interface PhysicalEvalClip {
   filename: string;
