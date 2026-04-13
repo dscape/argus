@@ -384,6 +384,37 @@
     - adaptive clip-ordered temporal smoothing over physical board logits
   - exact one-king enforcement is worth keeping; more aggressive static legality constraints are not obviously helping on the current frozen-feature reader
   - temporal fusion now looks genuinely promising because the current reader is very noisy over time rather than merely stable-and-wrong
+- Post-promotion follow-up checks after `v7r4`:
+  - widened the adaptive-smoothing search around the promoted runtime and confirmed the current metadata setting still has the best macro/non-empty trade-off among nearby global EMA schedules:
+    - kept: `low=0.02`, `high=0.12`, `threshold=8`
+      - `outputs/2026-04-13/physical_runtime_eval_v22_temporal_adaptive_v7r4.json`
+      - square `0.5258`, non-empty `0.4667`, macro `0.3700`
+    - rejected nearby alternative with slightly higher square accuracy because it regressed macro F1:
+      - `outputs/2026-04-13/physical_runtime_eval_adaptive_l003_h012_t8.json`
+      - square `0.5268`, non-empty `0.4667`, macro `0.3696`
+  - re-ran a local 3-member ensemble weight search around the promoted `21:7:1` mix and did **not** beat it on the user-priority metrics.
+    - best rejected nearby challenger: `24:9:1`
+      - `outputs/2026-04-13/physical_runtime_eval_w24_9_1.json`
+      - square `0.5243`, non-empty `0.4656`, macro `0.3691`
+  - re-checked older runtime families under the stronger adaptive schedule and they still stayed below `v7r4` on non-empty/macro:
+    - `v6r2` + adaptive `0.03/0.08/8`:
+      - `outputs/2026-04-13/physical_runtime_eval_v6r2_adaptive_l003_h008_t8.json`
+      - square `0.5345`, non-empty `0.4545`, macro `0.3550`
+    - `v6r3` + adaptive `0.03/0.08/8`:
+      - `outputs/2026-04-13/physical_runtime_eval_v6r3_adaptive_l003_h008_t8.json`
+      - square `0.5151`, non-empty `0.4653`, macro `0.3679`
+  - rejected two more label-free runtime ideas and kept no code from them:
+    - selective per-square adaptive EMA:
+      - `outputs/2026-04-13/physical_runtime_eval_v24_temporal_selective_adaptive_02128.json`
+      - square `0.5238`, non-empty `0.4646`, macro `0.3656`
+    - board-observation debounce on top of metadata smoothing (`confirm_frames=2`, `threshold=8`):
+      - `outputs/2026-04-13/physical_runtime_eval_v25_temporal_metadata_debounce2_t8.json`
+      - square `0.5030`, non-empty `0.4647`, macro `0.3576`
+  - investigated pseudo-real image-quality filtering via rectified-board sharpness.
+    - rectified-board Laplacian sharpness had a **positive** correlation with current-runtime agreement on replay-derived rows (`~0.26`), but hard-filtering to the sharpest half of pseudo-real boards caused a major training regression instead of a lift:
+      - `outputs/2026-04-13/physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_sharp50_layers8_10_11_rw4_seed0/summary.md`
+      - real eval square `0.3791`, non-empty `0.3110`, macro `0.2119`
+  - updated interpretation: the remaining blocker still looks like **coverage / supervision quality**, not another cheap temporal variant or a simple "cleaner pseudo-real subset" filter.
 
 ### Validation
 - Passed: `make typecheck`

@@ -182,6 +182,12 @@ Current snapshot on this branch:
     - non-empty accuracy: `0.4427`
     - macro F1: `0.3433`
   - a quick greedy legal-move candidate filter did not beat smoothing, and naive pseudo-real agreement filtering regressed badly, so neither was kept
+  - wider post-promotion follow-up checks also failed to beat `v7r4`, so the current deployed path remains the best known runtime for the user-priority objective:
+    - nearby adaptive EMA retuning confirmed `low=0.02`, `high=0.12`, `threshold=8` is still the best macro/non-empty trade-off among the local candidates tested
+    - nearby 3-member ensemble weight search around `21:7:1` did not improve on the promoted mix
+    - selective per-square adaptive EMA and a board-observation debounce filter both regressed and were rejected
+    - re-running `v6r2` / `v6r3` under the stronger adaptive schedule still left `v7r4` ahead on deployed non-empty / macro-F1
+    - filtering replay-derived pseudo-real rows down to only the sharpest half caused a large training regression, so a simple "cleaner subset" filter is not the fix
 - The repo now also has two pieces of infrastructure for the next data-centric step:
   - manual non-held-out physical board labels can be collected under `data/physical/train_manual/`
   - pseudo-real source-video holdouts can be used during training for checkpoint selection via `scripts/train_physical_board_probe.py --real-val-source-videos ... --selection-metric auto`
