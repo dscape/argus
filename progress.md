@@ -415,6 +415,51 @@
       - `outputs/2026-04-13/physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_sharp50_layers8_10_11_rw4_seed0/summary.md`
       - real eval square `0.3791`, non-empty `0.3110`, macro `0.2119`
   - updated interpretation: the remaining blocker still looks like **coverage / supervision quality**, not another cheap temporal variant or a simple "cleaner pseudo-real subset" filter.
+- Follow-up after the rejected data-split / corner-refine ideas:
+  - tested and rejected several more pseudo-real interventions without keeping code from them:
+    - per-frame pseudo-real corner refinement
+      - most rows moved corners to the search limit (`12px`) and a holdout-PSR seed regressed badly:
+      - `outputs/2026-04-13/physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_frame_refine_layers8_10_11_rw4_seed0/summary.md`
+      - real eval square `0.3129`, non-empty `0.3238`, macro `0.1940`
+    - clip-subset validation inside the weakest pseudo-real source video (`psrPAoHr4wA`)
+      - keeping one PSR clip in train and one in pseudo-real selection also regressed:
+      - `outputs/2026-04-13/physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_clip1_layers8_10_11_rw4_seed0/summary.md`
+      - real eval square `0.3175`, non-empty `0.3145`, macro `0.2066`
+    - additional pseudo-real selection variants / seed sweeps that did not beat the existing holdout-PSR seed0 reader:
+      - `holdoutvko` seed0: square `0.3396`, non-empty `0.3382`, macro `0.2238`
+      - `holdoutpsr+hry` seed0: square `0.3297`, non-empty `0.3087`, macro `0.2022`
+      - `holdoutpsr` seeds `2` and `4`: both regressed below the existing seed0/seed3 runs
+      - reduced synthetic support (`syn300`, `syn150`) also regressed badly
+- Accepted a small runtime-only calibration win on top of the existing `v7r4` ensemble:
+  - computed a per-class logit bias from the pseudo-real selection source video `psrPAoHr4wA`
+  - used the same user-priority objective (`non_empty_plus_macro`) to choose a conservative calibration scale (`0.04`)
+  - applied the bias **after** temporal smoothing and **before** shared board-state constraints
+- Promoted calibrated deployed runtime:
+  - code version remains `v7`
+  - runtime artifact: `weights/physical/v7r5.pt`
+  - runtime metadata now includes:
+    - `class_logit_bias`
+    - `class_logit_bias_scale: 0.04`
+    - `class_logit_bias_source_videos: ["psrPAoHr4wA"]`
+- End-to-end runtime evals for `v7r5`:
+  - stateless single-frame eval: `outputs/2026-04-13/physical_runtime_eval_v27_single_frame_v7r5_bias004.json`
+    - square accuracy: `0.4986`
+    - non-empty accuracy: `0.4406`
+    - macro F1: `0.3421`
+  - deployed clip-ordered eval with metadata-driven adaptive smoothing: `outputs/2026-04-13/physical_runtime_eval_v28_temporal_adaptive_v7r5_bias004.json`
+    - square accuracy: `0.5293`
+    - non-empty accuracy: `0.4659`
+    - macro F1: `0.3715`
+    - board exact match: `0.0`
+- Interpretation of `v7r5`:
+  - the new calibration is **not** a win on non-empty accuracy alone; it is a very small trade of non-empty for better macro-F1 and better overall deployed `non_empty + macro` selection score
+  - relative to `v7r4`, the deployed path now improves:
+    - square accuracy: `0.5293` vs `0.5259`
+    - macro F1: `0.3715` vs `0.3700`
+    - combined deployed `non_empty + macro`: `0.8373` vs `0.8366`
+  - while slightly regressing non-empty accuracy:
+    - `0.4659` vs `0.4667`
+  - this is therefore a tiny calibration lift, not a substantive change in the reader's ceiling; the remaining blocker is still supervision quality
 
 ### Validation
 - Passed: `make typecheck`

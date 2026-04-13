@@ -44,6 +44,13 @@ def main() -> None:
         default="weight_average",
     )
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--class-logit-bias",
+        type=float,
+        nargs="*",
+        default=None,
+        help="Optional per-class logit bias stored in runtime metadata",
+    )
     parser.add_argument("--promote-to-weights", action="store_true")
     args = parser.parse_args()
 
@@ -67,7 +74,14 @@ def main() -> None:
     torch.save(payload, output_path)
 
     if args.promote_to_weights:
-        promote_to_runtime_weights(output_path, payload)
+        promote_to_runtime_weights(
+            output_path,
+            payload,
+            class_logit_bias=resolve_class_logit_bias(
+                args.class_logit_bias,
+                num_classes=int(payload["num_classes"]),
+            ),
+        )
 
 
 def resolve_weights(raw_weights: list[float] | None, *, count: int) -> list[float]:
@@ -79,6 +93,18 @@ def resolve_weights(raw_weights: list[float] | None, *, count: int) -> list[floa
     if total <= 0.0:
         raise ValueError("Ensemble weights must sum to a positive value")
     return [float(weight) / total for weight in raw_weights]
+
+
+def resolve_class_logit_bias(
+    raw_bias: list[float] | None,
+    *,
+    num_classes: int,
+) -> list[float] | None:
+    if not raw_bias:
+        return None
+    if len(raw_bias) != num_classes:
+        raise ValueError(f"Expected {num_classes} class-logit bias values, got {len(raw_bias)}")
+    return [float(value) for value in raw_bias]
 
 
 def build_weight_averaged_payload(
@@ -191,7 +217,12 @@ def average_state_dicts(
     return averaged
 
 
-def promote_to_runtime_weights(checkpoint_path: Path, payload: dict[str, Any]) -> None:
+def promote_to_runtime_weights(
+    checkpoint_path: Path,
+    payload: dict[str, Any],
+    *,
+    class_logit_bias: list[float] | None,
+) -> None:
     weights_dir = _DEFAULT_WEIGHTS_DIR
     weights_dir.mkdir(parents=True, exist_ok=True)
     metadata_path = weights_dir / "metadata.json"
@@ -229,6 +260,7 @@ def promote_to_runtime_weights(checkpoint_path: Path, payload: dict[str, Any]) -
             "high_alpha": 0.12,
             "change_threshold": 8,
         },
+        "class_logit_bias": class_logit_bias,
         "runtime_format": "pytorch",
         "runtime_constraints": "back_rank_pawns_and_exactly_one_king_per_color",
     }

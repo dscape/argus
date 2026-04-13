@@ -151,7 +151,7 @@ Current snapshot on this branch:
 - The current committed runtime candidate is therefore still a **logit-space** ensemble under `weights/physical/`, but it has now changed shape again after adding pseudo-real source-video validation for checkpoint selection, a lightweight shared runtime postprocess, and clip-ordered runtime selection:
   - code version: `v7`
   - stateless-crop reference artifact: `weights/physical/v6r2.pt`
-  - deployed runtime artifact: `weights/physical/v7r4.pt`
+  - deployed runtime artifact: `weights/physical/v7r5.pt`
   - shared DINO layers: `8,10,11`
   - deployed runtime members:
     - `physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_layers8_10_11_rw4_seed0`
@@ -162,6 +162,7 @@ Current snapshot on this branch:
     - back-rank pawns are reassigned to the best non-pawn class
     - each color is forced to have **exactly one** king by removing duplicate kings and inserting a king only when one is missing
   - runtime metadata now also records the recommended adaptive temporal smoothing config for the stateful reader
+  - runtime metadata also carries a small per-class logit bias calibrated from pseudo-real source `psrPAoHr4wA`
 - Relative to `v5r2`, the best committed physical reader path is clearly better on the diagnostics that actually matter for physical board reading (`non-empty` and `macro-F1`) even though board exact match is still `0.0`.
 - A quick temporal-stability diagnostic on the held-out physical clips showed that the current reader is flickering far more than the real boards (`13.45%` predicted square-flip rate vs `0.25%` ground truth), so lightweight sequence smoothing is now justified rather than speculative.
 - The repo therefore now also has a stronger temporal baseline on top of the same runtime weights:
@@ -173,21 +174,31 @@ Current snapshot on this branch:
     - low alpha: `0.02`
     - high alpha: `0.12`
     - change threshold: `8`
-  - current best deployed clip-ordered eval: `outputs/2026-04-13/physical_runtime_eval_v22_temporal_adaptive_v7r4.json`
-    - square accuracy: `0.5259`
-    - non-empty accuracy: `0.4667`
-    - macro F1: `0.3700`
+  - current best deployed clip-ordered eval: `outputs/2026-04-13/physical_runtime_eval_v28_temporal_adaptive_v7r5_bias004.json`
+    - square accuracy: `0.5293`
+    - non-empty accuracy: `0.4659`
+    - macro F1: `0.3715`
   - current best stateless single-frame eval remains `v6r2`: `outputs/2026-04-13/physical_runtime_eval_v11_exact_kings_runtime.json`
     - square accuracy: `0.5115`
     - non-empty accuracy: `0.4427`
     - macro F1: `0.3433`
   - a quick greedy legal-move candidate filter did not beat smoothing, and naive pseudo-real agreement filtering regressed badly, so neither was kept
-  - wider post-promotion follow-up checks also failed to beat `v7r4`, so the current deployed path remains the best known runtime for the user-priority objective:
+  - wider post-promotion follow-up checks mostly failed to beat `v7r4`, so the remaining meaningful blocker still looks data-bound rather than temporal:
     - nearby adaptive EMA retuning confirmed `low=0.02`, `high=0.12`, `threshold=8` is still the best macro/non-empty trade-off among the local candidates tested
     - nearby 3-member ensemble weight search around `21:7:1` did not improve on the promoted mix
     - selective per-square adaptive EMA and a board-observation debounce filter both regressed and were rejected
     - re-running `v6r2` / `v6r3` under the stronger adaptive schedule still left `v7r4` ahead on deployed non-empty / macro-F1
     - filtering replay-derived pseudo-real rows down to only the sharpest half caused a large training regression, so a simple "cleaner subset" filter is not the fix
+    - per-frame pseudo-real corner refinement and clip-subset validation within `psrPAoHr4wA` also regressed badly and were rejected
+  - one tiny runtime-only calibration did beat the previous deployed selection objective, so the current best deployed runtime is now:
+    - `weights/physical/v7r5.pt`
+    - same 3-member ensemble and adaptive smoothing as `v7r4`
+    - plus a small per-class logit bias calibrated from pseudo-real source `psrPAoHr4wA`
+    - deployed clip-ordered eval: `outputs/2026-04-13/physical_runtime_eval_v28_temporal_adaptive_v7r5_bias004.json`
+      - square accuracy: `0.5293`
+      - non-empty accuracy: `0.4659`
+      - macro F1: `0.3715`
+    - relative to `v7r4`, this is a tiny trade of non-empty for better macro-F1 and a slightly better combined `non_empty + macro` objective, not a major change in ceiling
 - The repo now also has two pieces of infrastructure for the next data-centric step:
   - manual non-held-out physical board labels can be collected under `data/physical/train_manual/`
   - pseudo-real source-video holdouts can be used during training for checkpoint selection via `scripts/train_physical_board_probe.py --real-val-source-videos ... --selection-metric auto`

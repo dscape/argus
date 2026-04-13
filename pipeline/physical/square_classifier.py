@@ -29,6 +29,7 @@ from pipeline.shared import (
     AdaptiveBoardLogitsExponentialSmoother,
     BoardLogitsExponentialSmoother,
     BoardObservation,
+    apply_board_logit_bias,
     constrained_board_class_ids,
 )
 
@@ -43,6 +44,8 @@ _CLASS_TO_SYMBOL = {index: name for index, name in enumerate(CLASS_NAMES)}
 _cached_model: tuple[dict[str, Any], VisionEncoder, nn.Module] | None = None
 _cached_weights_path: Path | None = None
 _cached_device: str | None = None
+_METADATA_UNSET = object()
+_cached_metadata: dict[str, Any] | None | object = _METADATA_UNSET
 
 
 def read_board_observation_from_frame(
@@ -63,6 +66,7 @@ def read_board_observation_from_frame(
         probe=probe,
         board_crop=board_crop,
     )
+    logits = apply_board_logit_bias(logits, _load_runtime_logit_bias())
     return _board_observation_from_logits(logits, timestamp_seconds=timestamp_seconds)
 
 
@@ -92,6 +96,7 @@ class PhysicalBoardSequenceReader:
     ) -> None:
         self.device = device
         self._smoother = _build_temporal_smoother(ema_alpha=ema_alpha)
+        self._logit_bias = _load_runtime_logit_bias()
 
     def reset(self) -> None:
         if self._smoother is not None:
@@ -116,6 +121,7 @@ class PhysicalBoardSequenceReader:
         )
         if self._smoother is not None:
             logits = self._smoother.update(logits)
+        logits = apply_board_logit_bias(logits, self._logit_bias)
         return _board_observation_from_logits(logits, timestamp_seconds=timestamp_seconds)
 
     def read_fen_from_frame(
@@ -338,8 +344,25 @@ def _resolve_weights_path() -> Path:
     return _DEFAULT_WEIGHTS_PATH
 
 
+def _load_runtime_logit_bias() -> list[float] | None:
+    metadata = load_metadata()
+    if metadata is None:
+        return None
+    raw_bias = metadata.get("class_logit_bias")
+    if raw_bias is None:
+        return None
+    if not isinstance(raw_bias, list):
+        raise ValueError("class_logit_bias metadata must be a list of floats")
+    return [float(value) for value in raw_bias]
+
+
 def load_metadata() -> dict[str, Any] | None:
+    global _cached_metadata
+    if _cached_metadata is not _METADATA_UNSET:
+        return None if _cached_metadata is None else _cached_metadata
     metadata_path = WEIGHTS_DIR / "metadata.json"
     if not metadata_path.exists():
+        _cached_metadata = None
         return None
-    return json.loads(metadata_path.read_text())
+    _cached_metadata = json.loads(metadata_path.read_text())
+    return _cached_metadata

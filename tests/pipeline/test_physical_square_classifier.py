@@ -136,6 +136,43 @@ def test_physical_board_sequence_reader_uses_runtime_default_temporal_smoothing(
     assert reader._smoother.high_alpha_change_threshold == 8
 
 
+def test_read_board_observation_from_frame_applies_runtime_logit_bias(monkeypatch) -> None:
+    import pipeline.physical.square_classifier as square_classifier
+
+    class DummyModule:
+        pass
+
+    logits = np.zeros((64, 13), dtype=np.float32)
+    logits[:, 0] = 1.0
+    logits[0, 3] = 5.0
+    logits[0, 0] = 5.1
+    logits[4, 12] = 6.0
+    logits[60, 6] = 6.0
+
+    monkeypatch.setattr(
+        square_classifier,
+        "_get_runtime_model",
+        lambda device: ({}, DummyModule(), DummyModule()),
+    )
+    monkeypatch.setattr(
+        square_classifier,
+        "_predict_board_logits",
+        lambda **kwargs: torch.tensor(logits, dtype=torch.float32),
+    )
+    monkeypatch.setattr(
+        square_classifier,
+        "load_metadata",
+        lambda: {"class_logit_bias": [0.0, 0.0, 0.0, 0.2] + [0.0] * 9},
+    )
+
+    observation = square_classifier.read_board_observation_from_frame(
+        np.zeros((64, 64, 3), dtype=np.uint8),
+    )
+
+    assert observation is not None
+    assert observation.fen.split("/", 1)[0] == "B3k3"
+
+
 def test_physical_board_sequence_reader_smooths_logits_across_frames(monkeypatch) -> None:
     import pipeline.physical.square_classifier as square_classifier
 
