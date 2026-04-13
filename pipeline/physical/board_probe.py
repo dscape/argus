@@ -13,16 +13,152 @@ from argus.model.vision_encoder import VisionEncoder
 from pipeline.physical.square_probe import ProbeMetrics, evaluate_probe
 from pipeline.shared import NUM_SQUARE_CLASSES
 
+_DEFAULT_HEAD_TYPE = "linear"
+_DEFAULT_HIDDEN_DIM = 512
+_DEFAULT_TRANSFORMER_LAYERS = 2
+_DEFAULT_TRANSFORMER_HEADS = 8
+_DEFAULT_TRANSFORMER_FF_DIM = 1024
+_DEFAULT_DROPOUT = 0.1
+_SQUARE_COUNT = 64
+
 
 class PhysicalBoardStateProbe(nn.Module):
-    """Shared linear readout applied to 64 square tokens."""
+    """Trainable frozen-feature readout applied to 64 square tokens."""
 
-    def __init__(self, embed_dim: int, num_classes: int = NUM_SQUARE_CLASSES) -> None:
+    def __init__(
+        self,
+        embed_dim: int,
+        num_classes: int = NUM_SQUARE_CLASSES,
+        *,
+        head_type: str = _DEFAULT_HEAD_TYPE,
+        hidden_dim: int = _DEFAULT_HIDDEN_DIM,
+        transformer_layers: int = _DEFAULT_TRANSFORMER_LAYERS,
+        transformer_heads: int = _DEFAULT_TRANSFORMER_HEADS,
+        transformer_ff_dim: int = _DEFAULT_TRANSFORMER_FF_DIM,
+        dropout: float = _DEFAULT_DROPOUT,
+    ) -> None:
         super().__init__()
-        self.classifier = nn.Linear(embed_dim, num_classes)
+        self.embed_dim = embed_dim
+        self.num_classes = num_classes
+        self.head_type = head_type
+        self.hidden_dim = hidden_dim
+        self.transformer_layers = transformer_layers
+        self.transformer_heads = transformer_heads
+        self.transformer_ff_dim = transformer_ff_dim
+        self.dropout = dropout
+
+        if head_type == "linear":
+            self.classifier = nn.Linear(embed_dim, num_classes)
+            return
+
+        self.position_embedding = nn.Parameter(torch.zeros(_SQUARE_COUNT, embed_dim))
+        nn.init.normal_(self.position_embedding, std=0.02)
+
+        if head_type == "pos_mlp":
+            self.classifier = nn.Sequential(
+                nn.LayerNorm(embed_dim),
+                nn.Linear(embed_dim, hidden_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, num_classes),
+            )
+            return
+
+        if head_type == "transformer":
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=embed_dim,
+                nhead=transformer_heads,
+                dim_feedforward=transformer_ff_dim,
+                dropout=dropout,
+                activation="gelu",
+                batch_first=True,
+                norm_first=True,
+            )
+            self.context_encoder = nn.TransformerEncoder(
+                encoder_layer,
+                num_layers=transformer_layers,
+            )
+            self.output_norm = nn.LayerNorm(embed_dim)
+            self.classifier = nn.Linear(embed_dim, num_classes)
+            return
+
+        raise ValueError(f"Unsupported board-probe head_type: {head_type}")
 
     def forward(self, square_tokens: torch.Tensor) -> torch.Tensor:
-        return self.classifier(square_tokens)
+        if self.head_type == "linear":
+            return self.classifier(square_tokens)
+        positioned_tokens = square_tokens + self.position_embedding.unsqueeze(0)
+        if self.head_type == "pos_mlp":
+            return self.classifier(positioned_tokens)
+        contextual_tokens = self.context_encoder(positioned_tokens)
+        return self.classifier(self.output_norm(contextual_tokens))
+
+    def checkpoint_config(self) -> dict[str, Any]:
+        return {
+            "head_type": self.head_type,
+            "hidden_dim": self.hidden_dim,
+            "transformer_layers": self.transformer_layers,
+            "transformer_heads": self.transformer_heads,
+            "transformer_ff_dim": self.transformer_ff_dim,
+            "dropout": self.dropout,
+        }
+
+
+class PhysicalBoardStateEnsembleProbe(nn.Module):
+    """Logit-space ensemble over compatible board-state probes."""
+
+    def __init__(
+        self,
+        probes: list[PhysicalBoardStateProbe],
+        *,
+        weights: list[float] | None = None,
+    ) -> None:
+        super().__init__()
+        if not probes:
+            raise ValueError("PhysicalBoardStateEnsembleProbe requires at least one member")
+        if weights is None:
+            weights = [1.0 / len(probes)] * len(probes)
+        if len(weights) != len(probes):
+            raise ValueError(f"Expected {len(probes)} ensemble weights, got {len(weights)}")
+        self.probes = nn.ModuleList(probes)
+        self.register_buffer("weights", torch.tensor(weights, dtype=torch.float32))
+
+    def forward(self, square_tokens: torch.Tensor) -> torch.Tensor:
+        member_logits = torch.stack([probe(square_tokens) for probe in self.probes], dim=0)
+        weights = self.weights.to(device=square_tokens.device, dtype=member_logits.dtype)
+        return (member_logits * weights[:, None, None, None]).sum(dim=0) / weights.sum()
+
+
+def board_probe_config_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:
+    probe_config = checkpoint.get("probe_config")
+    if not isinstance(probe_config, dict):
+        metadata = checkpoint.get("metadata")
+        probe_config = metadata if isinstance(metadata, dict) else {}
+
+    return {
+        "head_type": str(probe_config.get("head_type", _DEFAULT_HEAD_TYPE)),
+        "hidden_dim": int(probe_config.get("hidden_dim", _DEFAULT_HIDDEN_DIM)),
+        "transformer_layers": int(
+            probe_config.get("transformer_layers", _DEFAULT_TRANSFORMER_LAYERS)
+        ),
+        "transformer_heads": int(
+            probe_config.get("transformer_heads", _DEFAULT_TRANSFORMER_HEADS)
+        ),
+        "transformer_ff_dim": int(
+            probe_config.get("transformer_ff_dim", _DEFAULT_TRANSFORMER_FF_DIM)
+        ),
+        "dropout": float(probe_config.get("dropout", _DEFAULT_DROPOUT)),
+    }
+
+
+def build_board_state_probe(
+    embed_dim: int,
+    *,
+    num_classes: int = NUM_SQUARE_CLASSES,
+    probe_config: dict[str, Any] | None = None,
+) -> PhysicalBoardStateProbe:
+    config = board_probe_config_from_checkpoint({"probe_config": probe_config or {}})
+    return PhysicalBoardStateProbe(embed_dim, num_classes=num_classes, **config)
 
 
 def dino_patches_to_square_tokens(patch_tokens: torch.Tensor) -> torch.Tensor:
@@ -99,22 +235,46 @@ def train_board_probe(
     weight_decay: float,
     device: torch.device,
     class_weights: torch.Tensor | None = None,
+    board_weights: torch.Tensor | None = None,
+    head_type: str = _DEFAULT_HEAD_TYPE,
+    hidden_dim: int = _DEFAULT_HIDDEN_DIM,
+    transformer_layers: int = _DEFAULT_TRANSFORMER_LAYERS,
+    transformer_heads: int = _DEFAULT_TRANSFORMER_HEADS,
+    transformer_ff_dim: int = _DEFAULT_TRANSFORMER_FF_DIM,
+    dropout: float = _DEFAULT_DROPOUT,
 ) -> tuple[PhysicalBoardStateProbe, float]:
-    probe = PhysicalBoardStateProbe(train_square_tokens.shape[-1]).to(device)
+    probe = PhysicalBoardStateProbe(
+        train_square_tokens.shape[-1],
+        head_type=head_type,
+        hidden_dim=hidden_dim,
+        transformer_layers=transformer_layers,
+        transformer_heads=transformer_heads,
+        transformer_ff_dim=transformer_ff_dim,
+        dropout=dropout,
+    ).to(device)
     optimizer = torch.optim.AdamW(probe.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss(
-        weight=None if class_weights is None else class_weights.to(device)
+        weight=None if class_weights is None else class_weights.to(device),
+        reduction="none",
     )
 
     train_features = train_square_tokens.to(device)
     train_targets = train_labels.to(device)
+    train_board_weights = None if board_weights is None else board_weights.to(device=device)
     best_state: dict[str, torch.Tensor] | None = None
     best_val_accuracy = -1.0
 
     for _epoch in range(epochs):
         probe.train()
         logits = probe(train_features)
-        loss = criterion(logits.reshape(-1, logits.shape[-1]), train_targets.reshape(-1))
+        per_square_loss = criterion(logits.reshape(-1, logits.shape[-1]), train_targets.reshape(-1))
+        per_board_loss = per_square_loss.reshape(train_targets.shape[0], train_targets.shape[1]).mean(
+            dim=1
+        )
+        if train_board_weights is None:
+            loss = per_board_loss.mean()
+        else:
+            loss = (per_board_loss * train_board_weights).sum() / train_board_weights.sum()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -129,7 +289,15 @@ def train_board_probe(
     if best_state is None:
         raise RuntimeError("Training did not produce a checkpoint")
 
-    best_probe = PhysicalBoardStateProbe(train_square_tokens.shape[-1])
+    best_probe = PhysicalBoardStateProbe(
+        train_square_tokens.shape[-1],
+        head_type=head_type,
+        hidden_dim=hidden_dim,
+        transformer_layers=transformer_layers,
+        transformer_heads=transformer_heads,
+        transformer_ff_dim=transformer_ff_dim,
+        dropout=dropout,
+    )
     best_probe.load_state_dict(best_state)
     return best_probe.to(device), best_val_accuracy
 
@@ -181,6 +349,7 @@ def save_board_probe_checkpoint(
         "input_size": input_size,
         "num_classes": NUM_SQUARE_CLASSES,
         "metadata": metadata or {},
+        "probe_config": probe.checkpoint_config(),
         "architecture": "board_probe",
     }
     torch.save(payload, Path(path))

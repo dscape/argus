@@ -133,12 +133,25 @@ Current snapshot on this branch:
 - A higher-input-size DINO check at `336×336` did not help on the current synthetic source, so resolution alone is not the bottleneck.
 - Replay-derived non-held-out STL Chess Club boards can now be rectified automatically via transferred channel-level corner templates, and the refined export lives under `outputs/2026-04-12/physical_real_board_dataset_export_refined/`.
 - Adding a bounded per-clip corner-refinement step materially improved those pseudo-real boards, and mixing them into training now helps more than the earlier raw transfer did.
-- Seed sensitivity also turned out to matter a lot on the refined pseudo-real mix. The current committed runtime candidate is an equal-weight ensemble of two refined pseudo-real DINO runs under `weights/physical/`, with held-out real metrics around:
-  - square accuracy: `0.3277`
-  - non-empty accuracy: `0.2563`
-  - macro F1: `0.1487`
-- That is still far from the target, but it is the strongest current board-context reader and the first committed end-to-end runtime candidate for physical boards. The runtime path is now explicitly evaluable via `scripts/eval_physical_board_runtime.py`.
-- Next attempt should therefore keep board context, but improve the synthetic rectified board generator with better 3D-aware rectified-piece distortion or improve per-clip corner refinement / real-board labeling before adding more model complexity.
+- The original shared linear board readout also turned out to be a genuine bottleneck. Frozen-DINO transfer improves a lot once the head is allowed to use explicit square position and mild cross-square context:
+  - `head_type=pos_mlp`: learned square-position embeddings + MLP readout
+  - `head_type=transformer`: learned square-position embeddings + shallow transformer over the 64 square tokens
+- The best new single checkpoint so far is a transformer-head run on refined pseudo-real data:
+  - `outputs/2026-04-12/physical_board_probe_dino_topdown_transformer_real556_rw1_seed3/`
+  - square accuracy: `0.4710`
+  - non-empty accuracy: `0.3139`
+  - macro F1: `0.2298`
+- Weight-space checkpoint averaging was the wrong way to ensemble these newer heads because it drifted back toward empty-heavy behavior.
+- The current committed runtime candidate is therefore a **logit-space** ensemble under `weights/physical/` instead of a parameter-space average. It combines:
+  - transformer head: `physical_board_probe_dino_topdown_transformer_real556_rw1_seed3`
+  - positional MLP head: `physical_board_probe_dino_topdown_posmlp512_real556_rw4_seed0`
+  - weights: `1:2`
+  - held-out runtime metrics from `outputs/2026-04-12/physical_runtime_eval_v4.json`:
+    - square accuracy: `0.4230`
+    - non-empty accuracy: `0.3313`
+    - macro F1: `0.2484`
+- That is still far from the target, but it is the strongest current board-context reader and the best committed end-to-end runtime candidate for physical boards. The runtime path is now explicitly evaluable via `scripts/eval_physical_board_runtime.py`.
+- Next attempt should still prioritize better in-domain real supervision and better localization / corner quality before more backbone work. The new head results show there was some model-side headroom, but board exact match staying at `0.0` means the task is still mostly data-limited.
 - Empty squares will dominate; success is not allowed to hide behind empty-square accuracy.
 - Synthetic physical renders are training fuel, not validation data.
 

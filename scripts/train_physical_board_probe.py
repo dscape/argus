@@ -23,6 +23,7 @@ from pipeline.physical.board_data import (
     PhysicalSyntheticRenderedBoardDataset,
 )
 from pipeline.physical.board_probe import (
+    board_probe_config_from_checkpoint,
     evaluate_board_probe,
     extract_square_token_features,
     save_board_probe_checkpoint,
@@ -43,7 +44,7 @@ _DEFAULT_OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "physical_board_probe"
 _DEFAULT_WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
 _DEFAULT_DINO_MODEL = "facebook/dinov2-base"
 _DEFAULT_YOLO_MODEL = "weights/yolo_base/yolo11n.pt"
-_MODEL_CODE_VERSION = "v2"
+_MODEL_CODE_VERSION = "v4"
 _IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406), dtype=torch.float32).view(3, 1, 1)
 _IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225), dtype=torch.float32).view(3, 1, 1)
 
@@ -153,6 +154,11 @@ def main() -> None:
     )
 
     class_weights = build_class_weights(train_labels, mode=args.class_weighting)
+    board_weights = build_board_weights(
+        synthetic_count=len(synthetic_train_dataset),
+        real_count=0 if real_train_dataset is None else len(real_train_dataset),
+        real_loss_weight=args.real_loss_weight,
+    )
     probe, best_synth_val_accuracy = train_board_probe(
         train_tokens,
         train_labels,
@@ -163,6 +169,13 @@ def main() -> None:
         weight_decay=args.weight_decay,
         device=device,
         class_weights=class_weights,
+        board_weights=board_weights,
+        head_type=args.head_type,
+        hidden_dim=args.hidden_dim,
+        transformer_layers=args.transformer_layers,
+        transformer_heads=args.transformer_heads,
+        transformer_ff_dim=args.transformer_ff_dim,
+        dropout=args.dropout,
     )
 
     train_metrics = evaluate_board_probe(probe, train_tokens, train_labels, device=device)
@@ -194,6 +207,13 @@ def main() -> None:
             "synthetic_min_ply": args.synthetic_min_ply,
             "augment": args.augment,
             "class_weighting": args.class_weighting,
+            "real_loss_weight": args.real_loss_weight,
+            "head_type": args.head_type,
+            "hidden_dim": args.hidden_dim,
+            "transformer_layers": args.transformer_layers,
+            "transformer_heads": args.transformer_heads,
+            "transformer_ff_dim": args.transformer_ff_dim,
+            "dropout": args.dropout,
             "best_synth_val_accuracy": best_synth_val_accuracy,
         },
     )
@@ -212,6 +232,13 @@ def main() -> None:
         "synthetic_source": args.synthetic_source,
         "augment": args.augment,
         "class_weighting": args.class_weighting,
+        "real_loss_weight": args.real_loss_weight,
+        "head_type": args.head_type,
+        "hidden_dim": args.hidden_dim,
+        "transformer_layers": args.transformer_layers,
+        "transformer_heads": args.transformer_heads,
+        "transformer_ff_dim": args.transformer_ff_dim,
+        "dropout": args.dropout,
         "synthetic_train_positions": args.synthetic_train_positions,
         "real_train_positions": 0 if real_train_dataset is None else len(real_train_dataset),
         "synthetic_val_positions": args.synthetic_val_positions,
@@ -223,6 +250,9 @@ def main() -> None:
         "synthetic_val_label_histogram": class_histogram(val_labels.reshape(-1)),
         "real_eval_label_histogram": class_histogram(eval_labels.reshape(-1)),
         "best_synthetic_val_accuracy": best_synth_val_accuracy,
+        "probe_config": board_probe_config_from_checkpoint(
+            {"probe_config": probe.checkpoint_config()}
+        ),
         "train_metrics": train_metrics.to_dict(),
         "synthetic_val_metrics": synth_val_metrics.to_dict(),
         "real_eval_metrics": real_eval_metrics.to_dict(),
@@ -237,6 +267,8 @@ def main() -> None:
         f"- model: `{str(encoder_kwargs['model_name'])}`",
         f"- synthetic source: `{args.synthetic_source}`",
         f"- input size: `{args.input_size}`",
+        f"- head type: `{args.head_type}`",
+        f"- real loss weight: `{args.real_loss_weight}`",
         f"- train augmentation: `{args.augment}`",
         f"- class weighting: `{args.class_weighting}`",
         f"- synthetic train positions: `{args.synthetic_train_positions}`",
@@ -258,6 +290,7 @@ def main() -> None:
             checkpoint_path=checkpoint_path,
             encoder_kwargs=encoder_kwargs,
             args=args,
+            probe_config=probe.checkpoint_config(),
             real_eval_metrics=real_eval_metrics,
             best_synth_val_accuracy=best_synth_val_accuracy,
             held_out_eval_size=len(eval_dataset),
@@ -297,11 +330,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--head-type",
+        type=str,
+        choices=["linear", "pos_mlp", "transformer"],
+        default="linear",
+    )
+    parser.add_argument("--hidden-dim", type=int, default=512)
+    parser.add_argument("--transformer-layers", type=int, default=2)
+    parser.add_argument("--transformer-heads", type=int, default=8)
+    parser.add_argument("--transformer-ff-dim", type=int, default=1024)
+    parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--synthetic-train-positions", type=int, default=1200)
     parser.add_argument("--synthetic-val-positions", type=int, default=300)
     parser.add_argument("--real-train-clips-dir", type=Path, default=Path("data/argus/train_real"))
     parser.add_argument("--real-train-max-frames", type=int, default=0)
     parser.add_argument("--real-train-frame-stride", type=int, default=4)
+    parser.add_argument("--real-loss-weight", type=float, default=1.0)
     parser.add_argument("--synthetic-min-moves", type=int, default=12)
     parser.add_argument("--synthetic-max-moves", type=int, default=80)
     parser.add_argument("--synthetic-min-ply", type=int, default=8)
@@ -399,6 +444,21 @@ def build_class_weights(labels: torch.Tensor, *, mode: str) -> torch.Tensor | No
     return class_counts.max() / class_counts.clamp_min(1.0)
 
 
+def build_board_weights(
+    *,
+    synthetic_count: int,
+    real_count: int,
+    real_loss_weight: float,
+) -> torch.Tensor | None:
+    if real_count <= 0:
+        return None
+    if real_loss_weight <= 0.0:
+        raise ValueError(f"real_loss_weight must be > 0, got {real_loss_weight}")
+    weights = torch.ones(synthetic_count + real_count, dtype=torch.float32)
+    weights[synthetic_count:] = real_loss_weight
+    return weights
+
+
 def class_histogram(labels: torch.Tensor) -> dict[str, int]:
     counts = torch.bincount(labels.to(torch.long), minlength=len(SQUARE_CLASS_NAMES))
     return {
@@ -459,6 +519,7 @@ def promote_to_runtime_weights(
     checkpoint_path: Path,
     encoder_kwargs: dict[str, object],
     args: argparse.Namespace,
+    probe_config: dict[str, object],
     real_eval_metrics: ProbeMetrics,
     best_synth_val_accuracy: float,
     held_out_eval_size: int,
@@ -483,6 +544,7 @@ def promote_to_runtime_weights(
         "input_size": args.input_size,
         "best_synthetic_val_accuracy": round(best_synth_val_accuracy, 4),
         "real_eval_metrics": real_eval_metrics.to_dict(),
+        "probe_config": board_probe_config_from_checkpoint({"probe_config": probe_config}),
         "sources": {
             "synthetic_train_positions": args.synthetic_train_positions,
             "synthetic_val_positions": args.synthetic_val_positions,

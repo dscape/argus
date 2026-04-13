@@ -12,7 +12,12 @@ import torch.nn as nn
 
 from argus.model.vision_encoder import VisionEncoder
 from pipeline.physical.board_data import preprocess_board_image
-from pipeline.physical.board_probe import PhysicalBoardStateProbe, dino_patches_to_square_tokens
+from pipeline.physical.board_probe import (
+    PhysicalBoardStateEnsembleProbe,
+    build_board_state_probe,
+    board_probe_config_from_checkpoint,
+    dino_patches_to_square_tokens,
+)
 from pipeline.physical.square_data import (
     CLASS_NAMES,
     INPUT_SIZE,
@@ -29,6 +34,7 @@ _CLASS_TO_SYMBOL = {index: name for index, name in enumerate(CLASS_NAMES)}
 
 _cached_model: tuple[dict[str, Any], VisionEncoder, nn.Module] | None = None
 _cached_weights_path: Path | None = None
+_cached_device: str | None = None
 
 
 def read_board_observation_from_frame(
@@ -117,7 +123,7 @@ def _predict_board_logits(
     probe.eval()
 
     with torch.no_grad():
-        if architecture == "board_probe":
+        if architecture in {"board_probe", "board_probe_ensemble"}:
             board_tensor = preprocess_board_image(board_crop, size=input_size).unsqueeze(0)
             board_tensor = board_tensor.to(probe_device)
             patch_tokens = encoder.forward_patches(board_tensor)
@@ -137,26 +143,54 @@ def _predict_board_logits(
 
 
 def _get_runtime_model(*, device: str) -> tuple[dict[str, Any], VisionEncoder, nn.Module]:
-    global _cached_model, _cached_weights_path
+    global _cached_model, _cached_weights_path, _cached_device
     weights_path = _resolve_weights_path()
-    if _cached_model is not None and _cached_weights_path == weights_path:
+    if (
+        _cached_model is not None
+        and _cached_weights_path == weights_path
+        and _cached_device == device
+    ):
         return _cached_model
 
     checkpoint = load_probe_checkpoint(weights_path)
     encoder = VisionEncoder(**_encoder_kwargs_from_checkpoint(checkpoint)).to(torch.device(device))
     probe = _build_probe_from_checkpoint(checkpoint, embed_dim=encoder.embed_dim)
-    probe.load_state_dict(checkpoint["state_dict"])
+    if str(checkpoint.get("architecture", "square_probe")) != "board_probe_ensemble":
+        probe.load_state_dict(checkpoint["state_dict"])
     probe.to(torch.device(device))
 
     _cached_model = (checkpoint, encoder, probe)
     _cached_weights_path = weights_path
+    _cached_device = device
     return _cached_model
 
 
 def _build_probe_from_checkpoint(checkpoint: dict[str, Any], *, embed_dim: int) -> nn.Module:
     architecture = str(checkpoint.get("architecture", "square_probe"))
+    if architecture == "board_probe_ensemble":
+        members = checkpoint.get("members")
+        if not isinstance(members, list) or not members:
+            raise ValueError("board_probe_ensemble checkpoint is missing members")
+        weights = checkpoint.get("ensemble_weights")
+        normalized_weights = None
+        if isinstance(weights, list):
+            normalized_weights = [float(weight) for weight in weights]
+        probes: list[nn.Module] = []
+        for member in members:
+            if not isinstance(member, dict):
+                raise ValueError("Invalid board_probe_ensemble member payload")
+            probe = build_board_state_probe(
+                embed_dim,
+                probe_config=board_probe_config_from_checkpoint(member),
+            )
+            probe.load_state_dict(member["state_dict"])
+            probes.append(probe)
+        return PhysicalBoardStateEnsembleProbe(probes, weights=normalized_weights)
     if architecture == "board_probe":
-        return PhysicalBoardStateProbe(embed_dim)
+        return build_board_state_probe(
+            embed_dim,
+            probe_config=board_probe_config_from_checkpoint(checkpoint),
+        )
     return PhysicalSquareLinearProbe(embed_dim)
 
 

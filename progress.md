@@ -191,11 +191,44 @@
   - replay-derived non-held-out real boards are no longer just future infrastructure; after corner refinement they became the best current route to better physical-board transfer
   - the equal-weight ensemble improves both non-empty accuracy and macro F1 over the earlier single-checkpoint runtime candidates
   - but whole-board exact match is still `0.0`, so the reader is still not solved
-- Current assessment after the refined pseudo-real pass:
-  - DINO remains the only credible backbone here; YOLO is still worse on the metrics that matter
-  - improved pseudo-real data + seed sweep + checkpoint averaging produced the strongest current runtime candidate
-  - the physical per-square reader is better than before, and now has committed runtime weights, but it is still not good enough to call solved
-  - the next useful step is likely better per-clip corner refinement / localization or genuinely labeled non-held-out real boards, not another backbone swap
+- Added higher-capacity frozen-feature board heads in `pipeline/physical/board_probe.py`:
+  - `head_type=linear` preserves the original shared linear probe
+  - `head_type=pos_mlp` adds learned square-position embeddings plus an MLP readout
+  - `head_type=transformer` adds learned square-position embeddings plus a shallow contextual transformer over the 64 square tokens
+- Added `--real-loss-weight` plus head-selection flags to `scripts/train_physical_board_probe.py` so pseudo-real boards can matter more during training instead of being diluted by the synthetic set.
+- Key finding from the new head sweep:
+  - the old shared linear readout was itself a real bottleneck, not just the data
+  - keeping the encoder frozen but giving the head explicit square position and mild cross-square context materially improved held-out transfer
+- Best new single-checkpoint run so far:
+  - `outputs/2026-04-12/physical_board_probe_dino_topdown_transformer_real556_rw1_seed3/`
+  - real held-out square accuracy: `0.4710`
+  - real held-out non-empty accuracy: `0.3139`
+  - real held-out macro F1: `0.2298`
+- Weight-space checkpoint averaging was the wrong ensemble mechanism for these newer heads:
+  - averaging transformer checkpoints in parameter space pushed the runtime back toward empty-square-heavy behavior
+  - this motivated a new **logit-space** runtime ensemble format instead of more checkpoint averaging
+- Added runtime support for heterogeneous board-probe logit ensembles:
+  - `scripts/build_physical_board_probe_ensemble.py --mode logit_average`
+  - `pipeline/physical/square_classifier.py` now loads `board_probe_ensemble` checkpoints and averages member logits at inference time
+- Current committed runtime is now a weighted logit ensemble of:
+  - transformer head: `outputs/2026-04-12/physical_board_probe_dino_topdown_transformer_real556_rw1_seed3/board_probe.pt`
+  - positional MLP head: `outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real556_rw4_seed0/board_probe.pt`
+  - ensemble weights: `1:2`
+  - runtime artifact: `weights/physical/v4r1.pt`
+- End-to-end runtime eval for the promoted logit ensemble:
+  - `outputs/2026-04-12/physical_runtime_eval_v4.json`
+  - evaluated boards: `844`
+  - missing predictions: `0`
+  - square accuracy: `0.4230`
+  - non-empty accuracy: `0.3313`
+  - macro F1: `0.2484`
+  - board exact match: `0.0`
+- Current assessment after the contextual-head + logit-ensemble pass:
+  - DINO still remains the only credible backbone here; the gains came from a better frozen-feature readout, not a backbone swap
+  - the biggest new insight is that the board head architecture matters: a shared linear readout was leaving useful board context on the table
+  - logit-space ensembling beats parameter averaging for these mixed head families and is now the best committed physical runtime path
+  - the physical per-square reader is materially better than before, but it is still not good enough to call solved
+  - the next useful step is still likely better in-domain real supervision or better physical localization / corner quality, because board exact match remains `0.0`
 
 ### Validation
 - Passed: `make typecheck`
