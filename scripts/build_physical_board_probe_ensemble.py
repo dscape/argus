@@ -18,7 +18,7 @@ from pipeline.physical.square_probe import load_probe_checkpoint
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
-_MODEL_CODE_VERSION = "v6"
+_MODEL_CODE_VERSION = "v7"
 
 
 def main() -> None:
@@ -223,7 +223,12 @@ def promote_to_runtime_weights(checkpoint_path: Path, payload: dict[str, Any]) -
         "ensemble_mode": payload["metadata"].get("ensemble_mode"),
         "ensemble_members": payload["metadata"].get("ensemble_members", []),
         "ensemble_weights": payload["metadata"].get("ensemble_weights", []),
-        "recommended_temporal_ema_alpha": 0.05,
+        "recommended_temporal_smoothing": {
+            "mode": "adaptive_ema",
+            "low_alpha": 0.02,
+            "high_alpha": 0.12,
+            "change_threshold": 8,
+        },
         "runtime_format": "pytorch",
         "runtime_constraints": "back_rank_pawns_and_exactly_one_king_per_color",
     }

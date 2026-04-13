@@ -26,6 +26,7 @@ from pipeline.physical.square_data import (
 )
 from pipeline.physical.square_probe import PhysicalSquareLinearProbe, load_probe_checkpoint
 from pipeline.shared import (
+    AdaptiveBoardLogitsExponentialSmoother,
     BoardLogitsExponentialSmoother,
     BoardObservation,
     constrained_board_class_ids,
@@ -34,7 +35,9 @@ from pipeline.shared import (
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
 _DEFAULT_WEIGHTS_PATH = WEIGHTS_DIR / "best.pt"
-_DEFAULT_TEMPORAL_EMA_ALPHA = 0.05
+_DEFAULT_TEMPORAL_LOW_ALPHA = 0.02
+_DEFAULT_TEMPORAL_HIGH_ALPHA = 0.12
+_DEFAULT_TEMPORAL_CHANGE_THRESHOLD = 8
 _CLASS_TO_SYMBOL = {index: name for index, name in enumerate(CLASS_NAMES)}
 
 _cached_model: tuple[dict[str, Any], VisionEncoder, nn.Module] | None = None
@@ -88,12 +91,7 @@ class PhysicalBoardSequenceReader:
         ema_alpha: float | None = None,
     ) -> None:
         self.device = device
-        resolved_ema_alpha = _resolve_temporal_ema_alpha(ema_alpha)
-        self._smoother = (
-            None
-            if resolved_ema_alpha is None or resolved_ema_alpha <= 0.0
-            else BoardLogitsExponentialSmoother(alpha=resolved_ema_alpha)
-        )
+        self._smoother = _build_temporal_smoother(ema_alpha=ema_alpha)
 
     def reset(self) -> None:
         if self._smoother is not None:
@@ -133,15 +131,52 @@ class PhysicalBoardSequenceReader:
         return None if observation is None else observation.fen
 
 
-def _resolve_temporal_ema_alpha(ema_alpha: float | None) -> float | None:
+def _build_temporal_smoother(
+    *,
+    ema_alpha: float | None,
+) -> BoardLogitsExponentialSmoother | AdaptiveBoardLogitsExponentialSmoother | None:
     if ema_alpha is not None:
-        return ema_alpha
+        if ema_alpha <= 0.0:
+            return None
+        return BoardLogitsExponentialSmoother(alpha=ema_alpha)
+
     metadata = load_metadata()
     if metadata is not None:
+        smoothing_config = metadata.get("recommended_temporal_smoothing")
+        if isinstance(smoothing_config, dict):
+            mode = str(smoothing_config.get("mode", "adaptive_ema"))
+            if mode == "off":
+                return None
+            if mode == "fixed_ema":
+                return BoardLogitsExponentialSmoother(
+                    alpha=float(smoothing_config.get("alpha", _DEFAULT_TEMPORAL_LOW_ALPHA))
+                )
+            if mode == "adaptive_ema":
+                return AdaptiveBoardLogitsExponentialSmoother(
+                    low_alpha=float(
+                        smoothing_config.get("low_alpha", _DEFAULT_TEMPORAL_LOW_ALPHA)
+                    ),
+                    high_alpha=float(
+                        smoothing_config.get("high_alpha", _DEFAULT_TEMPORAL_HIGH_ALPHA)
+                    ),
+                    high_alpha_change_threshold=int(
+                        smoothing_config.get(
+                            "change_threshold",
+                            _DEFAULT_TEMPORAL_CHANGE_THRESHOLD,
+                        )
+                    ),
+                )
+            raise ValueError(f"Unsupported temporal smoothing mode: {mode}")
+
         recommended_alpha = metadata.get("recommended_temporal_ema_alpha")
         if recommended_alpha is not None:
-            return float(recommended_alpha)
-    return _DEFAULT_TEMPORAL_EMA_ALPHA
+            return BoardLogitsExponentialSmoother(alpha=float(recommended_alpha))
+
+    return AdaptiveBoardLogitsExponentialSmoother(
+        low_alpha=_DEFAULT_TEMPORAL_LOW_ALPHA,
+        high_alpha=_DEFAULT_TEMPORAL_HIGH_ALPHA,
+        high_alpha_change_threshold=_DEFAULT_TEMPORAL_CHANGE_THRESHOLD,
+    )
 
 
 def _class_ids_to_board_fen(class_ids: list[int]) -> str:

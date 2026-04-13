@@ -149,35 +149,39 @@ Current snapshot on this branch:
     - macro F1: `0.2980`
 - Weight-space checkpoint averaging is still the wrong way to ensemble these newer heads because it drifts back toward empty-heavy behavior.
 - The current committed runtime candidate is therefore still a **logit-space** ensemble under `weights/physical/`, but it has now changed shape again after adding pseudo-real source-video validation for checkpoint selection, a lightweight shared runtime postprocess, and clip-ordered runtime selection:
-  - code version: `v6`
+  - code version: `v7`
   - stateless-crop reference artifact: `weights/physical/v6r2.pt`
-  - deployed runtime artifact: `weights/physical/v6r3.pt`
+  - deployed runtime artifact: `weights/physical/v7r4.pt`
   - shared DINO layers: `8,10,11`
   - deployed runtime members:
     - `physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_layers8_10_11_rw4_seed0`
     - `physical_board_probe_dino_topdown_posmlp512_real658_fixed_layers8_10_11_rw4_seed0`
     - `physical_board_probe_dino_topdown_transformer_real658_fixed_layers8_10_11_seed0`
-  - deployed ensemble weights: `40,5,1`
+  - deployed ensemble weights: `21,7,1`
   - runtime postprocess:
     - back-rank pawns are reassigned to the best non-pawn class
     - each color is forced to have **exactly one** king by removing duplicate kings and inserting a king only when one is missing
-  - runtime metadata now also records the recommended temporal smoothing constant for the stateful reader
+  - runtime metadata now also records the recommended adaptive temporal smoothing config for the stateful reader
 - Relative to `v5r2`, the best committed physical reader path is clearly better on the diagnostics that actually matter for physical board reading (`non-empty` and `macro-F1`) even though board exact match is still `0.0`.
 - A quick temporal-stability diagnostic on the held-out physical clips showed that the current reader is flickering far more than the real boards (`13.45%` predicted square-flip rate vs `0.25%` ground truth), so lightweight sequence smoothing is now justified rather than speculative.
-- The repo therefore now also has a minimal temporal baseline on top of the same runtime weights:
+- The repo therefore now also has a stronger temporal baseline on top of the same runtime weights:
   - shared helper: `pipeline/shared/board_smoothing.py`
   - stateful runtime reader: `pipeline.physical.square_classifier.PhysicalBoardSequenceReader`
-  - hybrid full-frame runtime now keeps a causal EMA over physical board logits across consecutive physical frames
-  - recommended temporal EMA alpha from runtime metadata: `0.05`
-  - current best deployed clip-ordered eval: `outputs/2026-04-13/physical_runtime_eval_v14_temporal_ema005_sequence_ensemble.json`
-    - square accuracy: `0.5137`
-    - non-empty accuracy: `0.4615`
-    - macro F1: `0.3649`
+  - hybrid full-frame runtime now keeps an **adaptive** EMA over physical board logits across consecutive physical frames
+  - current recommended temporal config from runtime metadata:
+    - mode: `adaptive_ema`
+    - low alpha: `0.02`
+    - high alpha: `0.12`
+    - change threshold: `8`
+  - current best deployed clip-ordered eval: `outputs/2026-04-13/physical_runtime_eval_v22_temporal_adaptive_v7r4.json`
+    - square accuracy: `0.5259`
+    - non-empty accuracy: `0.4667`
+    - macro F1: `0.3700`
   - current best stateless single-frame eval remains `v6r2`: `outputs/2026-04-13/physical_runtime_eval_v11_exact_kings_runtime.json`
     - square accuracy: `0.5115`
     - non-empty accuracy: `0.4427`
     - macro F1: `0.3433`
-  - a quick greedy legal-move candidate filter did not beat plain EMA, and naive pseudo-real agreement filtering regressed badly, so neither was kept
+  - a quick greedy legal-move candidate filter did not beat smoothing, and naive pseudo-real agreement filtering regressed badly, so neither was kept
 - The repo now also has two pieces of infrastructure for the next data-centric step:
   - manual non-held-out physical board labels can be collected under `data/physical/train_manual/`
   - pseudo-real source-video holdouts can be used during training for checkpoint selection via `scripts/train_physical_board_probe.py --real-val-source-videos ... --selection-metric auto`

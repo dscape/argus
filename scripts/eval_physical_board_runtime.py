@@ -28,6 +28,12 @@ _CLASS_NAME_TO_INDEX = {name: index for index, name in enumerate(SQUARE_CLASS_NA
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate physical runtime reader")
     parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument(
+        "--temporal-mode",
+        type=str,
+        choices=["off", "fixed", "metadata"],
+        default="off",
+    )
     parser.add_argument("--temporal-ema-alpha", type=float, default=0.0)
     parser.add_argument("--output", type=Path, default=_DEFAULT_OUTPUT_PATH)
     args = parser.parse_args()
@@ -43,11 +49,15 @@ def main() -> None:
     )
     sequence_reader = None
     current_clip_key = None
-    if args.temporal_ema_alpha > 0.0:
+    if args.temporal_mode == "fixed":
+        if args.temporal_ema_alpha <= 0.0:
+            raise ValueError("--temporal-ema-alpha must be > 0 when --temporal-mode=fixed")
         sequence_reader = PhysicalBoardSequenceReader(
             device=args.device,
             ema_alpha=args.temporal_ema_alpha,
         )
+    elif args.temporal_mode == "metadata":
+        sequence_reader = PhysicalBoardSequenceReader(device=args.device)
 
     board_annotation_ids: list[str] = []
     predicted_labels: list[int] = []
@@ -95,6 +105,7 @@ def main() -> None:
     report = {
         "missing_predictions": missing_predictions,
         "evaluated_boards": len(predicted_labels) // 64,
+        "temporal_mode": args.temporal_mode,
         "temporal_ema_alpha": args.temporal_ema_alpha,
         "metrics": metrics.to_dict(),
     }

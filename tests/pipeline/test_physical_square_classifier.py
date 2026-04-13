@@ -109,21 +109,31 @@ def test_read_board_observation_from_frame_applies_constraints(monkeypatch) -> N
     assert observation.fen.split("/")[-1] == "4K3"
 
 
-def test_physical_board_sequence_reader_uses_runtime_default_temporal_alpha(
+def test_physical_board_sequence_reader_uses_runtime_default_temporal_smoothing(
     monkeypatch,
 ) -> None:
     import pipeline.physical.square_classifier as square_classifier
+    from pipeline.shared.board_smoothing import AdaptiveBoardLogitsExponentialSmoother
 
     monkeypatch.setattr(
         square_classifier,
         "load_metadata",
-        lambda: {"recommended_temporal_ema_alpha": 0.05},
+        lambda: {
+            "recommended_temporal_smoothing": {
+                "mode": "adaptive_ema",
+                "low_alpha": 0.02,
+                "high_alpha": 0.12,
+                "change_threshold": 8,
+            }
+        },
     )
 
     reader = PhysicalBoardSequenceReader(device="cpu")
 
-    assert reader._smoother is not None
-    assert reader._smoother.alpha == 0.05
+    assert isinstance(reader._smoother, AdaptiveBoardLogitsExponentialSmoother)
+    assert reader._smoother.low_alpha == 0.02
+    assert reader._smoother.high_alpha == 0.12
+    assert reader._smoother.high_alpha_change_threshold == 8
 
 
 def test_physical_board_sequence_reader_smooths_logits_across_frames(monkeypatch) -> None:

@@ -49,7 +49,7 @@ _DEFAULT_OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "physical_board_probe"
 _DEFAULT_WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
 _DEFAULT_DINO_MODEL = "facebook/dinov2-base"
 _DEFAULT_YOLO_MODEL = "weights/yolo_base/yolo11n.pt"
-_MODEL_CODE_VERSION = "v6"
+_MODEL_CODE_VERSION = "v7"
 _IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406), dtype=torch.float32).view(3, 1, 1)
 _IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225), dtype=torch.float32).view(3, 1, 1)
 
@@ -896,7 +896,12 @@ def promote_to_runtime_weights(
             "manual_train_positions": manual_train_positions,
             "held_out_eval_size": held_out_eval_size,
         },
-        "recommended_temporal_ema_alpha": 0.05,
+        "recommended_temporal_smoothing": {
+            "mode": "adaptive_ema",
+            "low_alpha": 0.02,
+            "high_alpha": 0.12,
+            "change_threshold": 8,
+        },
         "runtime_format": "pytorch",
         "architecture": "board_probe",
         "runtime_constraints": "back_rank_pawns_and_exactly_one_king_per_color",
