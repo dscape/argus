@@ -1460,6 +1460,47 @@ export async function inspectAutoCalibration(
   return res.json();
 }
 
+// ── Physical runtime evaluation ────────────────────────────
+
+export interface PhysicalRuntimeVisualizationFrame {
+  annotation_id: string;
+  board_path: string;
+  frame_index: number;
+  gt_change_count: number | null;
+  stateless_change_count: number | null;
+  stateless_error_count: number;
+  stateless_mean_confidence: number;
+  temporal_change_count: number | null;
+  temporal_error_count: number;
+  temporal_mean_confidence: number;
+  image_b64: string;
+}
+
+export interface PhysicalRuntimeVisualizationResponse {
+  clip_path: string;
+  frame_start: number;
+  frame_count: number;
+  available_frame_count: number;
+  contact_sheet_b64: string;
+  frames: PhysicalRuntimeVisualizationFrame[];
+}
+
+export async function renderPhysicalRuntimeVisualization(body: {
+  clip_path?: string | null;
+  frame_start: number;
+  frame_count: number;
+  panel_size?: number;
+  device?: string;
+}): Promise<PhysicalRuntimeVisualizationResponse> {
+  const res = await fetch("/api/evaluate/physical-runtime/render", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ── Physical eval-set annotation ───────────────────────────
 
 export interface PhysicalEvalClip {

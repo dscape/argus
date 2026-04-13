@@ -69,7 +69,11 @@ async def get_model_versions():
     import json
     import os
 
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    root = os.path.dirname(
+        os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+    )
     root = os.path.dirname(root)  # project root
 
     models = {
@@ -77,6 +81,7 @@ async def get_model_versions():
         "overlay": os.path.join(root, "weights", "overlay", "metadata.json"),
         "overlay_yolo": os.path.join(root, "weights", "overlay_yolo", "metadata.json"),
         "otb_yolo": os.path.join(root, "weights", "otb_yolo", "metadata.json"),
+        "physical": os.path.join(root, "weights", "physical", "metadata.json"),
     }
     versions: dict[str, str | None] = {}
     for name, path in models.items():
@@ -98,7 +103,11 @@ async def get_model_versions():
 async def sample_labeled_videos(limit: int = 20, exclude: str | None = None):
     """Return random sample of labeled video IDs for progressive inspection."""
     exclude_list = exclude.split(",") if exclude else None
-    video_ids = await run_in_threadpool(models_service.sample_labeled_video_ids, limit, exclude_list)
+    video_ids = await run_in_threadpool(
+        models_service.sample_labeled_video_ids,
+        limit,
+        exclude_list,
+    )
     return {"video_ids": video_ids}
 
 

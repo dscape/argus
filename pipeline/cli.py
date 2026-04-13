@@ -210,6 +210,25 @@ def cmd_physical_split_clips(args):
     print(f"  Manifest:            {args.out_dir}/manifest.json")
 
 
+def cmd_physical_visualize_runtime(args):
+    """Render a frame-by-frame visualization of the physical runtime reader."""
+    from pipeline.physical.runtime_visualization import visualize_runtime_sequence
+
+    summary = visualize_runtime_sequence(
+        clip_path=args.clip_path,
+        frame_start=args.frame_start,
+        frame_count=args.frame_count,
+        device=args.device,
+        output_dir=args.output_dir,
+        panel_size=args.panel_size,
+    )
+    print(f"Rendered runtime visualization for {summary['clip_path']}")
+    end_frame = summary["frame_start"] + summary["frame_count"] - 1
+    print(f"  Frames:        {summary['frame_start']}..{end_frame}")
+    print(f"  Contact sheet: {summary['contact_sheet']}")
+    print(f"  Summary:       {args.output_dir}/summary.json")
+
+
 def _resolve_project_path(path: str):
     from pathlib import Path
 
@@ -1559,6 +1578,48 @@ def main():
         help="Copy files instead of hard-linking them",
     )
 
+    # physical-visualize-runtime
+    p = subparsers.add_parser(
+        "physical-visualize-runtime",
+        help="Render a frame-by-frame visualization of the physical runtime reader",
+    )
+    p.add_argument(
+        "--clip-path",
+        type=str,
+        default=None,
+        help="Annotated eval clip path; defaults to the longest held-out clip",
+    )
+    p.add_argument(
+        "--frame-start",
+        type=int,
+        default=0,
+        help="First frame index to render within the selected clip",
+    )
+    p.add_argument(
+        "--frame-count",
+        type=int,
+        default=8,
+        help="Number of consecutive frames to render",
+    )
+    p.add_argument(
+        "--panel-size",
+        type=int,
+        default=240,
+        help="Panel size for each board view in the contact sheet",
+    )
+    p.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Torch device to run the runtime reader on",
+    )
+    p.add_argument(
+        "--output-dir",
+        type=str,
+        default="outputs/physical_runtime_visualization",
+        help="Output directory for the rendered contact sheet and per-frame panels",
+    )
+
     # real-data-overview
     p = subparsers.add_parser(
         "real-data-overview",
@@ -2126,6 +2187,7 @@ def main():
         "generate-clips": cmd_generate_clips,
         "split-clips": cmd_split_clips,
         "physical-split-clips": cmd_physical_split_clips,
+        "physical-visualize-runtime": cmd_physical_visualize_runtime,
         "real-data-overview": cmd_real_data_overview,
         "real-data-process": cmd_real_data_process,
         "real-data-audit": cmd_real_data_audit,

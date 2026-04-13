@@ -7,11 +7,6 @@ for the developer tools web UI.
 import logging
 
 from fastapi import FastAPI
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)s:%(name)s:%(message)s",
-)
 from fastapi.middleware.cors import CORSMiddleware
 from pipeline.db.connection import migrate
 
@@ -23,8 +18,13 @@ from api.routers.annotate import (
     video_session,
 )
 from api.routers.data import clips, real, synthetic
-from api.routers.evaluate import models, overlay
+from api.routers.evaluate import models, overlay, physical_runtime
 from api.routers.videos import crawl
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s:%(name)s:%(message)s",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,11 @@ app.include_router(synthetic.router, prefix="/api/synthetic", tags=["synthetic"]
 app.include_router(real.router, prefix="/api/real-data", tags=["real-data"])
 app.include_router(crawl.router, prefix="/api/crawl", tags=["crawl"])
 app.include_router(models.router, prefix="/api/models", tags=["models"])
+app.include_router(
+    physical_runtime.router,
+    prefix="/api/evaluate/physical-runtime",
+    tags=["physical-runtime"],
+)
 
 
 @app.get("/api/health")
