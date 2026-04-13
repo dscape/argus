@@ -52,6 +52,7 @@ class PhysicalRealBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         frame_stride: int = 4,
         max_frames: int | None = None,
         seed: int = 42,
+        exclude_move_neighborhood: int = -1,
     ) -> None:
         self.clips_dir = Path(clips_dir)
         self.eval_root = Path(eval_root)
@@ -62,6 +63,7 @@ class PhysicalRealBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
             frame_stride=frame_stride,
             max_frames=max_frames,
             seed=seed,
+            exclude_move_neighborhood=exclude_move_neighborhood,
         )
         self._clip_cache: dict[Path, dict[str, Any]] = {}
 
@@ -105,9 +107,14 @@ def load_real_board_rows(
     max_frames: int | None = None,
     seed: int = 42,
     refine_corners: bool = True,
+    exclude_move_neighborhood: int = -1,
 ) -> list[PhysicalRealBoardRow]:
     if frame_stride <= 0:
         raise ValueError(f"frame_stride must be > 0, got {frame_stride}")
+    if exclude_move_neighborhood < -1:
+        raise ValueError(
+            f"exclude_move_neighborhood must be >= -1, got {exclude_move_neighborhood}"
+        )
 
     clip_dir_path = Path(clips_dir)
     if not clip_dir_path.is_absolute():
@@ -135,11 +142,16 @@ def load_real_board_rows(
             corners = _refine_clip_corners(clip, corners)
 
         fens = replay_clip_display_fens(clip)
-        move_frame_indices = set(_int_list(clip.get("move_frame_indices")))
+        move_sample_indices = replay_clip_move_sample_indices(clip)
+        excluded_sample_indices = build_excluded_move_neighborhood(
+            move_sample_indices,
+            total_frames=len(fens),
+            neighborhood=exclude_move_neighborhood,
+        )
         for frame_index, fen in enumerate(fens):
-            if fen is None:
+            if fen is None or frame_index in excluded_sample_indices:
                 continue
-            if frame_index % frame_stride != 0 and frame_index not in move_frame_indices:
+            if frame_index % frame_stride != 0 and frame_index not in move_sample_indices:
                 continue
             labels = tuple(int(value) for value in fen_to_square_targets(fen).tolist())
             rows.append(
@@ -223,15 +235,23 @@ def replay_clip_display_fens(clip: dict[str, Any]) -> list[str | None]:
     if len(move_ucis) != len(move_frame_indices):
         return [None] * int(frames.shape[0])
 
-    board = _build_replay_board(initial_board_fen, move_ucis[0] if move_ucis else None)
-    moves_by_frame: dict[int, list[str]] = {}
-    for frame_index, move_uci in zip(move_frame_indices, move_ucis):
-        moves_by_frame.setdefault(frame_index, []).append(move_uci)
+    sampled_frame_indices = sampled_clip_frame_indices(clip)
+    if len(sampled_frame_indices) != int(frames.shape[0]):
+        return [None] * int(frames.shape[0])
 
+    moves_by_sample_index: dict[int, list[str]] = {}
+    frame_to_sample_index = {frame_index: index for index, frame_index in enumerate(sampled_frame_indices)}
+    for frame_index, move_uci in zip(move_frame_indices, move_ucis):
+        sample_index = frame_to_sample_index.get(frame_index)
+        if sample_index is None:
+            return [None] * int(frames.shape[0])
+        moves_by_sample_index.setdefault(sample_index, []).append(move_uci)
+
+    board = _build_replay_board(initial_board_fen, move_ucis[0] if move_ucis else None)
     frame_fens: list[str | None] = []
     total_frames = int(frames.shape[0])
-    for frame_index in range(total_frames):
-        moves = moves_by_frame.get(frame_index)
+    for sample_index in range(total_frames):
+        moves = moves_by_sample_index.get(sample_index)
         if moves is None:
             frame_fens.append(board.fen())
             continue
@@ -240,7 +260,7 @@ def replay_clip_display_fens(clip: dict[str, Any]) -> list[str | None]:
             for move_uci in moves:
                 move = chess.Move.from_uci(move_uci)
                 if move not in board.legal_moves:
-                    raise ValueError(f"Illegal move at frame {frame_index}: {move_uci}")
+                    raise ValueError(f"Illegal move at frame {sample_index}: {move_uci}")
                 board.push(move)
         except ValueError:
             frame_fens.append(None)
@@ -248,6 +268,47 @@ def replay_clip_display_fens(clip: dict[str, Any]) -> list[str | None]:
         frame_fens.append(board.fen())
 
     return frame_fens
+
+
+
+def replay_clip_move_sample_indices(clip: dict[str, Any]) -> set[int]:
+    sampled_frame_indices = sampled_clip_frame_indices(clip)
+    move_frame_indices = set(_int_list(clip.get("move_frame_indices")))
+    return {
+        sample_index
+        for sample_index, frame_index in enumerate(sampled_frame_indices)
+        if frame_index in move_frame_indices
+    }
+
+
+
+def build_excluded_move_neighborhood(
+    move_sample_indices: set[int],
+    *,
+    total_frames: int,
+    neighborhood: int,
+) -> set[int]:
+    if neighborhood < 0:
+        return set()
+
+    excluded: set[int] = set()
+    for move_sample_index in move_sample_indices:
+        for offset in range(-neighborhood, neighborhood + 1):
+            sample_index = move_sample_index + offset
+            if 0 <= sample_index < total_frames:
+                excluded.add(sample_index)
+    return excluded
+
+
+
+def sampled_clip_frame_indices(clip: dict[str, Any]) -> list[int]:
+    frames = clip.get("frames")
+    if not isinstance(frames, torch.Tensor):
+        return []
+    sampled_frame_indices = _int_list(clip.get("frame_indices"))
+    if len(sampled_frame_indices) == int(frames.shape[0]):
+        return sampled_frame_indices
+    return list(range(int(frames.shape[0])))
 
 
 

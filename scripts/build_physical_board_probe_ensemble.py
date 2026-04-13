@@ -18,7 +18,7 @@ from pipeline.physical.square_probe import load_probe_checkpoint
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
-_MODEL_CODE_VERSION = "v4"
+_MODEL_CODE_VERSION = "v5"
 
 
 def main() -> None:
@@ -213,6 +213,9 @@ def promote_to_runtime_weights(checkpoint_path: Path, payload: dict[str, Any]) -
         "input_size": payload["input_size"],
         "num_classes": payload["num_classes"],
         "architecture": payload["architecture"],
+        "encoder_type": payload["metadata"].get("encoder_type"),
+        "feature_layer_indices": payload["metadata"].get("feature_layer_indices"),
+        "output_grid_size": payload["metadata"].get("output_grid_size"),
         "probe_config": payload.get("probe_config"),
         "member_probe_configs": [
             member.get("probe_config") for member in payload.get("members", [])

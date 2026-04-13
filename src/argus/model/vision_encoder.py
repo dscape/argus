@@ -45,6 +45,7 @@ class Dinov2Backbone(nn.Module):
         model_name: str = "facebook/dinov2-base",
         frozen: bool = True,
         embed_dim: int | None = None,
+        feature_layer_indices: Sequence[int] | None = None,
     ) -> None:
         super().__init__()
         resolved = _resolve_dino_model_path(model_name)
@@ -54,6 +55,15 @@ class Dinov2Backbone(nn.Module):
             self.model = Dinov2Model.from_pretrained(model_name)
 
         hidden_size = int(self.model.config.hidden_size)
+        raw_feature_layers = feature_layer_indices or ()
+        self.feature_layer_indices = tuple(int(idx) for idx in raw_feature_layers)
+        num_hidden_layers = int(self.model.config.num_hidden_layers)
+        for layer_index in self.feature_layer_indices:
+            if layer_index < 0 or layer_index >= num_hidden_layers:
+                raise ValueError(
+                    "Invalid DINO feature layer index"
+                    f" {layer_index}; expected 0 <= idx < {num_hidden_layers}"
+                )
         if embed_dim is not None and embed_dim != hidden_size:
             raise ValueError(
                 f"Requested DINO embed_dim={embed_dim}, but model outputs {hidden_size}"
@@ -79,8 +89,19 @@ class Dinov2Backbone(nn.Module):
             param.requires_grad = True
 
     def forward_patches(self, x: torch.Tensor) -> torch.Tensor:
-        outputs = self.model(pixel_values=x)
-        result: torch.Tensor = outputs.last_hidden_state
+        if not self.feature_layer_indices:
+            outputs = self.model(pixel_values=x)
+            result: torch.Tensor = outputs.last_hidden_state
+            return result
+
+        outputs = self.model(pixel_values=x, output_hidden_states=True)
+        hidden_states = outputs.hidden_states
+        if hidden_states is None:
+            raise RuntimeError("DINO encoder did not return hidden states")
+        selected_states = [
+            hidden_states[layer_index + 1] for layer_index in self.feature_layer_indices
+        ]
+        result = torch.stack(selected_states, dim=0).mean(dim=0)
         return result
 
     def forward_pooled(self, x: torch.Tensor) -> torch.Tensor:
@@ -248,6 +269,7 @@ class VisionEncoder(nn.Module):
                 model_name=model_name,
                 frozen=frozen,
                 embed_dim=embed_dim,
+                feature_layer_indices=feature_layer_indices,
             )
         elif normalized_type == "yolo":
             self.backend = YoloBackbone(

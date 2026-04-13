@@ -72,6 +72,20 @@ def test_yolo_vision_encoder_returns_square_token_grid() -> None:
     assert tokens.shape == (1, 14 * 14, 448)
 
 
+def test_dino_vision_encoder_supports_feature_layer_averaging() -> None:
+    encoder = VisionEncoder(
+        encoder_type="dinov2",
+        model_name="facebook/dinov2-small",
+        frozen=True,
+        feature_layer_indices=[8, 10, 11],
+    )
+
+    frames = torch.zeros(1, 3, 224, 224, dtype=torch.float32)
+    tokens = encoder.forward_patches(frames)
+
+    assert tokens.shape == (1, 257, 384)
+
+
 def test_patch_pooling_head_mean_matches_manual_mean() -> None:
     tokens = torch.arange(2 * 17 * 4, dtype=torch.float32).reshape(2, 17, 4)
     head = PatchPoolingHead(embed_dim=4, pooling_type="mean")

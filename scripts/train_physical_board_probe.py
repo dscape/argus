@@ -44,7 +44,7 @@ _DEFAULT_OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "physical_board_probe"
 _DEFAULT_WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
 _DEFAULT_DINO_MODEL = "facebook/dinov2-base"
 _DEFAULT_YOLO_MODEL = "weights/yolo_base/yolo11n.pt"
-_MODEL_CODE_VERSION = "v4"
+_MODEL_CODE_VERSION = "v5"
 _IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406), dtype=torch.float32).view(3, 1, 1)
 _IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225), dtype=torch.float32).view(3, 1, 1)
 
@@ -100,6 +100,7 @@ def main() -> None:
             frame_stride=args.real_train_frame_stride,
             max_frames=args.real_train_max_frames,
             seed=args.seed,
+            exclude_move_neighborhood=args.real_train_exclude_move_neighborhood,
         )
         if len(real_train_dataset) > 0:
             train_dataset = ConcatDataset([synthetic_train_dataset, real_train_dataset])
@@ -207,6 +208,7 @@ def main() -> None:
             "synthetic_min_ply": args.synthetic_min_ply,
             "augment": args.augment,
             "class_weighting": args.class_weighting,
+            "real_train_exclude_move_neighborhood": args.real_train_exclude_move_neighborhood,
             "real_loss_weight": args.real_loss_weight,
             "head_type": args.head_type,
             "hidden_dim": args.hidden_dim,
@@ -245,6 +247,7 @@ def main() -> None:
         "synthetic_min_moves": args.synthetic_min_moves,
         "synthetic_max_moves": args.synthetic_max_moves,
         "synthetic_min_ply": args.synthetic_min_ply,
+        "real_train_exclude_move_neighborhood": args.real_train_exclude_move_neighborhood,
         "real_eval_positions": len(eval_dataset),
         "train_label_histogram": class_histogram(train_labels.reshape(-1)),
         "synthetic_val_label_histogram": class_histogram(val_labels.reshape(-1)),
@@ -271,6 +274,7 @@ def main() -> None:
         f"- real loss weight: `{args.real_loss_weight}`",
         f"- train augmentation: `{args.augment}`",
         f"- class weighting: `{args.class_weighting}`",
+        f"- real move exclusion: `{args.real_train_exclude_move_neighborhood}`",
         f"- synthetic train positions: `{args.synthetic_train_positions}`",
         f"- real train positions: `{0 if real_train_dataset is None else len(real_train_dataset)}`",
         f"- synthetic val positions: `{args.synthetic_val_positions}`",
@@ -316,6 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="dinov2",
     )
     parser.add_argument("--model-name", type=str, default=None)
+    parser.add_argument("--dino-feature-layer-indices", type=str, default="")
     parser.add_argument("--yolo-feature-layer-indices", type=str, default="16,19,22")
     parser.add_argument("--yolo-output-grid-size", type=int, default=16)
     parser.add_argument("--input-size", type=int, default=DEFAULT_INPUT_SIZE)
@@ -346,6 +351,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--real-train-clips-dir", type=Path, default=Path("data/argus/train_real"))
     parser.add_argument("--real-train-max-frames", type=int, default=0)
     parser.add_argument("--real-train-frame-stride", type=int, default=4)
+    parser.add_argument("--real-train-exclude-move-neighborhood", type=int, default=-1)
     parser.add_argument("--real-loss-weight", type=float, default=1.0)
     parser.add_argument("--synthetic-min-moves", type=int, default=12)
     parser.add_argument("--synthetic-max-moves", type=int, default=80)
@@ -381,6 +387,10 @@ def build_encoder_kwargs(args: argparse.Namespace) -> dict[str, object]:
         "frozen": True,
         "encoder_type": args.encoder_type,
     }
+    if args.encoder_type == "dinov2" and args.dino_feature_layer_indices.strip():
+        encoder_kwargs["feature_layer_indices"] = parse_feature_layer_indices(
+            args.dino_feature_layer_indices
+        )
     if args.encoder_type == "yolo":
         encoder_kwargs["feature_layer_indices"] = parse_feature_layer_indices(
             args.yolo_feature_layer_indices

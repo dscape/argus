@@ -28,6 +28,7 @@ def main() -> None:
     parser.add_argument("--clips-dir", type=Path, default=Path("data/argus/train_real"))
     parser.add_argument("--eval-root", type=Path, default=Path("data/physical/eval"))
     parser.add_argument("--frame-stride", type=int, default=4)
+    parser.add_argument("--exclude-move-neighborhood", type=int, default=-1)
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--output-size", type=int, default=DEFAULT_BOARD_SIZE)
     parser.add_argument("--output-dir", type=Path, default=None)
@@ -42,6 +43,7 @@ def main() -> None:
         eval_root=args.eval_root,
         frame_stride=args.frame_stride,
         max_frames=(None if args.max_frames <= 0 else args.max_frames),
+        exclude_move_neighborhood=args.exclude_move_neighborhood,
     )
 
     manifest_rows: list[dict[str, Any]] = []
@@ -70,6 +72,7 @@ def main() -> None:
     summary = {
         "row_count": len(manifest_rows),
         "frame_stride": args.frame_stride,
+        "exclude_move_neighborhood": args.exclude_move_neighborhood,
         "output_size": args.output_size,
         "source_video_counts": dict(Counter(row["source_video_id"] for row in manifest_rows)),
         "source_channel_counts": dict(

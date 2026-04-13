@@ -1,20 +1,30 @@
 {
   "architecture": "board_probe_ensemble",
-  "code_version": "v4",
+  "code_version": "v5",
+  "encoder_type": "dinov2",
   "ensemble_members": [
-    "outputs/2026-04-12/physical_board_probe_dino_topdown_transformer_real556_rw1_seed3/board_probe.pt",
-    "outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real556_rw4_seed0/board_probe.pt"
+    "outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real658_fixed_layers8_10_11_rw4_seed0/board_probe.pt",
+    "outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real658_fixed_layers8_10_11_rw4_seed3/board_probe.pt",
+    "outputs/2026-04-12/physical_board_probe_dino_topdown_transformer_real658_fixed_layers8_10_11_seed3/board_probe.pt",
+    "outputs/2026-04-12/physical_board_probe_dino_topdown_transformer_real658_fixed_layers8_10_11_seed0/board_probe.pt"
   ],
   "ensemble_mode": "logit_average",
   "ensemble_weights": [
-    0.3333333333333333,
-    0.6666666666666666
+    0.43478260869565216,
+    0.43478260869565216,
+    0.021739130434782608,
+    0.10869565217391304
+  ],
+  "feature_layer_indices": [
+    8,
+    10,
+    11
   ],
   "input_size": 224,
   "member_probe_configs": [
     {
       "dropout": 0.1,
-      "head_type": "transformer",
+      "head_type": "pos_mlp",
       "hidden_dim": 512,
       "transformer_ff_dim": 1024,
       "transformer_heads": 8,
@@ -27,12 +37,29 @@
       "transformer_ff_dim": 1024,
       "transformer_heads": 8,
       "transformer_layers": 2
+    },
+    {
+      "dropout": 0.1,
+      "head_type": "transformer",
+      "hidden_dim": 512,
+      "transformer_ff_dim": 1024,
+      "transformer_heads": 8,
+      "transformer_layers": 2
+    },
+    {
+      "dropout": 0.1,
+      "head_type": "transformer",
+      "hidden_dim": 512,
+      "transformer_ff_dim": 1024,
+      "transformer_heads": 8,
+      "transformer_layers": 2
     }
   ],
   "model_name": "facebook/dinov2-base",
   "num_classes": 13,
+  "output_grid_size": null,
   "probe_config": null,
-  "revision": 1,
+  "revision": 2,
   "runtime_format": "pytorch",
-  "version": "v4r1"
+  "version": "v5r2"
 }

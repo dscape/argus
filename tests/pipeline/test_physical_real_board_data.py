@@ -8,8 +8,10 @@ import torch
 from pipeline.physical.real_board_data import (
     PhysicalRealBoardDataset,
     PhysicalRealBoardRow,
+    build_excluded_move_neighborhood,
     infer_channel_corner_templates,
     replay_clip_display_fens,
+    replay_clip_move_sample_indices,
 )
 
 
@@ -27,6 +29,40 @@ def test_replay_clip_display_fens_uses_post_move_board_on_move_frame() -> None:
     assert fens[0] == board.fen()
     board.push(chess.Move.from_uci("e2e4"))
     assert fens[1] == board.fen()
+
+
+def test_replay_clip_display_fens_maps_absolute_move_frames_to_sample_indices() -> None:
+    clip = {
+        "frames": torch.zeros((4, 3, 8, 8), dtype=torch.uint8),
+        "frame_indices": torch.tensor([210, 225, 240, 255], dtype=torch.long),
+        "initial_board_fen": chess.STARTING_BOARD_FEN,
+        "move_ucis": ["e2e4"],
+        "move_frame_indices": torch.tensor([240], dtype=torch.long),
+    }
+
+    fens = replay_clip_display_fens(clip)
+
+    board = chess.Board()
+    assert fens[0] == board.fen()
+    assert fens[1] == board.fen()
+    board.push(chess.Move.from_uci("e2e4"))
+    assert fens[2] == board.fen()
+    assert fens[3] == board.fen()
+
+
+def test_replay_clip_move_sample_indices_uses_sampled_frame_indices() -> None:
+    clip = {
+        "frames": torch.zeros((4, 3, 8, 8), dtype=torch.uint8),
+        "frame_indices": torch.tensor([210, 225, 240, 255], dtype=torch.long),
+        "move_frame_indices": torch.tensor([240], dtype=torch.long),
+    }
+
+    assert replay_clip_move_sample_indices(clip) == {2}
+
+
+def test_build_excluded_move_neighborhood_excludes_local_margin() -> None:
+    assert build_excluded_move_neighborhood({2}, total_frames=5, neighborhood=1) == {1, 2, 3}
+    assert build_excluded_move_neighborhood({2}, total_frames=5, neighborhood=-1) == set()
 
 
 def test_infer_channel_corner_templates_reads_eval_annotations(tmp_path) -> None:

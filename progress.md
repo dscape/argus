@@ -196,39 +196,58 @@
   - `head_type=pos_mlp` adds learned square-position embeddings plus an MLP readout
   - `head_type=transformer` adds learned square-position embeddings plus a shallow contextual transformer over the 64 square tokens
 - Added `--real-loss-weight` plus head-selection flags to `scripts/train_physical_board_probe.py` so pseudo-real boards can matter more during training instead of being diluted by the synthetic set.
-- Key finding from the new head sweep:
-  - the old shared linear readout was itself a real bottleneck, not just the data
-  - keeping the encoder frozen but giving the head explicit square position and mild cross-square context materially improved held-out transfer
-- Best new single-checkpoint run so far:
-  - `outputs/2026-04-12/physical_board_probe_dino_topdown_transformer_real556_rw1_seed3/`
-  - real held-out square accuracy: `0.4710`
-  - real held-out non-empty accuracy: `0.3139`
-  - real held-out macro F1: `0.2298`
-- Weight-space checkpoint averaging was the wrong ensemble mechanism for these newer heads:
-  - averaging transformer checkpoints in parameter space pushed the runtime back toward empty-square-heavy behavior
-  - this motivated a new **logit-space** runtime ensemble format instead of more checkpoint averaging
-- Added runtime support for heterogeneous board-probe logit ensembles:
-  - `scripts/build_physical_board_probe_ensemble.py --mode logit_average`
-  - `pipeline/physical/square_classifier.py` now loads `board_probe_ensemble` checkpoints and averages member logits at inference time
-- Current committed runtime is now a weighted logit ensemble of:
-  - transformer head: `outputs/2026-04-12/physical_board_probe_dino_topdown_transformer_real556_rw1_seed3/board_probe.pt`
-  - positional MLP head: `outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real556_rw4_seed0/board_probe.pt`
-  - ensemble weights: `1:2`
-  - runtime artifact: `weights/physical/v4r1.pt`
-- End-to-end runtime eval for the promoted logit ensemble:
-  - `outputs/2026-04-12/physical_runtime_eval_v4.json`
+- Root-cause fix in replay-derived pseudo-real supervision:
+  - `pipeline/physical/real_board_data.py:replay_clip_display_fens` had been matching `move_frame_indices` against **clip-local** indices even though the real clips store **absolute sampled frame indices** in `frame_indices`
+  - this meant pseudo-real replay labels were effectively stuck on the clip's initial board instead of advancing with moves
+  - fixed by mapping absolute `move_frame_indices` through sampled `frame_indices`, and by using local move-sample indices consistently when selecting real training rows
+  - corrected stride-4 pseudo-real pool now contains `658` boards instead of the earlier stale `556`
+- Added optional move-neighborhood exclusion plumbing for pseudo-real rows:
+  - `exclude_move_neighborhood` in `pipeline/physical/real_board_data.py`
+  - `--real-train-exclude-move-neighborhood` in `scripts/train_physical_board_probe.py`
+  - `--exclude-move-neighborhood` in `scripts/export_physical_real_board_dataset.py`
+  - quick validation showed excluding move frames entirely was **not** the right default on the corrected data; the best runs keep them
+- Added frozen multi-layer DINO support in `src/argus/model/vision_encoder.py`:
+  - DINO can now average hidden states from selected transformer layers via `feature_layer_indices`
+  - `scripts/train_physical_board_probe.py` now exposes this with `--dino-feature-layer-indices`
+- Key finding from the corrected-label + multi-layer sweep:
+  - the old pseudo-real runs were limited by both a replay-label bug and an overly shallow single-layer DINO readout
+  - once the replay labels were fixed and DINO layers `8,10,11` were averaged, transfer improved substantially again without unfreezing the backbone
+- Best new single-checkpoint runs:
+  - transformer, layers `8,10,11`: `outputs/2026-04-12/physical_board_probe_dino_topdown_transformer_real658_fixed_layers8_10_11_seed3/`
+    - real held-out square accuracy: `0.5341`
+    - real held-out non-empty accuracy: `0.3843`
+    - real held-out macro F1: `0.2758`
+  - positional MLP, layers `8,10,11`: `outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real658_fixed_layers8_10_11_rw4_seed0/`
+    - real held-out square accuracy: `0.4611`
+    - real held-out non-empty accuracy: `0.4103`
+    - real held-out macro F1: `0.2980`
+- Weight-space checkpoint averaging is still the wrong ensemble mechanism here.
+  - parameter averaging keeps regressing toward empty-heavy behavior
+  - logit-space ensembling remains the right runtime format for mixing seeds and head families
+- Added a current-best multilayer runtime ensemble under `weights/physical/`:
+  - code version bumped to `v5`
+  - runtime artifact: `weights/physical/v5r2.pt`
+  - committed runtime is a logit ensemble over four multilayer DINO readers:
+    - pos_mlp `rw4 seed0`
+    - pos_mlp `rw4 seed3`
+    - transformer `rw1 seed3`
+    - transformer `rw1 seed0`
+    - shared DINO layers: `8,10,11`
+    - ensemble weights: `20,20,1,5`
+- End-to-end runtime eval for the promoted multilayer ensemble:
+  - `outputs/2026-04-12/physical_runtime_eval_v7.json`
   - evaluated boards: `844`
   - missing predictions: `0`
-  - square accuracy: `0.4230`
-  - non-empty accuracy: `0.3313`
-  - macro F1: `0.2484`
+  - square accuracy: `0.5171`
+  - non-empty accuracy: `0.4126`
+  - macro F1: `0.3126`
   - board exact match: `0.0`
-- Current assessment after the contextual-head + logit-ensemble pass:
-  - DINO still remains the only credible backbone here; the gains came from a better frozen-feature readout, not a backbone swap
-  - the biggest new insight is that the board head architecture matters: a shared linear readout was leaving useful board context on the table
-  - logit-space ensembling beats parameter averaging for these mixed head families and is now the best committed physical runtime path
+- Current assessment after the corrected-label + multilayer-DINO pass:
+  - DINO still remains the only credible backbone here, but the important new finding is that **which DINO layers you read from matters a lot**
+  - the pseudo-real replay bug was a major hidden blocker; fixing it materially improved the usefulness of replay-derived supervision
+  - multilayer frozen DINO + stronger heads + logit ensembling is the strongest physical runtime path so far by a wide margin
   - the physical per-square reader is materially better than before, but it is still not good enough to call solved
-  - the next useful step is still likely better in-domain real supervision or better physical localization / corner quality, because board exact match remains `0.0`
+  - board exact match staying at `0.0` means the next bottleneck is still real-domain supervision quality / localization quality, not another obvious head tweak
 
 ### Validation
 - Passed: `make typecheck`
