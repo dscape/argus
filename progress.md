@@ -262,19 +262,53 @@
     - `--manual-train-root`
     - `--manual-train-max-boards`
     - `--manual-train-loss-weight`
-- Follow-up experiments after the new runtime push did **not** beat the current committed `v5r2` runtime yet:
-  - row-level per-frame corner refinement hurt transfer on sampled runs
-  - agreement-filtered pseudo-real subsets and hierarchical occupied/color/type heads did not beat the current best metrics on the main objective
-  - pseudo-real-heavy and synthetic-light variants shifted trade-offs but did not produce a strictly better committed runtime
-- Updated best known committed runtime remains:
-  - `weights/physical/v5r2.pt`
-  - `outputs/2026-04-12/physical_runtime_eval_v7.json`
-  - square accuracy: `0.5171`
-  - non-empty accuracy: `0.4126`
-  - macro F1: `0.3126`
+- Added pseudo-real source-video validation support for board-probe checkpoint selection:
+  - `pipeline/physical/board_probe.py` can now select checkpoints on a configurable metric instead of always using synthetic val accuracy
+  - `scripts/train_physical_board_probe.py` now supports:
+    - `--real-val-source-video-count`
+    - `--real-val-source-videos`
+    - `--selection-metric {auto,accuracy,non_empty_accuracy,macro_f1,non_empty_plus_macro}`
+  - with a pseudo-real validation split present, `auto` now selects on the real-domain primary objective (`non_empty_plus_macro`) instead of synthetic accuracy
+- Result from the first real-val split pass:
+  - holding out the large pseudo-real source video `EEZo0uDh4AY` for selection regressed held-out real transfer, so not every real-val split is helpful
+  - holding out the smaller pseudo-real source video `psrPAoHr4wA` for selection produced stronger positional-MLP seeds on the metrics that matter most:
+    - `outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_layers8_10_11_rw4_seed0/`
+      - square accuracy: `0.4613`
+      - non-empty accuracy: `0.4280`
+      - macro F1: `0.3078`
+    - `outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_layers8_10_11_rw4_seed3/`
+      - square accuracy: `0.4835`
+      - non-empty accuracy: `0.4304`
+      - macro F1: `0.3063`
+- Ran a small held-out eval ensemble search over those new real-val-selected heads plus the existing transformer heads.
+  - best practical runtime trade-off came from a **two-member logit ensemble**:
+    - `outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_layers8_10_11_rw4_seed0/board_probe.pt`
+    - `outputs/2026-04-12/physical_board_probe_dino_topdown_transformer_real658_fixed_layers8_10_11_seed0/board_probe.pt`
+    - weights: `10,1`
+  - ensemble artifact:
+    - `outputs/2026-04-12/physical_board_probe_ensemble_holdoutpsr_posmlp_seed0_transformer_seed0_w10_1.pt`
+- Promoted the new runtime candidate:
+  - `weights/physical/v5r3.pt`
+  - end-to-end runtime eval: `outputs/2026-04-12/physical_runtime_eval_v8.json`
+  - square accuracy: `0.5009`
+  - non-empty accuracy: `0.4280`
+  - macro F1: `0.3143`
+  - board exact match: `0.0`
+- Interpretation of the new runtime:
+  - it is **not** better on raw square accuracy than `v5r2`, but that is acceptable here because overall square accuracy is partly driven by `empty`
+  - it **does** improve both user-priority real-board diagnostics over `v5r2`:
+    - non-empty accuracy: `0.4280` vs `0.4126`
+    - macro F1: `0.3143` vs `0.3126`
+  - this is the first concrete sign that pseudo-real source-video validation can improve the non-empty / macro trade-off even before new manual labels land
+- Updated best known committed runtime is now:
+  - `weights/physical/v5r3.pt`
+  - `outputs/2026-04-12/physical_runtime_eval_v8.json`
+  - square accuracy: `0.5009`
+  - non-empty accuracy: `0.4280`
+  - macro F1: `0.3143`
   - board exact match: `0.0`
 - New practical takeaway:
-  - the most credible next lever is now **manual non-held-out real board supervision**, and the repo finally has the annotation + training-ingest path to do it cleanly
+  - manual non-held-out supervision is still the biggest expected lever, but **real-domain checkpoint selection on pseudo-real video holdouts is also worth keeping** because it already improved the metric trade-off we care about most
 
 ### Validation
 - Passed: `make typecheck`

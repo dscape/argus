@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import pytest
 import torch
 from pipeline.physical.board_probe import (
     PhysicalBoardStateProbe,
     board_probe_config_from_checkpoint,
     dino_patches_to_square_tokens,
+    selection_score_for_metrics,
 )
+from pipeline.physical.square_probe import ProbeMetrics
 
 
 def test_dino_patches_to_square_tokens_pools_16x16_grid_into_64_tokens() -> None:
@@ -41,3 +44,19 @@ def test_physical_board_state_probe_transformer_outputs_square_logits() -> None:
     logits = probe(torch.randn(2, 64, 16))
 
     assert logits.shape == (2, 64, 13)
+
+
+def test_selection_score_for_metrics_prefers_non_empty_plus_macro() -> None:
+    metrics = ProbeMetrics(
+        accuracy=0.9,
+        non_empty_accuracy=0.4,
+        macro_f1=0.2,
+        board_exact_match=0.0,
+        mean_confidence=0.5,
+        class_accuracy={},
+    )
+
+    assert selection_score_for_metrics(metrics, "accuracy") == 0.9
+    assert selection_score_for_metrics(metrics, "non_empty_accuracy") == 0.4
+    assert selection_score_for_metrics(metrics, "macro_f1") == 0.2
+    assert selection_score_for_metrics(metrics, "non_empty_plus_macro") == pytest.approx(0.3)

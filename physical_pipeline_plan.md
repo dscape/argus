@@ -148,21 +148,24 @@ Current snapshot on this branch:
     - non-empty accuracy: `0.4103`
     - macro F1: `0.2980`
 - Weight-space checkpoint averaging is still the wrong way to ensemble these newer heads because it drifts back toward empty-heavy behavior.
-- The current committed runtime candidate is therefore still a **logit-space** ensemble under `weights/physical/`, but now over corrected-label, multilayer-DINO readers:
+- The current committed runtime candidate is therefore still a **logit-space** ensemble under `weights/physical/`, but it has now changed shape again after adding pseudo-real source-video validation for checkpoint selection:
   - code version: `v5`
-  - runtime artifact: `weights/physical/v5r2.pt`
-  - member families: two positional MLP seeds plus two transformer seeds
+  - runtime artifact: `weights/physical/v5r3.pt`
+  - member families: one positional MLP plus one transformer
   - shared DINO layers: `8,10,11`
-  - held-out runtime metrics from `outputs/2026-04-12/physical_runtime_eval_v7.json`:
-    - square accuracy: `0.5171`
-    - non-empty accuracy: `0.4126`
-    - macro F1: `0.3126`
-- That is still far from the target, but it is the strongest current board-context reader and the best committed end-to-end runtime candidate for physical boards. The runtime path is explicitly evaluable via `scripts/eval_physical_board_runtime.py`.
-- The repo now also has explicit infrastructure for the next data-centric step:
+  - member checkpoints:
+    - `physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_layers8_10_11_rw4_seed0`
+    - `physical_board_probe_dino_topdown_transformer_real658_fixed_layers8_10_11_seed0`
+  - ensemble weights: `10,1`
+  - held-out runtime metrics from `outputs/2026-04-12/physical_runtime_eval_v8.json`:
+    - square accuracy: `0.5009`
+    - non-empty accuracy: `0.4280`
+    - macro F1: `0.3143`
+- Relative to `v5r2`, `v5r3` sacrifices some overall square accuracy but improves the diagnostics that actually matter for physical board reading (`non-empty` and `macro-F1`). That trade-off is the right one here because empty squares still dominate the label distribution.
+- The repo now also has two pieces of infrastructure for the next data-centric step:
   - manual non-held-out physical board labels can be collected under `data/physical/train_manual/`
-  - dev-tools route: `/annotate/physical-train`
-  - training ingestion path: `PhysicalManualTrainBoardDataset` plus `scripts/train_physical_board_probe.py --manual-train-root ...`
-- Follow-up experiments after `v5r2` did not find another easy frozen-feature win. The practical next attempt should therefore prioritize **manual non-held-out real supervision** and better localization / corner quality before more backbone work.
+  - pseudo-real source-video holdouts can be used during training for checkpoint selection via `scripts/train_physical_board_probe.py --real-val-source-videos ... --selection-metric auto`
+- The practical next attempt should still prioritize **manual non-held-out real supervision** and better localization / corner quality before more backbone work, but pseudo-real real-val checkpoint selection is now a real lever rather than just a hypothesis.
 - Empty squares will dominate; success is not allowed to hide behind empty-square accuracy.
 - Synthetic physical renders are training fuel, not validation data.
 

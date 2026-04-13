@@ -242,6 +242,9 @@ def train_board_probe(
     transformer_heads: int = _DEFAULT_TRANSFORMER_HEADS,
     transformer_ff_dim: int = _DEFAULT_TRANSFORMER_FF_DIM,
     dropout: float = _DEFAULT_DROPOUT,
+    selection_square_tokens: torch.Tensor | None = None,
+    selection_labels: torch.Tensor | None = None,
+    selection_metric: str = "accuracy",
 ) -> tuple[PhysicalBoardStateProbe, float]:
     probe = PhysicalBoardStateProbe(
         train_square_tokens.shape[-1],
@@ -262,7 +265,9 @@ def train_board_probe(
     train_targets = train_labels.to(device)
     train_board_weights = None if board_weights is None else board_weights.to(device=device)
     best_state: dict[str, torch.Tensor] | None = None
-    best_val_accuracy = -1.0
+    best_selection_score = float("-inf")
+    eval_square_tokens = val_square_tokens if selection_square_tokens is None else selection_square_tokens
+    eval_labels = val_labels if selection_labels is None else selection_labels
 
     for _epoch in range(epochs):
         probe.train()
@@ -279,9 +284,10 @@ def train_board_probe(
         loss.backward()
         optimizer.step()
 
-        metrics = evaluate_board_probe(probe, val_square_tokens, val_labels, device=device)
-        if metrics.accuracy > best_val_accuracy:
-            best_val_accuracy = metrics.accuracy
+        metrics = evaluate_board_probe(probe, eval_square_tokens, eval_labels, device=device)
+        selection_score = selection_score_for_metrics(metrics, selection_metric)
+        if selection_score > best_selection_score:
+            best_selection_score = selection_score
             best_state = {
                 key: value.detach().cpu().clone() for key, value in probe.state_dict().items()
             }
@@ -299,7 +305,20 @@ def train_board_probe(
         dropout=dropout,
     )
     best_probe.load_state_dict(best_state)
-    return best_probe.to(device), best_val_accuracy
+    return best_probe.to(device), best_selection_score
+
+
+def selection_score_for_metrics(metrics: ProbeMetrics, selection_metric: str) -> float:
+    if selection_metric == "accuracy":
+        return metrics.accuracy
+    if selection_metric == "non_empty_accuracy":
+        return metrics.non_empty_accuracy
+    if selection_metric == "macro_f1":
+        return metrics.macro_f1
+    if selection_metric == "non_empty_plus_macro":
+        return (metrics.non_empty_accuracy + metrics.macro_f1) / 2.0
+    raise ValueError(f"Unsupported selection metric: {selection_metric}")
+
 
 
 def evaluate_board_probe(
