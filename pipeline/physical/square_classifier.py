@@ -34,7 +34,7 @@ from pipeline.shared import (
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
 _DEFAULT_WEIGHTS_PATH = WEIGHTS_DIR / "best.pt"
-_DEFAULT_TEMPORAL_EMA_ALPHA = 0.1
+_DEFAULT_TEMPORAL_EMA_ALPHA = 0.05
 _CLASS_TO_SYMBOL = {index: name for index, name in enumerate(CLASS_NAMES)}
 
 _cached_model: tuple[dict[str, Any], VisionEncoder, nn.Module] | None = None
@@ -85,13 +85,14 @@ class PhysicalBoardSequenceReader:
         self,
         *,
         device: str = "cpu",
-        ema_alpha: float | None = _DEFAULT_TEMPORAL_EMA_ALPHA,
+        ema_alpha: float | None = None,
     ) -> None:
         self.device = device
+        resolved_ema_alpha = _resolve_temporal_ema_alpha(ema_alpha)
         self._smoother = (
             None
-            if ema_alpha is None or ema_alpha <= 0.0
-            else BoardLogitsExponentialSmoother(alpha=ema_alpha)
+            if resolved_ema_alpha is None or resolved_ema_alpha <= 0.0
+            else BoardLogitsExponentialSmoother(alpha=resolved_ema_alpha)
         )
 
     def reset(self) -> None:
@@ -130,6 +131,17 @@ class PhysicalBoardSequenceReader:
             timestamp_seconds=timestamp_seconds,
         )
         return None if observation is None else observation.fen
+
+
+def _resolve_temporal_ema_alpha(ema_alpha: float | None) -> float | None:
+    if ema_alpha is not None:
+        return ema_alpha
+    metadata = load_metadata()
+    if metadata is not None:
+        recommended_alpha = metadata.get("recommended_temporal_ema_alpha")
+        if recommended_alpha is not None:
+            return float(recommended_alpha)
+    return _DEFAULT_TEMPORAL_EMA_ALPHA
 
 
 def _class_ids_to_board_fen(class_ids: list[int]) -> str:

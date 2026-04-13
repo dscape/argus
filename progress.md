@@ -323,7 +323,7 @@
       - real eval square accuracy: `0.3220`
       - real eval non-empty accuracy: `0.2389`
       - real eval macro F1: `0.1787`
-- Updated best known committed **single-frame** runtime is now:
+- Updated best known committed **single-frame** runtime remains:
   - `weights/physical/v6r2.pt`
   - `outputs/2026-04-13/physical_runtime_eval_v11_exact_kings_runtime.json`
   - square accuracy: `0.5115`
@@ -338,15 +338,42 @@
   - shared helper: `pipeline/shared/board_smoothing.py`
   - stateful runtime reader: `pipeline.physical.square_classifier.PhysicalBoardSequenceReader`
   - hybrid full-frame path now keeps a causal EMA over physical board logits across consecutive physical frames
+  - runtime metadata now records `recommended_temporal_ema_alpha`, and the stateful physical reader uses that by default when no explicit alpha is provided
   - `scripts/eval_physical_board_runtime.py` now supports `--temporal-ema-alpha`
-- Held-out clip-ordered runtime eval with causal EMA smoothing (`alpha=0.1`):
-  - `outputs/2026-04-13/physical_runtime_eval_v12_temporal_ema01.json`
-  - square accuracy: `0.5347`
-  - non-empty accuracy: `0.4557`
-  - macro F1: `0.3578`
-  - board exact match: `0.0`
-- Follow-up check after the EMA win:
+- Follow-up checks after the first EMA win:
   - a quick greedy legal-move candidate filter on top of the EMA-smoothed logits did **not** improve over plain EMA, so that extra logic was not kept
+  - naive pseudo-real self-distillation filters based on current-runtime agreement also underperformed badly and were not kept:
+    - agreement `>= 0.56`: real eval square `0.3340`, non-empty `0.2895`, macro `0.1969`
+    - agreement `>= 0.64`: real eval square `0.3395`, non-empty `0.2431`, macro `0.1936`
+    - agreement `>= 0.70`: real eval square `0.4058`, non-empty `0.3070`, macro `0.2219`
+- Re-ran the held-out ensemble search under the stronger exact-king decoder **and** clip-ordered EMA evaluation.
+  - the previous `10:1` pos-MLP/transformer runtime was not optimal once sequence smoothing entered the picture
+  - stronger clip-ordered trade-offs came from a slightly larger, more pos-MLP-heavy ensemble
+- Promoted the current best **deployed** runtime path:
+  - code version: `v6`
+  - runtime artifact: `weights/physical/v6r3.pt`
+  - committed runtime is now a three-member logit ensemble over:
+    - `physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_layers8_10_11_rw4_seed0`
+    - `physical_board_probe_dino_topdown_posmlp512_real658_fixed_layers8_10_11_rw4_seed0`
+    - `physical_board_probe_dino_topdown_transformer_real658_fixed_layers8_10_11_seed0`
+    - weights: `40,5,1`
+    - recommended temporal EMA alpha: `0.05`
+- End-to-end runtime evals for the promoted `v6r3` ensemble:
+  - stateless single-frame eval: `outputs/2026-04-13/physical_runtime_eval_v13_single_frame_sequence_ensemble.json`
+    - square accuracy: `0.4867`
+    - non-empty accuracy: `0.4415`
+    - macro F1: `0.3410`
+  - clip-ordered eval with the recommended EMA: `outputs/2026-04-13/physical_runtime_eval_v14_temporal_ema005_sequence_ensemble.json`
+    - square accuracy: `0.5137`
+    - non-empty accuracy: `0.4615`
+    - macro F1: `0.3649`
+    - board exact match: `0.0`
+- Interpretation of `v6r3`:
+  - `v6r2` remains the best committed **stateless crop reader** on single-frame diagnostics
+  - `v6r3` is the best committed **deployed sequence reader** under the actual hybrid/video path because the temporal objective matters more than isolated-frame accuracy here
+  - relative to the earlier best clip-ordered runtime (`v6r2` + EMA `0.05`), `v6r3` improves the user-priority diagnostics again:
+    - non-empty accuracy: `0.4615` vs `0.4580`
+    - macro F1: `0.3649` vs `0.3588`
 - New practical takeaway:
   - manual non-held-out supervision is still the biggest expected lever, but the repo now has **three** cheap levers worth keeping in the loop before more labeling lands:
     - pseudo-real source-video validation for checkpoint selection

@@ -148,33 +148,36 @@ Current snapshot on this branch:
     - non-empty accuracy: `0.4103`
     - macro F1: `0.2980`
 - Weight-space checkpoint averaging is still the wrong way to ensemble these newer heads because it drifts back toward empty-heavy behavior.
-- The current committed runtime candidate is therefore still a **logit-space** ensemble under `weights/physical/`, but it has now changed shape again after adding pseudo-real source-video validation for checkpoint selection and a lightweight shared runtime postprocess:
+- The current committed runtime candidate is therefore still a **logit-space** ensemble under `weights/physical/`, but it has now changed shape again after adding pseudo-real source-video validation for checkpoint selection, a lightweight shared runtime postprocess, and clip-ordered runtime selection:
   - code version: `v6`
-  - runtime artifact: `weights/physical/v6r2.pt`
-  - member families: one positional MLP plus one transformer
+  - stateless-crop reference artifact: `weights/physical/v6r2.pt`
+  - deployed runtime artifact: `weights/physical/v6r3.pt`
   - shared DINO layers: `8,10,11`
-  - member checkpoints:
+  - deployed runtime members:
     - `physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_layers8_10_11_rw4_seed0`
+    - `physical_board_probe_dino_topdown_posmlp512_real658_fixed_layers8_10_11_rw4_seed0`
     - `physical_board_probe_dino_topdown_transformer_real658_fixed_layers8_10_11_seed0`
-  - ensemble weights: `10,1`
+  - deployed ensemble weights: `40,5,1`
   - runtime postprocess:
     - back-rank pawns are reassigned to the best non-pawn class
     - each color is forced to have **exactly one** king by removing duplicate kings and inserting a king only when one is missing
-  - held-out runtime metrics from `outputs/2026-04-13/physical_runtime_eval_v11_exact_kings_runtime.json`:
-    - square accuracy: `0.5115`
-    - non-empty accuracy: `0.4427`
-    - macro F1: `0.3433`
-- Relative to `v5r2`, `v6r2` is clearly better on the diagnostics that actually matter for physical board reading (`non-empty` and `macro-F1`) even though board exact match is still `0.0`.
+  - runtime metadata now also records the recommended temporal smoothing constant for the stateful reader
+- Relative to `v5r2`, the best committed physical reader path is clearly better on the diagnostics that actually matter for physical board reading (`non-empty` and `macro-F1`) even though board exact match is still `0.0`.
 - A quick temporal-stability diagnostic on the held-out physical clips showed that the current reader is flickering far more than the real boards (`13.45%` predicted square-flip rate vs `0.25%` ground truth), so lightweight sequence smoothing is now justified rather than speculative.
-- The repo therefore now also has a minimal temporal baseline on top of the same `v6r2` weights:
+- The repo therefore now also has a minimal temporal baseline on top of the same runtime weights:
   - shared helper: `pipeline/shared/board_smoothing.py`
   - stateful runtime reader: `pipeline.physical.square_classifier.PhysicalBoardSequenceReader`
   - hybrid full-frame runtime now keeps a causal EMA over physical board logits across consecutive physical frames
-  - held-out clip-ordered eval with `--temporal-ema-alpha 0.1`: `outputs/2026-04-13/physical_runtime_eval_v12_temporal_ema01.json`
-    - square accuracy: `0.5347`
-    - non-empty accuracy: `0.4557`
-    - macro F1: `0.3578`
-  - a quick greedy legal-move candidate filter did not beat plain EMA, so it was not kept
+  - recommended temporal EMA alpha from runtime metadata: `0.05`
+  - current best deployed clip-ordered eval: `outputs/2026-04-13/physical_runtime_eval_v14_temporal_ema005_sequence_ensemble.json`
+    - square accuracy: `0.5137`
+    - non-empty accuracy: `0.4615`
+    - macro F1: `0.3649`
+  - current best stateless single-frame eval remains `v6r2`: `outputs/2026-04-13/physical_runtime_eval_v11_exact_kings_runtime.json`
+    - square accuracy: `0.5115`
+    - non-empty accuracy: `0.4427`
+    - macro F1: `0.3433`
+  - a quick greedy legal-move candidate filter did not beat plain EMA, and naive pseudo-real agreement filtering regressed badly, so neither was kept
 - The repo now also has two pieces of infrastructure for the next data-centric step:
   - manual non-held-out physical board labels can be collected under `data/physical/train_manual/`
   - pseudo-real source-video holdouts can be used during training for checkpoint selection via `scripts/train_physical_board_probe.py --real-val-source-videos ... --selection-metric auto`

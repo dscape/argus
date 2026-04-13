@@ -223,6 +223,7 @@ def promote_to_runtime_weights(checkpoint_path: Path, payload: dict[str, Any]) -
         "ensemble_mode": payload["metadata"].get("ensemble_mode"),
         "ensemble_members": payload["metadata"].get("ensemble_members", []),
         "ensemble_weights": payload["metadata"].get("ensemble_weights", []),
+        "recommended_temporal_ema_alpha": 0.05,
         "runtime_format": "pytorch",
         "runtime_constraints": "back_rank_pawns_and_exactly_one_king_per_color",
     }

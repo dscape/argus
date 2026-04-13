@@ -896,6 +896,7 @@ def promote_to_runtime_weights(
             "manual_train_positions": manual_train_positions,
             "held_out_eval_size": held_out_eval_size,
         },
+        "recommended_temporal_ema_alpha": 0.05,
         "runtime_format": "pytorch",
         "architecture": "board_probe",
         "runtime_constraints": "back_rank_pawns_and_exactly_one_king_per_color",

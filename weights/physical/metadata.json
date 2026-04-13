@@ -4,12 +4,14 @@
   "encoder_type": "dinov2",
   "ensemble_members": [
     "outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_layers8_10_11_rw4_seed0/board_probe.pt",
+    "outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real658_fixed_layers8_10_11_rw4_seed0/board_probe.pt",
     "outputs/2026-04-12/physical_board_probe_dino_topdown_transformer_real658_fixed_layers8_10_11_seed0/board_probe.pt"
   ],
   "ensemble_mode": "logit_average",
   "ensemble_weights": [
-    0.9090909090909091,
-    0.09090909090909091
+    0.8695652173913043,
+    0.10869565217391304,
+    0.021739130434782608
   ],
   "feature_layer_indices": [
     8,
@@ -18,6 +20,14 @@
   ],
   "input_size": 224,
   "member_probe_configs": [
+    {
+      "dropout": 0.1,
+      "head_type": "pos_mlp",
+      "hidden_dim": 512,
+      "transformer_ff_dim": 1024,
+      "transformer_heads": 8,
+      "transformer_layers": 2
+    },
     {
       "dropout": 0.1,
       "head_type": "pos_mlp",
@@ -39,8 +49,9 @@
   "num_classes": 13,
   "output_grid_size": null,
   "probe_config": null,
-  "revision": 2,
+  "recommended_temporal_ema_alpha": 0.05,
+  "revision": 3,
   "runtime_constraints": "back_rank_pawns_and_exactly_one_king_per_color",
   "runtime_format": "pytorch",
-  "version": "v6r2"
+  "version": "v6r3"
 }

@@ -109,6 +109,23 @@ def test_read_board_observation_from_frame_applies_constraints(monkeypatch) -> N
     assert observation.fen.split("/")[-1] == "4K3"
 
 
+def test_physical_board_sequence_reader_uses_runtime_default_temporal_alpha(
+    monkeypatch,
+) -> None:
+    import pipeline.physical.square_classifier as square_classifier
+
+    monkeypatch.setattr(
+        square_classifier,
+        "load_metadata",
+        lambda: {"recommended_temporal_ema_alpha": 0.05},
+    )
+
+    reader = PhysicalBoardSequenceReader(device="cpu")
+
+    assert reader._smoother is not None
+    assert reader._smoother.alpha == 0.05
+
+
 def test_physical_board_sequence_reader_smooths_logits_across_frames(monkeypatch) -> None:
     import pipeline.physical.square_classifier as square_classifier
 
