@@ -30,6 +30,19 @@ from pipeline.physical.board_probe import (
     save_board_probe_checkpoint,
     train_board_probe,
 )
+from pipeline.physical.oblique_board_data import (
+    PhysicalAnnotatedObliqueBoardDataset,
+    PhysicalEvalObliqueBoardDataset,
+    PhysicalObliqueBoardCropOnlyDataset,
+    PhysicalRealObliqueBoardDataset,
+    PhysicalSyntheticObliqueBoardDataset,
+)
+from pipeline.physical.oblique_square_context import (
+    PhysicalAnnotatedObliqueSquareContextDataset,
+    PhysicalEvalObliqueSquareContextDataset,
+    PhysicalRealObliqueBoardRow,
+    PhysicalRealObliqueSquareContextDataset,
+)
 from pipeline.physical.real_board_data import (
     PhysicalRealBoardDataset,
     PhysicalRealBoardRow,
@@ -73,35 +86,46 @@ def main() -> None:
     encoder = VisionEncoder(**encoder_kwargs).to(device)
     encoder.eval()
 
-    synthetic_train_dataset = build_synthetic_dataset(
-        synthetic_source=args.synthetic_source,
-        num_positions=args.synthetic_train_positions,
+    synthetic_train_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]] | None = None
+    if args.synthetic_train_positions > 0:
+        synthetic_train_dataset = build_synthetic_dataset(
+            synthetic_source=args.synthetic_source,
+            board_input_mode=args.board_input_mode,
+            num_positions=args.synthetic_train_positions,
+            image_size=args.input_size,
+            seed=args.seed,
+            augment=args.augment,
+            min_moves=args.synthetic_min_moves,
+            max_moves=args.synthetic_max_moves,
+            min_ply=args.synthetic_min_ply,
+        )
+    val_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]] | None = None
+    if args.synthetic_val_positions > 0:
+        val_dataset = build_synthetic_dataset(
+            synthetic_source=args.synthetic_source,
+            board_input_mode=args.board_input_mode,
+            num_positions=args.synthetic_val_positions,
+            image_size=args.input_size,
+            seed=args.seed + 1,
+            augment=False,
+            min_moves=args.synthetic_min_moves,
+            max_moves=args.synthetic_max_moves,
+            min_ply=args.synthetic_min_ply,
+        )
+    eval_dataset = build_eval_dataset(
+        board_input_mode=args.board_input_mode,
         image_size=args.input_size,
-        seed=args.seed,
-        augment=args.augment,
-        min_moves=args.synthetic_min_moves,
-        max_moves=args.synthetic_max_moves,
-        min_ply=args.synthetic_min_ply,
     )
-    val_dataset = build_synthetic_dataset(
-        synthetic_source=args.synthetic_source,
-        num_positions=args.synthetic_val_positions,
-        image_size=args.input_size,
-        seed=args.seed + 1,
-        augment=False,
-        min_moves=args.synthetic_min_moves,
-        max_moves=args.synthetic_max_moves,
-        min_ply=args.synthetic_min_ply,
-    )
-    eval_dataset = PhysicalEvalBoardDataset(image_size=args.input_size)
     eval_annotation_ids = [row.annotation_id for row in eval_dataset.rows]
 
-    real_train_dataset: PhysicalRealBoardDataset | None = None
-    real_selection_dataset: PhysicalRealBoardDataset | None = None
+    real_train_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]] | None = None
+    real_selection_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]] | None = None
     real_train_source_video_ids: list[str] = []
     real_selection_source_video_ids: list[str] = []
-    manual_train_dataset: PhysicalManualTrainBoardDataset | None = None
-    train_parts: list[Dataset[tuple[torch.Tensor, torch.Tensor]]] = [synthetic_train_dataset]
+    manual_train_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]] | None = None
+    train_parts: list[Dataset[tuple[torch.Tensor, torch.Tensor]]] = []
+    if synthetic_train_dataset is not None:
+        train_parts.append(synthetic_train_dataset)
     if args.real_train_max_frames > 0:
         (
             real_train_dataset,
@@ -110,6 +134,7 @@ def main() -> None:
             real_selection_source_video_ids,
         ) = build_real_train_and_selection_datasets(
             clips_dir=args.real_train_clips_dir,
+            board_input_mode=args.board_input_mode,
             image_size=args.input_size,
             frame_stride=args.real_train_frame_stride,
             max_train_frames=args.real_train_max_frames,
@@ -123,34 +148,48 @@ def main() -> None:
     if args.manual_train_max_boards > 0:
         manual_train_dataset = build_manual_train_dataset(
             annotation_root=args.manual_train_root,
+            board_input_mode=args.board_input_mode,
             image_size=args.input_size,
             max_boards=args.manual_train_max_boards,
             seed=args.seed,
         )
         if manual_train_dataset is not None and len(manual_train_dataset) > 0:
             train_parts.append(manual_train_dataset)
+    if not train_parts:
+        raise ValueError("No training datasets selected; add synthetic or real training data")
+
     train_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]]
     if len(train_parts) == 1:
         train_dataset = train_parts[0]
     else:
         train_dataset = ConcatDataset(train_parts)
 
+    synthetic_train_positions = (
+        0 if synthetic_train_dataset is None else len(synthetic_train_dataset)
+    )
+    synthetic_val_positions = 0 if val_dataset is None else len(val_dataset)
     real_train_positions = 0 if real_train_dataset is None else len(real_train_dataset)
     real_selection_positions = 0 if real_selection_dataset is None else len(real_selection_dataset)
     manual_train_positions = 0 if manual_train_dataset is None else len(manual_train_dataset)
-    selection_dataset_name = "synthetic_val" if real_selection_positions == 0 else "real_selection"
+    if real_selection_positions > 0:
+        selection_dataset_name = "real_selection"
+    elif synthetic_val_positions > 0:
+        selection_dataset_name = "synthetic_val"
+    else:
+        raise ValueError("Selection requires synthetic val data or a pseudo-real selection split")
     selection_metric = resolve_selection_metric(
         args.selection_metric,
         has_real_selection=real_selection_positions > 0,
     )
 
     if args.save_samples > 0:
-        save_board_samples(
-            synthetic_train_dataset,
-            output_dir,
-            count=args.save_samples,
-            prefix="synthetic_train",
-        )
+        if synthetic_train_dataset is not None:
+            save_board_samples(
+                synthetic_train_dataset,
+                output_dir,
+                count=args.save_samples,
+                prefix="synthetic_train",
+            )
         if real_train_dataset is not None and len(real_train_dataset) > 0:
             save_board_samples(
                 real_train_dataset,
@@ -172,12 +211,13 @@ def main() -> None:
                 count=args.save_samples,
                 prefix="real_selection",
             )
-        save_board_samples(
-            val_dataset,
-            output_dir,
-            count=args.save_samples,
-            prefix="synthetic_val",
-        )
+        if val_dataset is not None:
+            save_board_samples(
+                val_dataset,
+                output_dir,
+                count=args.save_samples,
+                prefix="synthetic_val",
+            )
         save_board_samples(
             eval_dataset,
             output_dir,
@@ -192,13 +232,6 @@ def main() -> None:
         device=device,
         batch_size=args.batch_size,
     )
-    logger.info("Extracting synthetic val square-token features")
-    val_tokens, val_labels = extract_square_token_features(
-        val_dataset,
-        encoder=encoder,
-        device=device,
-        batch_size=args.batch_size,
-    )
     real_selection_tokens: torch.Tensor | None = None
     real_selection_labels: torch.Tensor | None = None
     if real_selection_dataset is not None and len(real_selection_dataset) > 0:
@@ -209,6 +242,22 @@ def main() -> None:
             device=device,
             batch_size=args.batch_size,
         )
+
+    val_tokens: torch.Tensor
+    val_labels: torch.Tensor
+    if val_dataset is not None:
+        logger.info("Extracting synthetic val square-token features")
+        val_tokens, val_labels = extract_square_token_features(
+            val_dataset,
+            encoder=encoder,
+            device=device,
+            batch_size=args.batch_size,
+        )
+    elif real_selection_tokens is not None and real_selection_labels is not None:
+        logger.info("Reusing pseudo-real selection features as validation features")
+        val_tokens, val_labels = real_selection_tokens, real_selection_labels
+    else:
+        raise ValueError("Validation requires synthetic val data or pseudo-real selection data")
     logger.info("Extracting held-out real board features")
     eval_tokens, eval_labels = extract_square_token_features(
         eval_dataset,
@@ -219,7 +268,7 @@ def main() -> None:
 
     class_weights = build_class_weights(train_labels, mode=args.class_weighting)
     board_weights = build_board_weights(
-        synthetic_count=len(synthetic_train_dataset),
+        synthetic_count=synthetic_train_positions,
         real_count=real_train_positions,
         manual_count=manual_train_positions,
         real_loss_weight=args.real_loss_weight,
@@ -248,7 +297,11 @@ def main() -> None:
     )
 
     train_metrics = evaluate_board_probe(probe, train_tokens, train_labels, device=device)
-    synth_val_metrics = evaluate_board_probe(probe, val_tokens, val_labels, device=device)
+    synth_val_metrics = (
+        None
+        if val_dataset is None
+        else evaluate_board_probe(probe, val_tokens, val_labels, device=device)
+    )
     real_selection_metrics = None
     if real_selection_tokens is not None and real_selection_labels is not None:
         real_selection_metrics = evaluate_board_probe(
@@ -275,11 +328,12 @@ def main() -> None:
             "encoder_type": args.encoder_type,
             "feature_layer_indices": encoder_kwargs.get("feature_layer_indices"),
             "output_grid_size": encoder_kwargs.get("output_grid_size"),
+            "board_input_mode": args.board_input_mode,
             "synthetic_source": args.synthetic_source,
-            "synthetic_train_positions": args.synthetic_train_positions,
+            "synthetic_train_positions": synthetic_train_positions,
             "real_train_positions": real_train_positions,
             "manual_train_positions": manual_train_positions,
-            "synthetic_val_positions": args.synthetic_val_positions,
+            "synthetic_val_positions": synthetic_val_positions,
             "synthetic_min_moves": args.synthetic_min_moves,
             "synthetic_max_moves": args.synthetic_max_moves,
             "synthetic_min_ply": args.synthetic_min_ply,
@@ -314,6 +368,7 @@ def main() -> None:
         "model_name": str(encoder_kwargs["model_name"]),
         "feature_layer_indices": encoder_kwargs.get("feature_layer_indices"),
         "output_grid_size": encoder_kwargs.get("output_grid_size"),
+        "board_input_mode": args.board_input_mode,
         "device": str(device),
         "input_size": args.input_size,
         "epochs": args.epochs,
@@ -329,11 +384,11 @@ def main() -> None:
         "transformer_heads": args.transformer_heads,
         "transformer_ff_dim": args.transformer_ff_dim,
         "dropout": args.dropout,
-        "synthetic_train_positions": args.synthetic_train_positions,
+        "synthetic_train_positions": synthetic_train_positions,
         "real_train_positions": real_train_positions,
         "real_selection_positions": real_selection_positions,
         "manual_train_positions": manual_train_positions,
-        "synthetic_val_positions": args.synthetic_val_positions,
+        "synthetic_val_positions": synthetic_val_positions,
         "synthetic_min_moves": args.synthetic_min_moves,
         "synthetic_max_moves": args.synthetic_max_moves,
         "synthetic_min_ply": args.synthetic_min_ply,
@@ -351,7 +406,9 @@ def main() -> None:
         "real_selection_source_video_ids": real_selection_source_video_ids,
         "real_eval_positions": len(eval_dataset),
         "train_label_histogram": class_histogram(train_labels.reshape(-1)),
-        "synthetic_val_label_histogram": class_histogram(val_labels.reshape(-1)),
+        "synthetic_val_label_histogram": (
+            None if val_dataset is None else class_histogram(val_labels.reshape(-1))
+        ),
         "real_selection_label_histogram": (
             None
             if real_selection_labels is None
@@ -362,7 +419,9 @@ def main() -> None:
             {"probe_config": probe.checkpoint_config()}
         ),
         "train_metrics": train_metrics.to_dict(),
-        "synthetic_val_metrics": synth_val_metrics.to_dict(),
+        "synthetic_val_metrics": (
+            None if synth_val_metrics is None else synth_val_metrics.to_dict()
+        ),
         "real_selection_metrics": (
             None if real_selection_metrics is None else real_selection_metrics.to_dict()
         ),
@@ -377,6 +436,7 @@ def main() -> None:
         f"- encoder: `{args.encoder_type}`",
         f"- model: `{str(encoder_kwargs['model_name'])}`",
         f"- synthetic source: `{args.synthetic_source}`",
+        f"- board input mode: `{args.board_input_mode}`",
         f"- input size: `{args.input_size}`",
         f"- head type: `{args.head_type}`",
         f"- real loss weight: `{args.real_loss_weight}`",
@@ -386,20 +446,26 @@ def main() -> None:
         f"- selection dataset: `{selection_dataset_name}`",
         f"- selection metric: `{selection_metric}`",
         f"- best selection score: `{best_selection_score:.4f}`",
-        f"- synthetic train positions: `{args.synthetic_train_positions}`",
+        f"- synthetic train positions: `{synthetic_train_positions}`",
         f"- real train positions: `{real_train_positions}`",
         f"- real selection positions: `{real_selection_positions}`",
         f"- manual train positions: `{manual_train_positions}`",
-        f"- synthetic val positions: `{args.synthetic_val_positions}`",
+        f"- synthetic val positions: `{synthetic_val_positions}`",
         f"- real eval positions: `{len(eval_dataset)}`",
         f"- train square accuracy: `{train_metrics.accuracy:.4f}`",
-        f"- synthetic val square accuracy: `{synth_val_metrics.accuracy:.4f}`",
         f"- real eval square accuracy: `{real_eval_metrics.accuracy:.4f}`",
         f"- real eval non-empty accuracy: `{real_eval_metrics.non_empty_accuracy:.4f}`",
         f"- real eval macro F1: `{real_eval_metrics.macro_f1:.4f}`",
         f"- real eval board exact match: `{(real_eval_metrics.board_exact_match or 0.0):.4f}`",
         "",
     ]
+    if synth_val_metrics is not None:
+        summary_lines.extend(
+            [
+                f"- synthetic val square accuracy: `{synth_val_metrics.accuracy:.4f}`",
+                "",
+            ]
+        )
     if real_selection_metrics is not None:
         summary_lines.extend(
             [
@@ -432,7 +498,8 @@ def main() -> None:
         )
 
     logger.info("Train square accuracy: %.4f", train_metrics.accuracy)
-    logger.info("Synthetic val square accuracy: %.4f", synth_val_metrics.accuracy)
+    if synth_val_metrics is not None:
+        logger.info("Synthetic val square accuracy: %.4f", synth_val_metrics.accuracy)
     if real_selection_metrics is not None:
         logger.info("Real selection square accuracy: %.4f", real_selection_metrics.accuracy)
         logger.info(
@@ -450,6 +517,17 @@ def main() -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train physical board-context square probe")
     parser.add_argument("--device", type=str, default="auto")
+    parser.add_argument(
+        "--board-input-mode",
+        type=str,
+        choices=[
+            "rectified_board",
+            "oblique_square_context",
+            "oblique_board",
+            "oblique_board_crop",
+        ],
+        default="rectified_board",
+    )
     parser.add_argument(
         "--encoder-type",
         type=str,
@@ -573,6 +651,7 @@ def parse_feature_layer_indices(raw_value: str) -> list[int]:
 def build_synthetic_dataset(
     *,
     synthetic_source: str,
+    board_input_mode: str,
     num_positions: int,
     image_size: int,
     seed: int,
@@ -581,7 +660,17 @@ def build_synthetic_dataset(
     max_moves: int,
     min_ply: int,
 ) -> Dataset[tuple[torch.Tensor, torch.Tensor]]:
+    if board_input_mode == "oblique_square_context":
+        raise ValueError(
+            "Oblique square-context training currently requires pseudo-real or manual rows; "
+            "synthetic oblique crops are not wired into this script yet"
+        )
     if synthetic_source == "topdown":
+        if board_input_mode in {"oblique_board", "oblique_board_crop"}:
+            raise ValueError(
+                "oblique whole-board inputs require synthetic_source=rendered "
+                "when synthetic data is enabled"
+            )
         return PhysicalSyntheticBoardDataset(
             num_positions=num_positions,
             image_size=image_size,
@@ -592,15 +681,38 @@ def build_synthetic_dataset(
             min_ply=min_ply,
         )
     if synthetic_source == "rendered":
-        return PhysicalSyntheticRenderedBoardDataset(
-            num_positions=num_positions,
-            image_size=image_size,
-            seed=seed,
-            augment=augment,
-            min_moves=min_moves,
-            max_moves=max_moves,
+        rendered_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]] = (
+            PhysicalSyntheticRenderedBoardDataset(
+                num_positions=num_positions,
+                image_size=image_size,
+                seed=seed,
+                augment=augment,
+                min_moves=min_moves,
+                max_moves=max_moves,
+            )
         )
+        if board_input_mode == "oblique_board":
+            return PhysicalSyntheticObliqueBoardDataset(rendered_dataset)
+        return rendered_dataset
     raise ValueError(f"Unsupported synthetic source: {synthetic_source}")
+
+
+def build_eval_dataset(
+    *,
+    board_input_mode: str,
+    image_size: int,
+) -> Dataset[tuple[torch.Tensor, torch.Tensor]]:
+    if board_input_mode == "rectified_board":
+        return PhysicalEvalBoardDataset(image_size=image_size)
+    if board_input_mode == "oblique_square_context":
+        return PhysicalEvalObliqueSquareContextDataset(image_size=image_size)
+    if board_input_mode == "oblique_board":
+        return PhysicalEvalObliqueBoardDataset(image_size=image_size)
+    if board_input_mode == "oblique_board_crop":
+        return PhysicalObliqueBoardCropOnlyDataset(
+            PhysicalEvalObliqueBoardDataset(image_size=image_size)
+        )
+    raise ValueError(f"Unsupported board_input_mode: {board_input_mode}")
 
 
 def parse_source_video_ids(raw_value: str) -> list[str]:
@@ -613,9 +725,78 @@ def resolve_selection_metric(raw_metric: str, *, has_real_selection: bool) -> st
     return raw_metric
 
 
+def dataset_from_real_rows(
+    *,
+    board_input_mode: str,
+    clips_dir: Path,
+    image_size: int,
+    rows: list[PhysicalRealBoardRow],
+) -> Dataset[tuple[torch.Tensor, torch.Tensor]] | None:
+    if not rows:
+        return None
+    if board_input_mode == "rectified_board":
+        return PhysicalRealBoardDataset(
+            clips_dir=clips_dir,
+            image_size=image_size,
+            rows=rows,
+        )
+    if board_input_mode == "oblique_square_context":
+        oblique_rows = [
+            PhysicalRealObliqueBoardRow(
+                clip_path=row.clip_path,
+                frame_index=row.frame_index,
+                source_video_id=row.source_video_id,
+                source_channel_handle=row.source_channel_handle,
+                corners=row.corners,
+                labels=row.labels,
+            )
+            for row in rows
+        ]
+        return PhysicalRealObliqueSquareContextDataset(
+            rows=oblique_rows,
+            image_size=image_size,
+        )
+    if board_input_mode == "oblique_board":
+        oblique_rows = [
+            PhysicalRealObliqueBoardRow(
+                clip_path=row.clip_path,
+                frame_index=row.frame_index,
+                source_video_id=row.source_video_id,
+                source_channel_handle=row.source_channel_handle,
+                corners=row.corners,
+                labels=row.labels,
+            )
+            for row in rows
+        ]
+        return PhysicalRealObliqueBoardDataset(
+            rows=oblique_rows,
+            image_size=image_size,
+        )
+    if board_input_mode == "oblique_board_crop":
+        oblique_rows = [
+            PhysicalRealObliqueBoardRow(
+                clip_path=row.clip_path,
+                frame_index=row.frame_index,
+                source_video_id=row.source_video_id,
+                source_channel_handle=row.source_channel_handle,
+                corners=row.corners,
+                labels=row.labels,
+            )
+            for row in rows
+        ]
+        return PhysicalObliqueBoardCropOnlyDataset(
+            PhysicalRealObliqueBoardDataset(
+                rows=oblique_rows,
+                image_size=image_size,
+            )
+        )
+    raise ValueError(f"Unsupported board_input_mode: {board_input_mode}")
+
+
 def build_real_train_and_selection_datasets(
     *,
     clips_dir: Path,
+    board_input_mode: str,
     image_size: int,
     frame_stride: int,
     max_train_frames: int,
@@ -624,8 +805,8 @@ def build_real_train_and_selection_datasets(
     real_val_source_video_count: int,
     real_val_source_videos: list[str],
 ) -> tuple[
-    PhysicalRealBoardDataset | None,
-    PhysicalRealBoardDataset | None,
+    Dataset[tuple[torch.Tensor, torch.Tensor]] | None,
+    Dataset[tuple[torch.Tensor, torch.Tensor]] | None,
     list[str],
     list[str],
 ]:
@@ -650,20 +831,18 @@ def build_real_train_and_selection_datasets(
         selection_source_video_ids=selection_source_video_ids,
     )
     sampled_train_rows = sample_real_rows(train_rows, max_frames=max_train_frames, seed=seed)
-    real_train_dataset = None
-    if sampled_train_rows:
-        real_train_dataset = PhysicalRealBoardDataset(
-            clips_dir=clips_dir,
-            image_size=image_size,
-            rows=sampled_train_rows,
-        )
-    real_selection_dataset = None
-    if selection_rows:
-        real_selection_dataset = PhysicalRealBoardDataset(
-            clips_dir=clips_dir,
-            image_size=image_size,
-            rows=selection_rows,
-        )
+    real_train_dataset = dataset_from_real_rows(
+        board_input_mode=board_input_mode,
+        clips_dir=clips_dir,
+        image_size=image_size,
+        rows=sampled_train_rows,
+    )
+    real_selection_dataset = dataset_from_real_rows(
+        board_input_mode=board_input_mode,
+        clips_dir=clips_dir,
+        image_size=image_size,
+        rows=selection_rows,
+    )
     real_train_source_video_ids = sorted(
         {row.source_video_id for row in sampled_train_rows if row.source_video_id is not None}
     )
@@ -774,25 +953,67 @@ def build_board_weights(
 def build_manual_train_dataset(
     *,
     annotation_root: Path,
+    board_input_mode: str,
     image_size: int,
     max_boards: int,
     seed: int,
-) -> PhysicalManualTrainBoardDataset | None:
+) -> Dataset[tuple[torch.Tensor, torch.Tensor]] | None:
     if max_boards <= 0 or not annotation_root.exists():
         return None
-    dataset = PhysicalManualTrainBoardDataset(
-        annotation_root=annotation_root,
-        image_size=image_size,
-    )
-    if len(dataset.rows) <= max_boards:
+    if board_input_mode == "rectified_board":
+        dataset: Dataset[tuple[torch.Tensor, torch.Tensor]] = PhysicalManualTrainBoardDataset(
+            annotation_root=annotation_root,
+            image_size=image_size,
+        )
+    elif board_input_mode == "oblique_square_context":
+        dataset = PhysicalAnnotatedObliqueSquareContextDataset(
+            annotation_root=annotation_root,
+            image_size=image_size,
+        )
+    elif board_input_mode == "oblique_board":
+        dataset = PhysicalAnnotatedObliqueBoardDataset(
+            annotation_root=annotation_root,
+            image_size=image_size,
+        )
+    elif board_input_mode == "oblique_board_crop":
+        dataset = PhysicalObliqueBoardCropOnlyDataset(
+            PhysicalAnnotatedObliqueBoardDataset(
+                annotation_root=annotation_root,
+                image_size=image_size,
+            )
+        )
+    else:
+        raise ValueError(f"Unsupported board_input_mode: {board_input_mode}")
+    rows = getattr(dataset, "rows")
+    if len(rows) <= max_boards:
         return dataset
     rng = torch.Generator().manual_seed(seed)
-    indices = torch.randperm(len(dataset.rows), generator=rng).tolist()[:max_boards]
-    sampled_rows = [dataset.rows[index] for index in indices]
-    return PhysicalManualTrainBoardDataset(
-        annotation_root=annotation_root,
-        image_size=image_size,
-        rows=sampled_rows,
+    indices = torch.randperm(len(rows), generator=rng).tolist()[:max_boards]
+    sampled_rows = [rows[index] for index in indices]
+    if board_input_mode == "rectified_board":
+        return PhysicalManualTrainBoardDataset(
+            annotation_root=annotation_root,
+            image_size=image_size,
+            rows=sampled_rows,
+        )
+    if board_input_mode == "oblique_square_context":
+        return PhysicalAnnotatedObliqueSquareContextDataset(
+            annotation_root=annotation_root,
+            image_size=image_size,
+            rows=sampled_rows,
+        )
+    if board_input_mode == "oblique_board":
+        return PhysicalAnnotatedObliqueBoardDataset(
+            annotation_root=annotation_root,
+            image_size=image_size,
+            rows=sampled_rows,
+        )
+    return PhysicalObliqueBoardCropOnlyDataset(
+        PhysicalAnnotatedObliqueBoardDataset(
+            annotation_root=annotation_root,
+            image_size=image_size,
+            rows=sampled_rows,
+        )
     )
 
 
@@ -817,7 +1038,13 @@ def save_board_samples(
     row_metadata = getattr(dataset, "rows", None)
 
     for index in range(min(count, len(dataset))):
-        image_tensor, labels = dataset[index]
+        sample = dataset[index]
+        if len(sample) == 2:
+            image_tensor, labels = sample
+        elif len(sample) == 3:
+            image_tensor, labels, _corners = sample
+        else:
+            raise ValueError(f"Unsupported sample shape: {len(sample)} items")
         image_path = sample_dir / f"{index:03d}.png"
         tensor_to_rgb_image(image_tensor).save(image_path)
         payload: dict[str, object] = {
@@ -846,6 +1073,18 @@ def save_board_samples(
 
 def tensor_to_rgb_image(tensor: torch.Tensor) -> Image.Image:
     tensor = tensor.detach().cpu().to(torch.float32)
+    if tensor.ndim == 4:
+        tiles = [tensor_to_rgb_image(square_tensor) for square_tensor in tensor]
+        tile_width = max(tile.width for tile in tiles)
+        tile_height = max(tile.height for tile in tiles)
+        sheet = Image.new("RGB", (tile_width * 8, tile_height * 8), color=(245, 245, 245))
+        for index, tile in enumerate(tiles[:64]):
+            row = index // 8
+            col = index % 8
+            resized_tile = tile.resize((tile_width, tile_height))
+            sheet.paste(resized_tile, (col * tile_width, row * tile_height))
+        return sheet
+
     rgb = (tensor * _IMAGENET_STD + _IMAGENET_MEAN).clamp(0.0, 1.0)
     array = (rgb.permute(1, 2, 0).numpy() * 255.0).round().astype("uint8")
     return Image.fromarray(array)
@@ -882,6 +1121,7 @@ def promote_to_runtime_weights(
         "encoder_type": args.encoder_type,
         "feature_layer_indices": encoder_kwargs.get("feature_layer_indices"),
         "output_grid_size": encoder_kwargs.get("output_grid_size"),
+        "board_input_mode": args.board_input_mode,
         "input_size": args.input_size,
         "selection_dataset": selection_dataset_name,
         "selection_metric": selection_metric,

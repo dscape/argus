@@ -47,6 +47,33 @@ def test_detect_with_square_classifier_uses_sequence_reader_when_provided() -> N
     )
 
 
+def test_detect_with_square_classifier_passes_corners_to_sequence_reader() -> None:
+    calls: list[tuple[tuple[float, float], ...] | list[list[float]] | None] = []
+
+    class DummySequenceReader:
+        def read_fen_from_frame(
+            self,
+            _board_crop: np.ndarray,
+            *,
+            corners: tuple[tuple[float, float], ...] | list[list[float]],
+        ) -> str:
+            calls.append(corners)
+            return chess.STARTING_BOARD_FEN
+
+    result = _detect_with_square_classifier(
+        np.zeros((32, 32, 3), dtype=np.uint8),
+        device="cpu",
+        corners=((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
+        sequence_reader=DummySequenceReader(),
+    )
+
+    assert result == BoardState(
+        fen=chess.STARTING_BOARD_FEN,
+        method="physical_square_classifier",
+    )
+    assert calls == [((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))]
+
+
 def test_detect_pieces_falls_back_to_vlm_when_physical_classifier_has_no_model(
     monkeypatch,
 ) -> None:

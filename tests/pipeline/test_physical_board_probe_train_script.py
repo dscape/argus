@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pipeline.physical.real_board_data import PhysicalRealBoardRow
 from scripts.train_physical_board_probe import (
+    build_synthetic_dataset,
     resolve_selection_metric,
     sample_real_rows,
     select_real_val_source_video_ids,
@@ -58,3 +59,22 @@ def test_sample_real_rows_respects_max_frames() -> None:
 
     assert len(sampled_rows) == 3
     assert {row.frame_index for row in sampled_rows}.issubset({0, 1, 2, 3, 4})
+
+
+def test_build_synthetic_dataset_supports_oblique_board_with_rendered_source() -> None:
+    dataset = build_synthetic_dataset(
+        synthetic_source="rendered",
+        board_input_mode="oblique_board",
+        num_positions=1,
+        image_size=64,
+        seed=7,
+        augment=False,
+        min_moves=12,
+        max_moves=20,
+        min_ply=8,
+    )
+
+    image, labels, corners = dataset[0]
+    assert image.shape == (3, 64, 64)
+    assert labels.shape == (64,)
+    assert corners.shape == (4, 2)

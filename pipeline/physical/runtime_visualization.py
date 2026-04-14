@@ -1,4 +1,4 @@
-"""Runtime visualizations for the held-out physical-board eval set."""
+"""Runtime visualizations for the held-out physical-board validation set."""
 
 from __future__ import annotations
 
@@ -14,8 +14,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 from pipeline.physical.board_data import PhysicalEvalBoardDataset, PhysicalEvalBoardRow
 from pipeline.physical.square_classifier import (
-    PhysicalBoardSequenceReader,
-    read_board_observation_from_frame,
+    PhysicalBoardLogitsSequenceReader,
+    board_observation_from_logits,
+    read_board_logits_batch_from_frames,
 )
 from pipeline.shared import SQUARE_CLASS_NAMES
 
@@ -32,6 +33,7 @@ _GRID_COLOR = (40, 40, 40)
 _HEADER_BG = (248, 248, 248)
 _PANEL_BG = (255, 255, 255)
 _CONTACT_SHEET_BG = (245, 245, 245)
+_INFERENCE_BATCH_SIZE = 16
 
 _CLASS_ID_TO_SYMBOL = {
     class_id: ("" if name == "empty" else name)
@@ -77,7 +79,7 @@ def visualize_runtime_sequence(
     output_dir: str | Path,
     panel_size: int = 240,
 ) -> dict[str, Any]:
-    """Render a frame-by-frame runtime visualization for one held-out eval clip."""
+    """Render a frame-by-frame runtime visualization for one held-out validation clip."""
     if frame_count <= 0:
         raise ValueError(f"frame_count must be > 0, got {frame_count}")
     if panel_size <= 0:
@@ -261,74 +263,117 @@ def _collect_visualized_frames(
         end_frame = frame_start + frame_count - 1
         raise ValueError(f"No annotated eval rows found for frames {frame_start}..{end_frame}")
 
-    sequence_reader = PhysicalBoardSequenceReader(device=device)
+    return _collect_visualized_frames_for_indices(
+        rows,
+        selected_frame_indices={
+            int(row.frame_index)
+            for row in selected_rows
+            if row.frame_index is not None
+        },
+        device=device,
+    )
+
+
+def _collect_visualized_frames_for_indices(
+    rows: list[PhysicalEvalBoardRow],
+    *,
+    selected_frame_indices: set[int],
+    device: str,
+) -> list[VisualizedRuntimeFrame]:
+    if not selected_frame_indices:
+        return []
+
+    available_frame_indices = {
+        int(row.frame_index)
+        for row in rows
+        if row.frame_index is not None
+    }
+    missing_frame_indices = sorted(selected_frame_indices - available_frame_indices)
+    if missing_frame_indices:
+        missing = ", ".join(str(index) for index in missing_frame_indices)
+        raise ValueError(f"No annotated eval rows found for frames {missing}")
+
+    sequence_reader = PhysicalBoardLogitsSequenceReader(device=device)
     visualized_frames: list[VisualizedRuntimeFrame] = []
     previous_gt: tuple[int, ...] | None = None
     previous_stateless: tuple[int, ...] | None = None
     previous_temporal: tuple[int, ...] | None = None
+    max_selected_frame_index = max(selected_frame_indices)
 
-    selected_frame_indices = {
-        int(row.frame_index)
-        for row in selected_rows
-        if row.frame_index is not None
-    }
+    relevant_rows = [
+        row
+        for row in rows
+        if row.frame_index is not None and int(row.frame_index) <= max_selected_frame_index
+    ]
+    for start in range(0, len(relevant_rows), _INFERENCE_BATCH_SIZE):
+        chunk_rows = relevant_rows[start : start + _INFERENCE_BATCH_SIZE]
+        chunk_images = [_load_board_image(row) for row in chunk_rows]
+        stateless_logits_list = read_board_logits_batch_from_frames(
+            chunk_images,
+            device=device,
+            batch_size=_INFERENCE_BATCH_SIZE,
+        )
+        if stateless_logits_list is None:
+            raise ValueError("Runtime reader failed to load physical board logits")
 
-    for row in rows:
-        image_bgr = _load_board_image(row)
-        stateless_observation = read_board_observation_from_frame(image_bgr, device=device)
-        temporal_observation = sequence_reader.read_board_observation_from_frame(image_bgr)
-        if stateless_observation is None or temporal_observation is None:
-            raise ValueError(f"Runtime reader failed for {row.board_path}")
+        for row, image_bgr, stateless_logits in zip(
+            chunk_rows,
+            chunk_images,
+            stateless_logits_list,
+        ):
+            stateless_observation = board_observation_from_logits(stateless_logits)
+            temporal_logits = sequence_reader.smooth_logits(stateless_logits)
+            temporal_observation = board_observation_from_logits(temporal_logits)
 
-        gt_class_ids = tuple(int(value) for value in row.labels)
-        stateless_class_ids = tuple(_fen_to_class_ids(stateless_observation.fen))
-        temporal_class_ids = tuple(_fen_to_class_ids(temporal_observation.fen))
+            gt_class_ids = tuple(int(value) for value in row.labels)
+            stateless_class_ids = tuple(_fen_to_class_ids(stateless_observation.fen))
+            temporal_class_ids = tuple(_fen_to_class_ids(temporal_observation.fen))
 
-        if row.frame_index in selected_frame_indices:
-            crop_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-            visualized_frames.append(
-                VisualizedRuntimeFrame(
-                    frame_index=int(row.frame_index or 0),
-                    annotation_id=row.annotation_id,
-                    board_path=row.board_path,
-                    crop_rgb=crop_rgb,
-                    gt_class_ids=gt_class_ids,
-                    stateless_class_ids=stateless_class_ids,
-                    temporal_class_ids=temporal_class_ids,
-                    stateless_confidences=tuple(stateless_observation.square_confidences),
-                    temporal_confidences=tuple(temporal_observation.square_confidences),
-                    stateless_error_count=_count_differences(stateless_class_ids, gt_class_ids),
-                    temporal_error_count=_count_differences(temporal_class_ids, gt_class_ids),
-                    gt_change_count=(
-                        None
-                        if previous_gt is None
-                        else _count_differences(previous_gt, gt_class_ids)
-                    ),
-                    stateless_change_count=(
-                        None
-                        if previous_stateless is None
-                        else _count_differences(previous_stateless, stateless_class_ids)
-                    ),
-                    temporal_change_count=(
-                        None
-                        if previous_temporal is None
-                        else _count_differences(previous_temporal, temporal_class_ids)
-                    ),
-                    gt_changed_mask=_changed_mask(gt_class_ids, previous_gt),
-                    stateless_changed_mask=_changed_mask(
-                        stateless_class_ids,
-                        previous_stateless,
-                    ),
-                    temporal_changed_mask=_changed_mask(
-                        temporal_class_ids,
-                        previous_temporal,
-                    ),
+            if row.frame_index in selected_frame_indices:
+                crop_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+                visualized_frames.append(
+                    VisualizedRuntimeFrame(
+                        frame_index=int(row.frame_index or 0),
+                        annotation_id=row.annotation_id,
+                        board_path=row.board_path,
+                        crop_rgb=crop_rgb,
+                        gt_class_ids=gt_class_ids,
+                        stateless_class_ids=stateless_class_ids,
+                        temporal_class_ids=temporal_class_ids,
+                        stateless_confidences=tuple(stateless_observation.square_confidences),
+                        temporal_confidences=tuple(temporal_observation.square_confidences),
+                        stateless_error_count=_count_differences(stateless_class_ids, gt_class_ids),
+                        temporal_error_count=_count_differences(temporal_class_ids, gt_class_ids),
+                        gt_change_count=(
+                            None
+                            if previous_gt is None
+                            else _count_differences(previous_gt, gt_class_ids)
+                        ),
+                        stateless_change_count=(
+                            None
+                            if previous_stateless is None
+                            else _count_differences(previous_stateless, stateless_class_ids)
+                        ),
+                        temporal_change_count=(
+                            None
+                            if previous_temporal is None
+                            else _count_differences(previous_temporal, temporal_class_ids)
+                        ),
+                        gt_changed_mask=_changed_mask(gt_class_ids, previous_gt),
+                        stateless_changed_mask=_changed_mask(
+                            stateless_class_ids,
+                            previous_stateless,
+                        ),
+                        temporal_changed_mask=_changed_mask(
+                            temporal_class_ids,
+                            previous_temporal,
+                        ),
+                    )
                 )
-            )
 
-        previous_gt = gt_class_ids
-        previous_stateless = stateless_class_ids
-        previous_temporal = temporal_class_ids
+            previous_gt = gt_class_ids
+            previous_stateless = stateless_class_ids
+            previous_temporal = temporal_class_ids
 
     return visualized_frames
 

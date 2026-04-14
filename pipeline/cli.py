@@ -188,7 +188,7 @@ def cmd_split_clips(args):
 
 
 def cmd_physical_split_clips(args):
-    """Prepare a physical train/val dataset while excluding held-out eval videos."""
+    """Prepare a physical train/val dataset while excluding held-out validation videos."""
     from pipeline.physical.training_dataset import export_physical_training_dataset
 
     manifest = export_physical_training_dataset(
@@ -1546,7 +1546,7 @@ def main():
     # physical-split-clips
     p = subparsers.add_parser(
         "physical-split-clips",
-        help="Prepare a physical train/val split while excluding held-out eval videos",
+        help="Prepare a physical train/val split while excluding held-out validation videos",
     )
     p.add_argument(
         "--clips-dir",

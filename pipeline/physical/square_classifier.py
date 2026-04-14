@@ -14,10 +14,13 @@ from argus.model.vision_encoder import VisionEncoder
 from pipeline.physical.board_data import preprocess_board_image
 from pipeline.physical.board_probe import (
     PhysicalBoardStateEnsembleProbe,
-    build_board_state_probe,
     board_probe_config_from_checkpoint,
+    build_board_state_probe,
     dino_patches_to_square_tokens,
+    sample_oblique_square_tokens_from_patch_tokens,
 )
+from pipeline.physical.oblique_board_data import preprocess_oblique_board_image
+from pipeline.physical.oblique_square_context import extract_oblique_square_context_crops
 from pipeline.physical.square_data import (
     CLASS_NAMES,
     INPUT_SIZE,
@@ -48,15 +51,22 @@ _METADATA_UNSET = object()
 _cached_metadata: dict[str, Any] | None | object = _METADATA_UNSET
 
 
-def read_board_observation_from_frame(
+def read_board_logits_from_frame(
     board_crop: np.ndarray,
     *,
-    timestamp_seconds: float = 0.0,
+    corners: tuple[tuple[float, float], ...] | list[list[float]] | None = None,
     device: str = "cpu",
-) -> BoardObservation | None:
-    """Read a rectified physical board crop into a source-agnostic observation."""
+    weights_path: str | Path | None = None,
+) -> torch.Tensor | None:
+    """Read raw per-square logits from one physical board crop."""
     try:
-        checkpoint, encoder, probe = _get_runtime_model(device=device)
+        if weights_path is None:
+            checkpoint, encoder, probe = _get_runtime_model(device=device)
+        else:
+            checkpoint, encoder, probe = _get_runtime_model(
+                device=device,
+                weights_path=weights_path,
+            )
     except FileNotFoundError:
         return None
 
@@ -65,24 +75,148 @@ def read_board_observation_from_frame(
         encoder=encoder,
         probe=probe,
         board_crop=board_crop,
+        corners=corners,
     )
-    logits = apply_board_logit_bias(logits, _load_runtime_logit_bias())
-    return _board_observation_from_logits(logits, timestamp_seconds=timestamp_seconds)
+    return apply_board_logit_bias(logits, _load_runtime_logit_bias(weights_path))
+
+
+def read_board_logits_batch_from_frames(
+    board_crops: list[np.ndarray],
+    *,
+    corners_list: list[tuple[tuple[float, float], ...] | list[list[float]] | None] | None = None,
+    device: str = "cpu",
+    weights_path: str | Path | None = None,
+    batch_size: int = 16,
+) -> list[torch.Tensor] | None:
+    """Read raw per-square logits from multiple physical board crops."""
+    if not board_crops:
+        return []
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be > 0, got {batch_size}")
+
+    try:
+        if weights_path is None:
+            checkpoint, encoder, probe = _get_runtime_model(device=device)
+        else:
+            checkpoint, encoder, probe = _get_runtime_model(
+                device=device,
+                weights_path=weights_path,
+            )
+    except FileNotFoundError:
+        return None
+
+    logits_list = _predict_board_logits_batch(
+        checkpoint=checkpoint,
+        encoder=encoder,
+        probe=probe,
+        board_crops=board_crops,
+        corners_list=corners_list,
+        batch_size=batch_size,
+    )
+    logit_bias = _load_runtime_logit_bias(weights_path)
+    return [apply_board_logit_bias(logits, logit_bias) for logits in logits_list]
+
+
+def board_observation_from_logits(
+    square_logits: torch.Tensor,
+    *,
+    timestamp_seconds: float = 0.0,
+) -> BoardObservation:
+    return _board_observation_from_logits(square_logits, timestamp_seconds=timestamp_seconds)
+
+
+def read_board_observation_from_frame(
+    board_crop: np.ndarray,
+    *,
+    corners: tuple[tuple[float, float], ...] | list[list[float]] | None = None,
+    timestamp_seconds: float = 0.0,
+    device: str = "cpu",
+    weights_path: str | Path | None = None,
+) -> BoardObservation | None:
+    """Read a rectified physical board crop into a source-agnostic observation."""
+    logits = read_board_logits_from_frame(
+        board_crop,
+        corners=corners,
+        device=device,
+        weights_path=weights_path,
+    )
+    if logits is None:
+        return None
+    return board_observation_from_logits(logits, timestamp_seconds=timestamp_seconds)
 
 
 def read_fen_from_frame(
     board_crop: np.ndarray,
     *,
+    corners: tuple[tuple[float, float], ...] | list[list[float]] | None = None,
     timestamp_seconds: float = 0.0,
     device: str = "cpu",
+    weights_path: str | Path | None = None,
 ) -> str | None:
     """Return the physical-board FEN when runtime weights are available."""
     observation = read_board_observation_from_frame(
         board_crop,
+        corners=corners,
         timestamp_seconds=timestamp_seconds,
         device=device,
+        weights_path=weights_path,
     )
     return None if observation is None else observation.fen
+
+
+class PhysicalBoardLogitsSequenceReader:
+    """Stateful physical-board logits reader with optional causal smoothing."""
+
+    def __init__(
+        self,
+        *,
+        device: str = "cpu",
+        ema_alpha: float | None = None,
+        weights_path: str | Path | None = None,
+    ) -> None:
+        self.device = device
+        self.weights_path = None if weights_path is None else Path(weights_path)
+        self._smoother = _build_temporal_smoother(
+            ema_alpha=ema_alpha,
+            weights_path=self.weights_path,
+        )
+        self._logit_bias = _load_runtime_logit_bias(self.weights_path)
+
+    def reset(self) -> None:
+        if self._smoother is not None:
+            self._smoother.reset()
+
+    def read_board_logits_from_frame(
+        self,
+        board_crop: np.ndarray,
+        *,
+        corners: tuple[tuple[float, float], ...] | list[list[float]] | None = None,
+    ) -> torch.Tensor | None:
+        try:
+            if self.weights_path is None:
+                checkpoint, encoder, probe = _get_runtime_model(device=self.device)
+            else:
+                checkpoint, encoder, probe = _get_runtime_model(
+                    device=self.device,
+                    weights_path=self.weights_path,
+                )
+        except FileNotFoundError:
+            return None
+
+        logits = _predict_board_logits(
+            checkpoint=checkpoint,
+            encoder=encoder,
+            probe=probe,
+            board_crop=board_crop,
+            corners=corners,
+        )
+        logits = apply_board_logit_bias(logits, self._logit_bias)
+        return self.smooth_logits(logits)
+
+    def smooth_logits(self, logits: torch.Tensor) -> torch.Tensor:
+        if self._smoother is not None:
+            return self._smoother.update(logits)
+        return logits
 
 
 class PhysicalBoardSequenceReader:
@@ -93,45 +227,40 @@ class PhysicalBoardSequenceReader:
         *,
         device: str = "cpu",
         ema_alpha: float | None = None,
+        weights_path: str | Path | None = None,
     ) -> None:
-        self.device = device
-        self._smoother = _build_temporal_smoother(ema_alpha=ema_alpha)
-        self._logit_bias = _load_runtime_logit_bias()
+        self._logits_reader = PhysicalBoardLogitsSequenceReader(
+            device=device,
+            ema_alpha=ema_alpha,
+            weights_path=weights_path,
+        )
+        self._smoother = self._logits_reader._smoother
 
     def reset(self) -> None:
-        if self._smoother is not None:
-            self._smoother.reset()
+        self._logits_reader.reset()
 
     def read_board_observation_from_frame(
         self,
         board_crop: np.ndarray,
         *,
+        corners: tuple[tuple[float, float], ...] | list[list[float]] | None = None,
         timestamp_seconds: float = 0.0,
     ) -> BoardObservation | None:
-        try:
-            checkpoint, encoder, probe = _get_runtime_model(device=self.device)
-        except FileNotFoundError:
+        logits = self._logits_reader.read_board_logits_from_frame(board_crop, corners=corners)
+        if logits is None:
             return None
-
-        logits = _predict_board_logits(
-            checkpoint=checkpoint,
-            encoder=encoder,
-            probe=probe,
-            board_crop=board_crop,
-        )
-        logits = apply_board_logit_bias(logits, self._logit_bias)
-        if self._smoother is not None:
-            logits = self._smoother.update(logits)
-        return _board_observation_from_logits(logits, timestamp_seconds=timestamp_seconds)
+        return board_observation_from_logits(logits, timestamp_seconds=timestamp_seconds)
 
     def read_fen_from_frame(
         self,
         board_crop: np.ndarray,
         *,
+        corners: tuple[tuple[float, float], ...] | list[list[float]] | None = None,
         timestamp_seconds: float = 0.0,
     ) -> str | None:
         observation = self.read_board_observation_from_frame(
             board_crop,
+            corners=corners,
             timestamp_seconds=timestamp_seconds,
         )
         return None if observation is None else observation.fen
@@ -140,13 +269,14 @@ class PhysicalBoardSequenceReader:
 def _build_temporal_smoother(
     *,
     ema_alpha: float | None,
+    weights_path: str | Path | None = None,
 ) -> BoardLogitsExponentialSmoother | AdaptiveBoardLogitsExponentialSmoother | None:
     if ema_alpha is not None:
         if ema_alpha <= 0.0:
             return None
         return BoardLogitsExponentialSmoother(alpha=ema_alpha)
 
-    metadata = load_metadata()
+    metadata = load_metadata() if weights_path is None else load_metadata(weights_path)
     if metadata is not None:
         smoothing_config = metadata.get("recommended_temporal_smoothing")
         if isinstance(smoothing_config, dict):
@@ -159,9 +289,7 @@ def _build_temporal_smoother(
                 )
             if mode == "adaptive_ema":
                 return AdaptiveBoardLogitsExponentialSmoother(
-                    low_alpha=float(
-                        smoothing_config.get("low_alpha", _DEFAULT_TEMPORAL_LOW_ALPHA)
-                    ),
+                    low_alpha=float(smoothing_config.get("low_alpha", _DEFAULT_TEMPORAL_LOW_ALPHA)),
                     high_alpha=float(
                         smoothing_config.get("high_alpha", _DEFAULT_TEMPORAL_HIGH_ALPHA)
                     ),
@@ -234,15 +362,60 @@ def _predict_board_logits(
     encoder: VisionEncoder,
     probe: nn.Module,
     board_crop: np.ndarray,
+    corners: tuple[tuple[float, float], ...] | list[list[float]] | None = None,
 ) -> torch.Tensor:
     architecture = str(checkpoint.get("architecture", "square_probe"))
     input_size = int(checkpoint.get("input_size", INPUT_SIZE))
+    board_input_mode = _board_input_mode_from_checkpoint(checkpoint)
     probe_device = next(probe.parameters()).device
     encoder.eval()
     probe.eval()
 
     with torch.no_grad():
         if architecture in {"board_probe", "board_probe_ensemble"}:
+            if board_input_mode == "oblique_square_context":
+                if corners is None:
+                    raise ValueError(
+                        "Oblique square-context runtime requires board corners for the frame"
+                    )
+                square_crops = extract_oblique_square_context_crops(board_crop, corners)
+                batch = torch.stack(
+                    [preprocess_square_image(crop, size=input_size) for crop in square_crops],
+                    dim=0,
+                )
+                embeddings = encoder.forward_pooled(batch.to(probe_device)).unsqueeze(0)
+                return probe(embeddings).squeeze(0).cpu()
+
+            if board_input_mode == "oblique_board":
+                if corners is None:
+                    raise ValueError("Oblique-board runtime requires board corners for the frame")
+                board_tensor, corners_tensor = preprocess_oblique_board_image(
+                    board_crop,
+                    corners,
+                    size=input_size,
+                )
+                patch_tokens = encoder.forward_patches(board_tensor.unsqueeze(0).to(probe_device))
+                square_tokens = sample_oblique_square_tokens_from_patch_tokens(
+                    patch_tokens.cpu(),
+                    corners=corners_tensor.unsqueeze(0),
+                    image_size=input_size,
+                )
+                return probe(square_tokens.to(probe_device)).squeeze(0).cpu()
+
+            if board_input_mode == "oblique_board_crop":
+                if corners is None:
+                    raise ValueError(
+                        "Oblique-board-crop runtime requires board corners for the frame"
+                    )
+                board_tensor, _ = preprocess_oblique_board_image(
+                    board_crop,
+                    corners,
+                    size=input_size,
+                )
+                patch_tokens = encoder.forward_patches(board_tensor.unsqueeze(0).to(probe_device))
+                square_tokens = dino_patches_to_square_tokens(patch_tokens)
+                return probe(square_tokens).squeeze(0).cpu()
+
             board_tensor = preprocess_board_image(board_crop, size=input_size).unsqueeze(0)
             board_tensor = board_tensor.to(probe_device)
             patch_tokens = encoder.forward_patches(board_tensor)
@@ -250,7 +423,14 @@ def _predict_board_logits(
             logits = probe(square_tokens).squeeze(0).cpu()
             return logits
 
-        square_crops = split_rectified_board_into_squares(board_crop)
+        if board_input_mode == "oblique_square_context":
+            if corners is None:
+                raise ValueError(
+                    "Oblique square-context runtime requires board corners for the frame"
+                )
+            square_crops = extract_oblique_square_context_crops(board_crop, corners)
+        else:
+            square_crops = split_rectified_board_into_squares(board_crop)
         batch = torch.stack(
             [preprocess_square_image(crop, size=input_size) for crop in square_crops],
             dim=0,
@@ -260,18 +440,105 @@ def _predict_board_logits(
         return probe(embeddings).cpu()
 
 
+def _predict_board_logits_batch(
+    *,
+    checkpoint: dict[str, Any],
+    encoder: VisionEncoder,
+    probe: nn.Module,
+    board_crops: list[np.ndarray],
+    corners_list: list[tuple[tuple[float, float], ...] | list[list[float]] | None] | None,
+    batch_size: int,
+) -> list[torch.Tensor]:
+    if not board_crops:
+        return []
 
-def _get_runtime_model(*, device: str) -> tuple[dict[str, Any], VisionEncoder, nn.Module]:
+    if corners_list is None:
+        corners_per_board = [None] * len(board_crops)
+    else:
+        if len(corners_list) != len(board_crops):
+            raise ValueError(
+                "corners_list length must match board_crops length, got "
+                f"{len(corners_list)} and {len(board_crops)}"
+            )
+        corners_per_board = corners_list
+
+    architecture = str(checkpoint.get("architecture", "square_probe"))
+    input_size = int(checkpoint.get("input_size", INPUT_SIZE))
+    board_input_mode = _board_input_mode_from_checkpoint(checkpoint)
+    probe_device = next(probe.parameters()).device
+    encoder.eval()
+    probe.eval()
+
+    with torch.no_grad():
+        if (
+            architecture in {"board_probe", "board_probe_ensemble"}
+            and board_input_mode == "rectified_board"
+        ):
+            tensors = [
+                preprocess_board_image(board_crop, size=input_size)
+                for board_crop in board_crops
+            ]
+            logits_list: list[torch.Tensor] = []
+            for start in range(0, len(tensors), batch_size):
+                batch = torch.stack(tensors[start : start + batch_size], dim=0).to(probe_device)
+                patch_tokens = encoder.forward_patches(batch)
+                square_tokens = dino_patches_to_square_tokens(patch_tokens)
+                logits_batch = probe(square_tokens).cpu()
+                logits_list.extend(logits_batch.unbind(0))
+            return logits_list
+
+        if architecture == "square_probe" and board_input_mode != "oblique_square_context":
+            logits_list = []
+            for start in range(0, len(board_crops), batch_size):
+                chunk_crops = board_crops[start : start + batch_size]
+                square_batches = [
+                    split_rectified_board_into_squares(board_crop)
+                    for board_crop in chunk_crops
+                ]
+                batch = torch.stack(
+                    [
+                        preprocess_square_image(square_crop, size=input_size)
+                        for square_crops in square_batches
+                        for square_crop in square_crops
+                    ],
+                    dim=0,
+                ).to(probe_device)
+                logits = probe(encoder.forward_pooled(batch)).cpu()
+                for board_index in range(len(chunk_crops)):
+                    offset = board_index * 64
+                    logits_list.append(logits[offset : offset + 64])
+            return logits_list
+
+        return [
+            _predict_board_logits(
+                checkpoint=checkpoint,
+                encoder=encoder,
+                probe=probe,
+                board_crop=board_crop,
+                corners=corners,
+            )
+            for board_crop, corners in zip(board_crops, corners_per_board)
+        ]
+
+
+def _get_runtime_model(
+    *,
+    device: str,
+    weights_path: str | Path | None = None,
+) -> tuple[dict[str, Any], VisionEncoder, nn.Module]:
     global _cached_model, _cached_weights_path, _cached_device
-    weights_path = _resolve_weights_path()
+    if weights_path is None:
+        resolved_weights_path = _resolve_weights_path()
+    else:
+        resolved_weights_path = _resolve_weights_path(weights_path)
     if (
         _cached_model is not None
-        and _cached_weights_path == weights_path
+        and _cached_weights_path == resolved_weights_path
         and _cached_device == device
     ):
         return _cached_model
 
-    checkpoint = load_probe_checkpoint(weights_path)
+    checkpoint = load_probe_checkpoint(resolved_weights_path)
     encoder = VisionEncoder(**_encoder_kwargs_from_checkpoint(checkpoint)).to(torch.device(device))
     probe = _build_probe_from_checkpoint(checkpoint, embed_dim=encoder.embed_dim)
     if str(checkpoint.get("architecture", "square_probe")) != "board_probe_ensemble":
@@ -279,7 +546,7 @@ def _get_runtime_model(*, device: str) -> tuple[dict[str, Any], VisionEncoder, n
     probe.to(torch.device(device))
 
     _cached_model = (checkpoint, encoder, probe)
-    _cached_weights_path = weights_path
+    _cached_weights_path = resolved_weights_path
     _cached_device = device
     return _cached_model
 
@@ -313,6 +580,12 @@ def _build_probe_from_checkpoint(checkpoint: dict[str, Any], *, embed_dim: int) 
     return PhysicalSquareLinearProbe(embed_dim)
 
 
+def _board_input_mode_from_checkpoint(checkpoint: dict[str, Any]) -> str:
+    metadata = checkpoint.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return str(metadata.get("board_input_mode", "rectified_board"))
+
 
 def _encoder_kwargs_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:
     metadata = checkpoint.get("metadata")
@@ -338,14 +611,20 @@ def _encoder_kwargs_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any
     }
 
 
-def _resolve_weights_path() -> Path:
-    if not _DEFAULT_WEIGHTS_PATH.exists():
-        raise FileNotFoundError("No physical square-classifier weights found")
-    return _DEFAULT_WEIGHTS_PATH
+def _resolve_weights_path(weights_path: str | Path | None = None) -> Path:
+    if weights_path is None:
+        resolved = _DEFAULT_WEIGHTS_PATH
+    else:
+        resolved = Path(weights_path)
+        if not resolved.is_absolute():
+            resolved = (_PROJECT_ROOT / resolved).resolve()
+    if not resolved.exists():
+        raise FileNotFoundError(f"No physical square-classifier weights found: {resolved}")
+    return resolved
 
 
-def _load_runtime_logit_bias() -> list[float] | None:
-    metadata = load_metadata()
+def _load_runtime_logit_bias(weights_path: str | Path | None = None) -> list[float] | None:
+    metadata = load_metadata() if weights_path is None else load_metadata(weights_path)
     if metadata is None:
         return None
     raw_bias = metadata.get("class_logit_bias")
@@ -356,8 +635,12 @@ def _load_runtime_logit_bias() -> list[float] | None:
     return [float(value) for value in raw_bias]
 
 
-def load_metadata() -> dict[str, Any] | None:
+def load_metadata(weights_path: str | Path | None = None) -> dict[str, Any] | None:
     global _cached_metadata
+    if weights_path is not None:
+        checkpoint = load_probe_checkpoint(_resolve_weights_path(weights_path))
+        metadata = checkpoint.get("metadata")
+        return metadata if isinstance(metadata, dict) else None
     if _cached_metadata is not _METADATA_UNSET:
         return None if _cached_metadata is None else _cached_metadata
     metadata_path = WEIGHTS_DIR / "metadata.json"

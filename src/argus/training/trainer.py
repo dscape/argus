@@ -201,6 +201,12 @@ class Trainer:
             detect_targets = batch["detect_targets"].to(self.device)
             legal_masks = batch["legal_masks"].to(self.device)
             move_mask = batch["move_mask"].to(self.device)
+            move_loss_mask = batch.get("move_loss_mask")
+            if move_loss_mask is not None:
+                move_loss_mask = move_loss_mask.to(self.device)
+            move_loss_weights = batch.get("move_loss_weights")
+            if move_loss_weights is not None:
+                move_loss_weights = move_loss_weights.to(self.device)
             square_targets = batch.get("square_targets")
             if square_targets is not None:
                 square_targets = square_targets.to(self.device)
@@ -218,6 +224,8 @@ class Trainer:
                     move_targets=move_targets,
                     detect_targets=detect_targets,
                     move_mask=move_mask,
+                    move_loss_mask=move_loss_mask,
+                    move_loss_weights=move_loss_weights,
                     legal_masks=legal_masks,
                     square_logits=output.square_logits,
                     square_targets=square_targets,
@@ -293,6 +301,12 @@ class Trainer:
             detect_targets = batch["detect_targets"].to(self.device)
             legal_masks = batch["legal_masks"].to(self.device)
             move_mask = batch["move_mask"].to(self.device)
+            move_loss_mask = batch.get("move_loss_mask")
+            if move_loss_mask is not None:
+                move_loss_mask = move_loss_mask.to(self.device)
+            move_loss_weights = batch.get("move_loss_weights")
+            if move_loss_weights is not None:
+                move_loss_weights = move_loss_weights.to(self.device)
             square_targets = batch.get("square_targets")
             if square_targets is not None:
                 square_targets = square_targets.to(self.device)
@@ -308,6 +322,8 @@ class Trainer:
                 move_targets=move_targets,
                 detect_targets=detect_targets,
                 move_mask=move_mask,
+                move_loss_mask=move_loss_mask,
+                move_loss_weights=move_loss_weights,
                 legal_masks=legal_masks,
                 square_logits=output.square_logits,
                 square_targets=square_targets,

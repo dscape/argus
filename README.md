@@ -852,7 +852,7 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 | `analyze-video` | — | Analyze a local video into PGN + annotated output | `VIDEO`, `--reader overlay\|hybrid`, `--scene none\|vlm`, `--fps`, `--device`, `--output` |
 | `generate-clips` | `make generate-clips` | Generate .pt training clips (with hard cut detection) | `--channel @Handle`, `--video-id ID`, `--limit N`, `--min-moves N` |
 | `split-clips` | `make split-clips` | Create a video-disjoint train/val dataset from generated clips | `--clips-dir DIR`, `--out-dir DIR`, `--val-fraction FLOAT`, `--seed N`, `--copy` |
-| `physical-split-clips` | — | Create a physical train/val split while excluding held-out physical eval source videos | `--clips-dir DIR`, `--out-dir DIR`, `--val-fraction FLOAT`, `--seed N`, `--copy` |
+| `physical-split-clips` | — | Create a physical train/val split while excluding held-out physical validation source videos | `--clips-dir DIR`, `--out-dir DIR`, `--val-fraction FLOAT`, `--seed N`, `--copy` |
 | `real-data-overview` | `make real-data-overview` | Audit local downloaded videos and report why each one is or is not ready for clip generation | `--clips-dir DIR`, `--limit N`, `--max-file-size-mb FLOAT`, `--json` |
 | `real-data-process` | `make real-data-process` | Generate clips from the top ready local real videos | `--clips-dir DIR`, `--limit N`, `--min-moves N`, `--max-file-size-mb FLOAT` |
 
@@ -875,7 +875,7 @@ All pipeline commands: `python -m pipeline.cli <command> [options]`. Add `-v` fo
 | `overlay-yolo-export` | Export bbox training labels as a YOLO dataset | `--out-dir DIR`, `--val-fraction FLOAT`, `--seed N` |
 | `overlay-yolo-train` | Train the default YOLO overlay detector | `--data PATH`, `--model weights/yolo_base/yolo11n.pt`, `--epochs N`, `--imgsz N`, `--batch N`, `--device`, `--project`, `--name` |
 | `inspect-clip` | Inspect a `.pt` training clip | `--file PATH` (required), `--save-frames`, `--output-dir DIR` |
-| `physical-visualize-runtime` | Render held-out physical eval contact sheets showing the rectified crop, ground truth board, stateless prediction, and temporally smoothed prediction frame by frame | `--clip-path PATH`, `--frame-start N`, `--frame-count N`, `--panel-size N`, `--device`, `--output-dir DIR` |
+| `physical-visualize-runtime` | Render held-out physical validation contact sheets showing the rectified crop, ground truth board, stateless prediction, and temporally smoothed prediction frame by frame | `--clip-path PATH`, `--frame-start N`, `--frame-count N`, `--panel-size N`, `--device`, `--output-dir DIR` |
 | `inspect-calibration` | Inspect saved calibration for a channel | `--channel @Handle` (required) |
 | `smoke-test` | Run quick smoke tests (no DB required) | |
 | `stats` | Print pipeline statistics (row counts per table) | |

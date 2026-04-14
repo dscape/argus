@@ -43,7 +43,7 @@ class ArgusLoss(nn.Module):
         self.w_square = w_square
         self.w_bbox = w_bbox
         self.w_identity = w_identity
-        self.move_loss = nn.CrossEntropyLoss(reduction="mean")
+        self.move_loss = nn.CrossEntropyLoss(reduction="none")
         self.detect_loss = FocalLoss()
         self.square_loss = nn.CrossEntropyLoss(ignore_index=-100, reduction="mean")
 
@@ -54,6 +54,8 @@ class ArgusLoss(nn.Module):
         move_targets: torch.Tensor,
         detect_targets: torch.Tensor,
         move_mask: torch.Tensor | None = None,
+        move_loss_mask: torch.Tensor | None = None,
+        move_loss_weights: torch.Tensor | None = None,
         legal_masks: torch.Tensor | None = None,
         square_logits: torch.Tensor | None = None,
         square_targets: torch.Tensor | None = None,
@@ -65,15 +67,25 @@ class ArgusLoss(nn.Module):
         losses: dict[str, torch.Tensor] = {}
         device = move_logits.device
 
-        if move_mask is not None and move_mask.any():
-            active_logits = move_logits[move_mask]
-            active_targets = move_targets[move_mask]
+        active_move_mask = move_loss_mask if move_loss_mask is not None else move_mask
+        if active_move_mask is not None and active_move_mask.any():
+            active_logits = move_logits[active_move_mask]
+            active_targets = move_targets[active_move_mask]
             if legal_masks is not None:
-                active_legal_masks = legal_masks[move_mask]
+                active_legal_masks = legal_masks[active_move_mask]
                 if not active_legal_masks.gather(-1, active_targets.unsqueeze(-1)).all().item():
                     raise ValueError("Move targets must be legal under the provided legal masks")
                 active_logits = apply_constraint_mask(active_logits, active_legal_masks)
-            losses["move"] = self.move_loss(active_logits, active_targets)
+            active_loss = self.move_loss(active_logits, active_targets)
+            if move_loss_weights is not None:
+                active_weights = move_loss_weights[active_move_mask].to(active_loss.device)
+                weight_sum = active_weights.sum()
+                if float(weight_sum.item()) > 0.0:
+                    losses["move"] = (active_loss * active_weights).sum() / weight_sum
+                else:
+                    losses["move"] = torch.tensor(0.0, device=device)
+            else:
+                losses["move"] = active_loss.mean()
         else:
             losses["move"] = torch.tensor(0.0, device=device)
 

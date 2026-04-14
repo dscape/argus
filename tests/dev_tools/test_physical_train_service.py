@@ -12,9 +12,14 @@ def test_list_clip_files_excludes_held_out_videos(tmp_path, monkeypatch) -> None
 
     monkeypatch.setattr(physical_train_service.physical_eval_service, "_PROJECT_ROOT", project_root)
     monkeypatch.setattr(
-        physical_train_service.eval_dataset,
-        "get_held_out_source_video_ids",
-        lambda: ["heldout"],
+        physical_train_service.physical_eval_service.splits,
+        "ensure_annotation_layout_migrated",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        physical_train_service.physical_eval_service.splits,
+        "get_source_video_split",
+        lambda source_video_id: "val" if source_video_id == "heldout" else None,
     )
     monkeypatch.setattr(
         physical_train_service.manual_train_dataset,

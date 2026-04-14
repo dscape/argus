@@ -9,7 +9,7 @@ Physical-board vision is a separate problem from 2D overlay reading. Overlay mod
 - **DINOv2 eval recipe:** start each visual subtask with **frozen features + linear probe / shallow head** before any end-to-end fine-tuning. If the frozen-feature baseline is bad, fix data, labels, crops, and evaluation first.
 - **Karpathy recipe:** inspect raw examples first, disable augmentation initially, overfit a tiny batch, verify loss/metric baselines, and only add complexity after a simple model fits the task.
 - **No more cross-domain leakage:** overlay classifiers are forbidden on physical camera crops.
-- **Held-out real eval first:** no physical-board model training starts before `data/physical/eval/` exists and is excluded by source video id from all training splits.
+- **Held-out real validation first:** no physical-board model training starts before `data/physical/val/` exists and is excluded by source video id from all training splits.
 
 ## Status board
 
@@ -48,7 +48,7 @@ Current snapshot on this branch:
 | Field | Value |
 | --- | --- |
 | Input | Real broadcast camera crops of physical boards, manually corner-rectified and square-labeled via dev-tools |
-| Output | `data/physical/eval/board_annotations.jsonl`, `data/physical/eval/square_manifest.jsonl`, rectified boards, square crops |
+| Output | `data/physical/val/board_annotations.jsonl`, `data/physical/val/square_manifest.jsonl`, rectified boards, square crops |
 | Loss | N/A |
 | Eval metric | Dataset coverage: number of labeled square crops, source-video count, class coverage, zero overlap with training video ids |
 | Success | At least **300** hand-labeled square crops from **10+** held-out source videos, with saved board-corner annotations and no training/eval video overlap |
@@ -183,6 +183,17 @@ Current snapshot on this branch:
     - non-empty accuracy: `0.4427`
     - macro F1: `0.3433`
   - a quick greedy legal-move candidate filter did not beat smoothing, and naive pseudo-real agreement filtering regressed badly, so neither was kept
+  - a later **lookahead legal-move tracker** over the held-out rectified `v7r6` logits did beat the earlier greedy tracker family on board exact by scoring `stay` vs legal successors over a short future window instead of a single frame:
+    - new shared decoder: `pipeline/shared/board_tracking.py::LookaheadLegalMoveStateTracker`
+    - eval script now supports `--tracker-mode lookahead`
+    - best current lookahead sweep artifact: `outputs/2026-04-13/tracker_sweep_rectified_v7r6_lookahead/results.tsv`
+    - best current row:
+      - window `4`
+      - margin `10`
+      - board exact `0.1137`
+      - move recall `0.2031`
+      - static false-change `0.0375`
+    - interpretation: short-horizon move scoring over future settled frames is the first temporal branch that materially beat the old `~0.06` tracker plateau, but it still falls far short of the recall / false-change guardrails
   - wider post-promotion follow-up checks mostly failed to beat `v7r4`, so the remaining meaningful blocker still looks data-bound rather than temporal:
     - nearby adaptive EMA retuning confirmed `low=0.02`, `high=0.12`, `threshold=8` is still the best macro/non-empty trade-off among the local candidates tested
     - nearby 3-member ensemble weight search around `21:7:1` did not improve on the promoted mix
@@ -201,7 +212,7 @@ Current snapshot on this branch:
       - macro F1: `0.3903`
     - relative to `v7r5`, this is a meaningful gain on all three deployed diagnostics rather than another tiny tradeoff
 - The repo now also has two pieces of infrastructure for the next data-centric step:
-  - manual non-held-out physical board labels can be collected under `data/physical/train_manual/`
+  - manual non-held-out physical board labels can be collected under `data/physical/train/`
   - pseudo-real source-video holdouts can be used during training for checkpoint selection via `scripts/train_physical_board_probe.py --real-val-source-videos ... --selection-metric auto`
 - The practical next attempt should still prioritize **manual non-held-out real supervision** and better localization / corner quality before more backbone work, but pseudo-real real-val checkpoint selection plus lightweight board-state constraints are now real levers rather than just hypotheses.
 - Empty squares will dominate; success is not allowed to hide behind empty-square accuracy.
@@ -241,7 +252,7 @@ Current snapshot on this branch:
 ## Immediate execution order
 
 1. Finish the structural split and keep the invariant enforced in code review.
-2. Populate the held-out physical eval set via dev-tools; no model training before this exists.
+2. Populate the held-out physical validation set via dev-tools; no model training before this exists.
 3. Export physical train/val data with `python -m pipeline physical-split-clips` so held-out eval source videos are excluded automatically.
 4. Train the simplest possible frame classifier baseline.
 4. Train board detection, then corner refinement.

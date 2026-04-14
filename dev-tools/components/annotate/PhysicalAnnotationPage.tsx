@@ -106,11 +106,12 @@ function matchesSavedLabels(labels: Array<number | null>, savedLabels: Array<num
   return labels.length === savedLabels.length && labels.every((label, index) => label === savedLabels[index]);
 }
 
-type PhysicalAnnotationMode = "eval" | "train";
+type PhysicalAnnotationSplit = "val" | "train";
 
-interface PhysicalAnnotationModeConfig {
+interface PhysicalAnnotationSplitConfig {
   indexHref: string;
   indexLabel: string;
+  splitLabel: string;
   getAnnotation: typeof getPhysicalEvalAnnotation;
   getMoveCorrections: typeof getPhysicalEvalMoveCorrections;
   rectifyFrame: typeof rectifyPhysicalEvalFrame;
@@ -118,10 +119,11 @@ interface PhysicalAnnotationModeConfig {
   deleteAnnotation: typeof deletePhysicalEvalAnnotation;
 }
 
-const MODE_CONFIG: Record<PhysicalAnnotationMode, PhysicalAnnotationModeConfig> = {
-  eval: {
-    indexHref: "/annotate/physical",
-    indexLabel: "All eval clips",
+const SPLIT_CONFIG: Record<PhysicalAnnotationSplit, PhysicalAnnotationSplitConfig> = {
+  val: {
+    indexHref: "/annotate/physical?split=val",
+    indexLabel: "All validation clips",
+    splitLabel: "Validation",
     getAnnotation: getPhysicalEvalAnnotation,
     getMoveCorrections: getPhysicalEvalMoveCorrections,
     rectifyFrame: rectifyPhysicalEvalFrame,
@@ -129,8 +131,9 @@ const MODE_CONFIG: Record<PhysicalAnnotationMode, PhysicalAnnotationModeConfig> 
     deleteAnnotation: deletePhysicalEvalAnnotation,
   },
   train: {
-    indexHref: "/annotate/physical-train",
-    indexLabel: "All train clips",
+    indexHref: "/annotate/physical?split=train",
+    indexLabel: "All training clips",
+    splitLabel: "Train",
     getAnnotation: getPhysicalTrainAnnotation,
     getMoveCorrections: getPhysicalTrainMoveCorrections,
     rectifyFrame: rectifyPhysicalTrainFrame,
@@ -141,12 +144,12 @@ const MODE_CONFIG: Record<PhysicalAnnotationMode, PhysicalAnnotationModeConfig> 
 
 interface Props {
   filename: string;
-  mode?: PhysicalAnnotationMode;
+  split?: PhysicalAnnotationSplit;
 }
 
-export function PhysicalAnnotationPage({ filename, mode = "eval" }: Props) {
+export function PhysicalAnnotationPage({ filename, split = "val" }: Props) {
   const clipPath = `data/argus/train_real/${filename}`;
-  const modeConfig = MODE_CONFIG[mode];
+  const splitConfig = SPLIT_CONFIG[split];
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [clipInfo, setClipInfo] = useState<ClipInspectResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -183,8 +186,8 @@ export function PhysicalAnnotationPage({ filename, mode = "eval" }: Props) {
   if (loading) {
     return (
       <div className="space-y-4">
-        <Link href={modeConfig.indexHref} className="text-sm text-blue-500 hover:underline">
-          &larr; {modeConfig.indexLabel}
+        <Link href={splitConfig.indexHref} className="text-sm text-blue-500 hover:underline">
+          &larr; {splitConfig.indexLabel}
         </Link>
         <p className="text-sm text-muted-foreground">Loading {filename}&hellip;</p>
       </div>
@@ -194,8 +197,8 @@ export function PhysicalAnnotationPage({ filename, mode = "eval" }: Props) {
   if (error || !clipInfo || !sessionId) {
     return (
       <div className="space-y-4">
-        <Link href={modeConfig.indexHref} className="text-sm text-blue-500 hover:underline">
-          &larr; {modeConfig.indexLabel}
+        <Link href={splitConfig.indexHref} className="text-sm text-blue-500 hover:underline">
+          &larr; {splitConfig.indexLabel}
         </Link>
         <p className="text-sm text-destructive">{error ?? "Failed to load clip"}</p>
       </div>
@@ -208,7 +211,7 @@ export function PhysicalAnnotationPage({ filename, mode = "eval" }: Props) {
       clipPath={clipPath}
       sessionId={sessionId}
       clipInfo={clipInfo}
-      modeConfig={modeConfig}
+      splitConfig={splitConfig}
     />
   );
 }
@@ -218,13 +221,13 @@ function AnnotationContent({
   clipPath,
   sessionId,
   clipInfo,
-  modeConfig,
+  splitConfig,
 }: {
   filename: string;
   clipPath: string;
   sessionId: string;
   clipInfo: ClipInspectResponse;
-  modeConfig: PhysicalAnnotationModeConfig;
+  splitConfig: PhysicalAnnotationSplitConfig;
 }) {
   const [selectedFrame, setSelectedFrame] = useState(0);
   const [corners, setCorners] = useState<Array<{ x: number; y: number }>>([]);
@@ -255,7 +258,7 @@ function AnnotationContent({
 
   const refreshMoveCorrections = useCallback(async () => {
     try {
-      const nextCorrections = await modeConfig.getMoveCorrections(sessionId, clipPath);
+      const nextCorrections = await splitConfig.getMoveCorrections(sessionId, clipPath);
       setMoveCorrections(nextCorrections);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load manual move corrections");
@@ -367,7 +370,7 @@ function AnnotationContent({
       latestRectifyRequestIdRef.current = requestId;
       setRectifying(true);
       try {
-        const result = await modeConfig.rectifyFrame({
+        const result = await splitConfig.rectifyFrame({
           session_id: sessionId,
           frame_index: selectedFrame,
           corners: nextCorners.map((p) => [p.x, p.y]),
@@ -543,7 +546,7 @@ function AnnotationContent({
     if (!canSave) return null;
     setSaving(true);
     try {
-      const result = await modeConfig.saveAnnotation({
+      const result = await splitConfig.saveAnnotation({
         session_id: sessionId,
         clip_path: clipPath,
         frame_index: selectedFrame,
@@ -572,7 +575,7 @@ function AnnotationContent({
     if (!existingAnnotation) return;
     setDeleting(true);
     try {
-      await modeConfig.deleteAnnotation(clipPath, selectedFrame);
+      await splitConfig.deleteAnnotation(clipPath, selectedFrame);
       resetCorners();
       await refreshMoveCorrections();
       toast.success("Annotation deleted");
@@ -589,7 +592,7 @@ function AnnotationContent({
     let cancelled = false;
     void (async () => {
       try {
-        const ann = await modeConfig.getAnnotation(clipPath, selectedFrame);
+        const ann = await splitConfig.getAnnotation(clipPath, selectedFrame);
         if (cancelled) return;
         setExistingAnnotation(ann);
         if (ann) {
@@ -621,10 +624,11 @@ function AnnotationContent({
       {/* Header row: nav + actions */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <Link href={modeConfig.indexHref} className="text-xs text-blue-500 hover:underline">
-            &larr; {modeConfig.indexLabel}
+          <Link href={splitConfig.indexHref} className="text-xs text-blue-500 hover:underline">
+            &larr; {splitConfig.indexLabel}
           </Link>
           <span className="font-mono text-sm font-medium">{filename}</span>
+          <Badge variant="outline" className="text-[10px]">{splitConfig.splitLabel}</Badge>
           <Badge variant="secondary" className="text-[10px]">{frameCount} frames</Badge>
           <Badge variant="secondary" className="text-[10px]">{effectiveTotalMoves} moves</Badge>
         </div>

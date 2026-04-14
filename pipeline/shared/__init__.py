@@ -8,6 +8,16 @@ from pipeline.shared.board_smoothing import (
     BoardLogitsExponentialSmoother,
 )
 from pipeline.shared.board_state import NUM_SQUARE_CLASSES, SQUARE_CLASS_NAMES, fen_to_square_labels
+from pipeline.shared.board_tracking import (
+    BoardTrackerResult,
+    LegalMoveStateTracker,
+    LookaheadLegalMoveStateTracker,
+    SequenceTrackerFrameResult,
+    board_to_class_ids,
+    build_board_hypotheses,
+    score_board_state,
+    score_legal_move,
+)
 
 __all__ = [
     "BoardObservation",
@@ -18,4 +28,12 @@ __all__ = [
     "NUM_SQUARE_CLASSES",
     "constrained_board_class_ids",
     "fen_to_square_labels",
+    "BoardTrackerResult",
+    "LegalMoveStateTracker",
+    "LookaheadLegalMoveStateTracker",
+    "SequenceTrackerFrameResult",
+    "board_to_class_ids",
+    "build_board_hypotheses",
+    "score_board_state",
+    "score_legal_move",
 ]

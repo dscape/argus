@@ -1,4 +1,4 @@
-"""Endpoints for building the held-out physical-board square eval set."""
+"""Endpoints for building the held-out physical-board validation set."""
 
 from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool

@@ -21,6 +21,16 @@ def test_list_clip_files_returns_relative_project_paths(tmp_path, monkeypatch) -
     (clips_dir / "clip_overlay_demo_clip12_0.pt").write_bytes(b"demo")
 
     monkeypatch.setattr(physical_eval_service, "_PROJECT_ROOT", project_root)
+    monkeypatch.setattr(
+        physical_eval_service.splits,
+        "ensure_annotation_layout_migrated",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        physical_eval_service.splits,
+        "get_source_video_split",
+        lambda _video_id: None,
+    )
 
     result = physical_eval_service.list_clip_files("data/argus/train_real")
 
@@ -31,6 +41,7 @@ def test_list_clip_files_returns_relative_project_paths(tmp_path, monkeypatch) -
     assert result["clips"][0]["annotated_frame_count"] == 0
     assert result["clips"][0]["num_frames"] is None
     assert result["clips"][0]["fully_annotated"] is False
+    assert result["clips"][0]["assigned_split"] is None
 
 
 def test_list_clip_files_marks_fully_annotated_clips(tmp_path, monkeypatch) -> None:
@@ -41,6 +52,16 @@ def test_list_clip_files_marks_fully_annotated_clips(tmp_path, monkeypatch) -> N
     clip_path.write_bytes(b"demo")
 
     monkeypatch.setattr(physical_eval_service, "_PROJECT_ROOT", project_root)
+    monkeypatch.setattr(
+        physical_eval_service.splits,
+        "ensure_annotation_layout_migrated",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        physical_eval_service.splits,
+        "get_source_video_split",
+        lambda _video_id: "val",
+    )
     monkeypatch.setattr(
         physical_eval_service.eval_dataset,
         "get_saved_frame_counts_by_clip",
@@ -53,6 +74,7 @@ def test_list_clip_files_marks_fully_annotated_clips(tmp_path, monkeypatch) -> N
     assert result["clips"][0]["annotated_frame_count"] == 5
     assert result["clips"][0]["num_frames"] == 5
     assert result["clips"][0]["fully_annotated"] is True
+    assert result["clips"][0]["assigned_split"] == "val"
 
 
 def test_get_move_corrections_infers_manual_move_from_saved_board(tmp_path, monkeypatch) -> None:

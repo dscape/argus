@@ -1,11 +1,12 @@
-"""Service layer for manually labeled non-held-out physical-board training data."""
+"""Service layer for manually labeled physical-board training data."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from pipeline.physical import manual_train_dataset
+
 from api.services.annotate import physical_eval_service
-from pipeline.physical import eval_dataset, manual_train_dataset
 
 
 def list_clip_files(
@@ -17,7 +18,7 @@ def list_clip_files(
         manual_train_dataset,
         clips_dir,
         limit=limit,
-        exclude_source_video_ids=set(eval_dataset.get_held_out_source_video_ids()),
+        split_name=manual_train_dataset.DATASET_SPLIT,
     )
 
 

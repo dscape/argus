@@ -1582,6 +1582,25 @@ export async function inspectPhysicalRuntimeFrame(
   return res.json();
 }
 
+export async function inspectPhysicalRuntimeFrames(
+  annotationIds: string[],
+  options?: { panel_size?: number; device?: string; signal?: AbortSignal },
+): Promise<PhysicalRuntimeEvalResult[]> {
+  const res = await fetch("/api/evaluate/physical-runtime/inspect-batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      annotation_ids: annotationIds,
+      panel_size: options?.panel_size,
+      device: options?.device,
+    }),
+    signal: options?.signal,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.results;
+}
+
 export async function savePhysicalRuntimeEval(body: {
   square_accuracy: number;
   non_empty_accuracy?: number | null;
@@ -1666,6 +1685,7 @@ export interface PhysicalEvalClip {
   annotated_frame_count: number;
   num_frames: number | null;
   fully_annotated: boolean;
+  assigned_split: "train" | "val" | null;
 }
 
 export interface PhysicalEvalAnnotation {

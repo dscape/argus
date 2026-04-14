@@ -1,10 +1,12 @@
-import { PhysicalAnnotationPage } from "@/components/annotate/PhysicalAnnotationPage";
+import { redirect } from "next/navigation";
+
+type Params = Promise<{ filename: string }>;
 
 export default async function PhysicalTrainClipPage({
   params,
 }: {
-  params: Promise<{ filename: string }>;
+  params: Params;
 }) {
   const { filename } = await params;
-  return <PhysicalAnnotationPage filename={decodeURIComponent(filename)} mode="train" />;
+  redirect(`/annotate/physical/${encodeURIComponent(filename)}?split=train`);
 }

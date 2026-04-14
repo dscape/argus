@@ -26,6 +26,12 @@ class InspectRuntimeFrameRequest(BaseModel):
     device: str = "cpu"
 
 
+class InspectRuntimeFramesRequest(BaseModel):
+    annotation_ids: list[str]
+    panel_size: int = 240
+    device: str = "cpu"
+
+
 class SavePhysicalRuntimeEvalRequest(BaseModel):
     square_accuracy: float
     non_empty_accuracy: float | None = None
@@ -97,6 +103,22 @@ async def inspect_runtime_frame(body: InspectRuntimeFrameRequest):
         raise HTTPException(status_code=400, detail=str(error))
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error))
+
+
+@router.post("/inspect-batch")
+async def inspect_runtime_frames(body: InspectRuntimeFramesRequest):
+    try:
+        results = await run_in_threadpool(
+            physical_runtime_service.inspect_runtime_frames,
+            annotation_ids=body.annotation_ids,
+            panel_size=body.panel_size,
+            device=body.device,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    return {"results": results}
 
 
 @router.post("/save-eval")

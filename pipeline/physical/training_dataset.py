@@ -1,4 +1,4 @@
-"""Physical training-dataset helpers that enforce held-out eval exclusions."""
+"""Physical training-dataset helpers that enforce held-out validation exclusions."""
 
 from __future__ import annotations
 
@@ -17,12 +17,12 @@ def export_physical_training_dataset(
     seed: int = 42,
     link_mode: str = "hardlink",
 ) -> dict[str, Any]:
-    """Export a train/val split while excluding held-out physical eval videos."""
+    """Export a train/val split while excluding held-out physical validation videos."""
     held_out_source_video_ids = set(get_held_out_source_video_ids())
     if not held_out_source_video_ids:
         raise ValueError(
-            "No held-out physical eval source videos found in data/physical/eval; "
-            "annotate the eval set before exporting a physical training split"
+            "No held-out physical validation source videos found in data/physical/val; "
+            "annotate the validation set before exporting a physical training split"
         )
 
     return export_training_dataset(

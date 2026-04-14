@@ -1,5 +1,181 @@
 # Progress
 
+## 2026-04-13
+
+### Physical v0 rebuild foundations
+- Added a shared chess-aware state tracker in `pipeline/shared/board_tracking.py`.
+  - `LegalMoveStateTracker` now treats the board as mostly-known state and only commits a legal move when a candidate move beats the current state by a configurable score margin.
+  - This also handles piece-placement-only start states by carrying both White-to-move and Black-to-move hypotheses until the first accepted move resolves turn.
+- Added oblique square-context extraction in `pipeline/physical/oblique_square_context.py`.
+  - This projects each square back into the original board crop using the annotated corners.
+  - The crop heuristic is explicit and chesscog-style rather than implicit: more top margin on far ranks, more side margin on edge files, and horizontal flipping on the left half so lateral context is more consistent.
+  - Saved a first visual audit artifact to `outputs/2026-04-13/oblique_context_sheet_clip72_9_frame0010.png`; the crops now contain recognisable whole-piece context instead of mostly piece feet / tile shards.
+- Extended `pipeline/physical/board_probe.py:extract_square_token_features(...)` so the board probe can now train from either:
+  - one rectified board image per example, or
+  - `64` pre-cropped oblique square-context images per example.
+- Extended `scripts/train_physical_board_probe.py` with `--board-input-mode {rectified_board,oblique_square_context}`.
+  - Current limitation is explicit in code rather than hidden: oblique mode is currently wired for pseudo-real / annotated real rows, not synthetic oblique crops yet.
+  - The script now also supports running with no synthetic dataset at all, using pseudo-real selection rows as checkpoint-selection data when synthetic val is disabled.
+- Added `scripts/eval_physical_board_tracker.py`.
+  - This reports:
+    - board exact match
+    - move-detection recall on annotated sequences
+    - static-frame false-change rate
+  - It supports `--observation-input {rectified_board,original_oblique}` and optional `--weights-path` so new observation models can be evaluated without overwriting `weights/physical/best.pt`.
+- Refactored `pipeline/physical/square_classifier.py` so runtime code can now expose raw logits and optionally evaluate checkpoint files other than the promoted runtime.
+  - It also now understands a checkpoint metadata field `board_input_mode`; oblique checkpoints require corners at inference time.
+
+### Iteration 1 result: state tracker on current rectified `v7r6` observations
+- Baseline tracker eval artifact:
+  - `outputs/2026-04-13/physical_board_tracker_eval_rectified_baseline.json`
+- Result:
+  - board exact match: `0.0557`
+  - move detection recall: `0.0469`
+  - static-frame false-change rate: `0.0272`
+- Interpretation:
+  - the state prior is directionally right, but the current rectified observation model is not good enough to drive it.
+  - The tracker mostly freezes, occasionally fires on the wrong frames, and misses the vast majority of real board changes.
+  - This is still useful because it confirms the user’s claim in practice: the existing top-down observation path is too weak for a move-aware decoder to rescue.
+
+### Oblique training status
+- Ran a tiny oblique smoke training run successfully:
+  - `outputs/2026-04-13/physical_oblique_probe_smoke/`
+- Then started the first meaningful oblique pseudo-real training run:
+  - `outputs/2026-04-13/physical_board_probe_oblique_posmlp_stride4_holdoutpsr_seed42/`
+- That longer run timed out during frozen-feature extraction over the full held-out real oblique eval set.
+- Immediate takeaway:
+  - the new data path is wired correctly enough to run end-to-end,
+  - but the compute profile changed a lot because oblique mode now encodes `64` crops per board instead of one board image, so extraction/eval throughput is the next practical bottleneck to manage.
+
+### Localization / geometry contract fix
+- Added `pipeline/physical/board_localizer.py` and wired `HybridFrameReader` to use it before the old segmentation fallback.
+  - Runtime physical reading can now consume full-frame physical inputs together with board corners instead of pretending a coarse board bbox is sufficient geometry.
+  - `pipeline/analysis/piece_detector.py` now passes optional corners through to the physical reader and crops the VLM fallback around those corners instead of feeding the whole frame.
+- The localizer is still only a best-effort contract fix, not a solved detector.
+  - It uses OTB YOLO first, then a simple physical alternation-window fallback, then contours.
+  - This made the geometry dependency explicit in product code instead of leaving it implicit only in offline eval.
+
+### Whole-board oblique branch (big swing)
+- Added `pipeline/physical/oblique_board_data.py`.
+  - This extracts one oblique board crop from the original frame using annotated / pseudo-real corners, rescales it, and keeps corner geometry available for board-probe training.
+  - Also added a crop-only wrapper mode that keeps the oblique board crop but drops explicit geometry after cropping.
+- Extended board-probe training/runtime to support new whole-board oblique modes:
+  - `oblique_board`
+    - whole-board oblique crop with geometry-aware square-token pooling from one encoder pass
+  - `oblique_board_crop`
+    - whole-board oblique crop with plain 8x8 image-space token pooling after corner-derived cropping
+- Added synthetic rendered support for the whole-board oblique branch by treating Blender-rendered physical boards as full-frame oblique boards with image-corner geometry.
+- New smoke artifact:
+  - `outputs/2026-04-13/physical_oblique_board_probe_smoke/`
+- Visual audit artifact for the crop representation:
+  - `outputs/2026-04-13/oblique_board_crop_sample_eval0.png`
+
+### Whole-board oblique results so far
+- The big-swing whole-board branch is now cheap enough to iterate on, but the first real models underperformed badly on held-out stateless eval.
+- Representative outputs:
+  - geometry-aware region pooling + rendered synthetic + pseudo-real + weighting:
+    - `outputs/2026-04-13/physical_board_probe_oblique_board_regionpool_rendered1200_real_stride4_holdoutpsr_weighted_rlw2/`
+    - real eval square `0.2379`
+    - real eval non-empty `0.2443`
+    - real eval macro F1 `0.1743`
+    - board exact `0.0000`
+  - crop-only pooling + rendered synthetic + pseudo-real + weighting:
+    - `outputs/2026-04-13/physical_board_probe_oblique_board_crop_rendered1200_real_stride4_holdoutpsr_weighted_rlw2/`
+    - real eval square `0.1996`
+    - real eval non-empty `0.3331`
+    - real eval macro F1 `0.1558`
+    - board exact `0.0000`
+- Conclusion from iteration:
+  - whole-board oblique representation alone did **not** beat the existing rectified runtime family on the user-priority stateless metrics.
+  - The likely issue is not just perspective input choice; the frozen-feature readout is still not extracting move-critical square evidence reliably enough from the new representation.
+
+### Tracker bug fix + re-eval on the big-swing branch
+- Found and fixed a real bug in `pipeline/shared/board_tracking.py`.
+  - Before the fix, the tracker compared a move **delta** score against a full-board stay score, which put move acceptance on inconsistent scales and made `move_accept_threshold` effectively meaningless.
+  - Now legal moves are scored on the same absolute scale as `stay` by adding the changed-square delta back onto the current board score; thresholds now operate on the intended move delta.
+- Swept tracker thresholds after the fix on the best current whole-board-oblique checkpoint:
+  - `outputs/2026-04-13/tracker_sweep_oblique_regionpool_fixedtracker/results.tsv`
+- Best board-exact result in that sweep:
+  - `0.060427` board exact match
+  - better than the earlier rectified-tracker baseline `0.0557`, but only trivially
+- Important caveat:
+  - the better board-exact points still freeze badly.
+  - Example strong-static setting from the sweep:
+    - threshold `2.0`, margin `1.0`
+    - board exact `0.060427`
+    - move recall `0.078125`
+    - static false-change rate `0.003881`
+- Conclusion:
+  - fixing the tracker bug was necessary and correct,
+  - but the whole-board-oblique branch still did **not** produce a meaningful end-to-end improvement.
+  - It nudged board exact slightly above the prior tracker baseline while remaining far below the move-recall guardrail.
+
+### New tracker branch: lookahead move scoring over future settled frames
+- Added a new shared sequence decoder in `pipeline/shared/board_tracking.py`:
+  - `LookaheadLegalMoveStateTracker`
+  - `SequenceTrackerFrameResult`
+- This is not another EMA tweak. It changes the move-decision contract:
+  - instead of deciding from the current frame alone,
+  - it scores `stay` vs each legal one-move successor over a short future window,
+  - so the tracker can use the first few post-move settled frames to choose a move.
+- `scripts/eval_physical_board_tracker.py` now supports:
+  - `--tracker-mode {greedy,lookahead}`
+  - `--lookahead-window`
+  - `--lookahead-margin`
+- Important diagnostic result from offline upper bounds:
+  - with **ground-truth move frames** and current rectified `v7r6` logits, short-window move scoring roughly doubled board exact over single-frame greedy move scoring.
+  - This confirmed that part of the remaining error was **move identification from noisy transition frames**, not just move timing.
+- Best committed lookahead eval so far on real held-out rectified `v7r6` observations:
+  - `outputs/2026-04-13/physical_board_tracker_eval_rectified_v7r6_lookahead_w3_m8.json`
+  - board exact `0.106635`
+  - move recall `0.25`
+  - static false-change rate `0.034929`
+- Better board-exact point from the lookahead sweep:
+  - `outputs/2026-04-13/tracker_sweep_rectified_v7r6_lookahead/results.tsv`
+  - best row currently:
+    - window `4`
+    - margin `10`
+    - board exact `0.113744`
+    - move recall `0.203125`
+    - static false-change rate `0.037516`
+- Interpretation:
+  - this is the first tracker branch that made a **material** board-exact improvement beyond the earlier `~0.06` plateau.
+  - However it still fails both target guardrails badly:
+    - move recall remains far below `0.88`
+    - static false-change rate remains above `1%`
+  - So the lookahead decoder is a better base, not a finished solution.
+
+### Direct physical move-model branch
+- Used the `oracle` skill to pressure-test the next high-upside branch.
+  - Conclusion from the second-opinion review: continuing to improve board-state readers is likely the wrong optimization target now; the next real upside is a **direct move model** trained on physical clips.
+- Added physical move-data infrastructure in `pipeline/physical/move_data.py`.
+  - Real pseudo-real training windows now come directly from `data/argus/train_real/` replay metadata and rectified clip frames.
+  - Held-out annotated sequences can now be loaded as rectified move-model eval sequences.
+- Added scripts:
+  - `scripts/train_physical_move_model.py`
+  - `scripts/eval_physical_move_model.py`
+- Added tests:
+  - `tests/pipeline/test_physical_move_data.py`
+- The move-model infra is now good enough to run end-to-end.
+  - Smoke training artifact:
+    - `outputs/2026-04-13/physical_move_model_smoke/`
+  - First synthetic+real training artifact:
+    - `outputs/2026-04-13/physical_move_model_synth_real_v1/`
+- Current result is still bad.
+  - The first direct move model mostly collapsed to predicting `no move` on held-out sequences.
+  - Eval artifacts:
+    - `outputs/2026-04-13/physical_move_model_eval_smoke.json`
+    - `outputs/2026-04-13/physical_move_model_eval_synth_real_v1.json`
+  - threshold sweep:
+    - `outputs/2026-04-13/physical_move_model_eval_sweep_v1/results.tsv`
+  - best board-exact points from this first branch stayed at the trivial frozen baseline around `0.0604` with either:
+    - no accepted moves, or
+    - catastrophic false positives when thresholds were lowered enough to force moves.
+- Interpretation:
+  - the direct move-model branch is still the right next architecture to explore,
+  - but the first implementation is not yet competitive because the current training recipe is too weak / too imbalanced to teach the detector head useful physical move timing.
+  - The new value is infrastructure, not accuracy yet.
+
 ## 2026-04-12
 
 ### Physical annotation UI
@@ -491,7 +667,60 @@
   - combined deployed `non_empty + macro` now rises from `0.8373` to `0.8605`
   - board exact match is still `0.0`, so the reader is still not solved, but this is the largest deployed-runtime jump since moving from `v5r2` into the `v6`/`v7` family
 
+### Physical evaluate UI consistency
+- Rebuilt `dev-tools/app/evaluate/physical` around the same evaluator pattern used elsewhere instead of the old clip/window inspector.
+- Physical evaluate now:
+  - samples held-out annotated frames instead of asking the user to pick a clip/window
+  - records evaluation history in `model_evaluations` under model name `physical`
+  - stores shareable physical-runtime sessions in a new `physical_runtime_sessions` table plus `/evaluate/physical/[sessionId]`
+  - shows the same session dropdown, copy-link flow, progress bar, pinned results, thumbnail strip, and expand/collapse card flow as the other evaluate pages
+  - tracks temporal square/non-empty accuracy in one chart and runtime latency in a second chart
+- Backend/API additions landed in:
+  - `dev-tools/api/routers/evaluate/physical_runtime.py`
+  - `dev-tools/api/services/evaluate/physical_runtime_service.py`
+  - `dev-tools/lib/api.ts`
+  - `pipeline/db/migrations/011_add_physical_runtime_sessions.sql`
+  - `pipeline/db/schema.sql`
+- Added `dev-tools/components/evaluate/PhysicalRuntimeCard.tsx` for the detailed per-frame card view.
+- Kept the older `/api/evaluate/physical-runtime/render` visualization endpoint intact for the original contact-sheet workflow, but the UI no longer depends on it.
+
+### Physical annotation split unification
+- Replaced the separate physical annotation routes with one shared UI under `/annotate/physical`, using `?split=val|train` instead of separate eval/train pages.
+- Legacy `/annotate/physical-train` routes now redirect into the unified UI with `split=train` so old links still work.
+- Renamed the physical annotation storage roots to match the actual split semantics:
+  - `data/physical/eval/` -> `data/physical/val/`
+  - `data/physical/train_manual/` -> `data/physical/train/`
+- Added `data/physical/source_video_splits.json` so source-video split assignment is explicit instead of being inferred only from which UI route was used.
+- Added automatic migration logic in `pipeline/physical/splits.py` so existing legacy annotation roots are moved and their manifests rewritten into the canonical `train/` and `val/` layout.
+- Updated physical data loaders, training exclusion logic, and dev-tools clip lists to use the canonical train/val layout and the source-video split manifest.
+
+## 2026-04-14
+
+### Physical evaluate UI responsiveness fix
+- Traced the `/evaluate/physical` usability regression to the new runtime inspector path:
+  - single-frame inspect was re-reading the model twice per board (`stateless` + `temporal`) and walking the **entire clip**, even when only one early frame was requested.
+  - with held-out clips up to `453` frames long, this made one inspect request take roughly a minute or more on CPU, so `Sample & Inspect` effectively never finished and no new sessions were getting created.
+- Fixed the backend/runtime path in two places:
+  - `pipeline/physical/square_classifier.py`
+    - added batched board-logit inference helpers,
+    - exposed observation-from-logits conversion,
+    - exposed temporal smoothing over already-computed logits so stateless + temporal no longer require duplicate model inference.
+  - `pipeline/physical/runtime_visualization.py`
+    - now batches inference in clip order,
+    - only processes history up to the latest requested frame instead of always running through the full clip.
+- Added batch inspection support to the physical evaluate API/UI:
+  - new backend endpoint: `/api/evaluate/physical-runtime/inspect-batch`
+  - `PhysicalRuntimeInspector` now samples frame ids, inspects them in one batched request, and defaults to a smaller sample size (`8`) so the page is responsive again.
+- Fixed the sessions dropdown empty-state UX on `/evaluate/physical`:
+  - the button now opens even when there are no saved sessions yet, instead of appearing broken.
+- Added regression tests for:
+  - clip-history truncation in `tests/pipeline/test_physical_runtime_visualization.py`
+  - batched per-clip inspection ordering in `tests/dev_tools/test_physical_runtime_service.py`
+
 ### Validation
 - Passed: `make typecheck`
 - Passed: `make lint`
-- Passed: `make test`
+- Failed in this sandbox: `make test`
+  - unrelated existing failure: `tests/pipeline/test_physical_board_probe_train_script.py::test_build_synthetic_dataset_supports_oblique_board_with_rendered_source`
+  - cause here is Blender crashing under sandbox restrictions during rendered synthetic data generation (`Segmentation fault: 11`), not the physical evaluate changes.
+- Passed: `.venv/bin/python3 -m pytest tests/pipeline/test_physical_runtime_visualization.py tests/dev_tools/test_physical_runtime_service.py`

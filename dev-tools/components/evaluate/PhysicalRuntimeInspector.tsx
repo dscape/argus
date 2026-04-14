@@ -18,7 +18,7 @@ import PhysicalRuntimeCard from "@/components/evaluate/PhysicalRuntimeCard";
 import {
   getModelVersions,
   createPhysicalRuntimeSession,
-  inspectPhysicalRuntimeFrame,
+  inspectPhysicalRuntimeFrames,
   listPhysicalRuntimeSessions,
   physicalRuntimeSessionImageUrl,
   samplePhysicalRuntimeFrames,
@@ -179,7 +179,7 @@ export default function PhysicalRuntimeInspector({
 }: PhysicalRuntimeInspectorProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [sampleSize, setSampleSize] = useState(20);
+  const [sampleSize, setSampleSize] = useState(8);
   const [results, setResults] = useState<PhysicalRuntimeEvalResult[]>(
     initialSession?.results ?? [],
   );
@@ -323,23 +323,20 @@ export default function PhysicalRuntimeInspector({
 
       setProgress({ current: 0, total: frames.length });
 
-      for (let index = 0; index < frames.length; index += 1) {
-        if (controller.signal.aborted) break;
-
-        const result = await inspectPhysicalRuntimeFrame(frames[index].annotation_id, {
-          signal: controller.signal,
-        });
-        collected.push(result);
-        setResults((prev) => [...prev, result]);
+      const batchResults = await inspectPhysicalRuntimeFrames(
+        frames.map((frame) => frame.annotation_id),
+        { signal: controller.signal },
+      );
+      collected.push(...batchResults);
+      setResults(batchResults);
+      batchResults.forEach((result) => {
         inspectedIds.current.add(result.annotation_id);
-
         if (!result.temporal_exact_match) {
           autoPinned.add(result.annotation_id);
-          setPinnedIds((prev) => new Set([...prev, result.annotation_id]));
         }
-
-        setProgress({ current: index + 1, total: frames.length });
-      }
+      });
+      setPinnedIds(new Set(autoPinned));
+      setProgress({ current: batchResults.length, total: frames.length });
 
       const summary = computeSummary(collected);
       if (!summary) return;
@@ -434,7 +431,7 @@ export default function PhysicalRuntimeInspector({
           type="number"
           value={sampleSize}
           onChange={(event) =>
-            setSampleSize(parsePositiveInteger(event.target.value, 20))
+            setSampleSize(parsePositiveInteger(event.target.value, 8))
           }
           min={1}
           max={200}
@@ -462,43 +459,49 @@ export default function PhysicalRuntimeInspector({
           >
             {sessionId ? <span className="font-mono">{sessionId}</span> : "Sessions"}
           </button>
-          {showSessionList && recentSessions.length > 0 && (
+          {showSessionList && (
             <div className="absolute right-0 top-full mt-1 z-50 w-72 bg-background border rounded-lg shadow-lg overflow-hidden">
-              <div className="max-h-64 overflow-y-auto">
-                {recentSessions.map((session) => (
-                  <button
-                    key={session.id}
-                    onClick={() => {
-                      setShowSessionList(false);
-                      router.push(`/evaluate/physical/${session.id}`);
-                    }}
-                    className={`w-full text-left px-3 py-2 text-xs hover:bg-muted/50 transition-colors border-b last:border-b-0 ${
-                      session.id === sessionId ? "bg-muted/30" : ""
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-muted-foreground">{session.id}</span>
-                      {session.square_accuracy != null && (
-                        <span className="font-medium">
-                          {(session.square_accuracy * 100).toFixed(1)}%
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-muted-foreground mt-0.5">
-                      {new Date(session.created_at).toLocaleDateString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                      {" · "}n={session.sample_size}
-                      {session.non_empty_accuracy != null
-                        ? ` · ${(session.non_empty_accuracy * 100).toFixed(1)}% non-empty`
-                        : ""}
-                    </div>
-                  </button>
-                ))}
-              </div>
+              {recentSessions.length > 0 ? (
+                <div className="max-h-64 overflow-y-auto">
+                  {recentSessions.map((session) => (
+                    <button
+                      key={session.id}
+                      onClick={() => {
+                        setShowSessionList(false);
+                        router.push(`/evaluate/physical/${session.id}`);
+                      }}
+                      className={`w-full text-left px-3 py-2 text-xs hover:bg-muted/50 transition-colors border-b last:border-b-0 ${
+                        session.id === sessionId ? "bg-muted/30" : ""
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-muted-foreground">{session.id}</span>
+                        {session.square_accuracy != null && (
+                          <span className="font-medium">
+                            {(session.square_accuracy * 100).toFixed(1)}%
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-muted-foreground mt-0.5">
+                        {new Date(session.created_at).toLocaleDateString(undefined, {
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                        {" · "}n={session.sample_size}
+                        {session.non_empty_accuracy != null
+                          ? ` · ${(session.non_empty_accuracy * 100).toFixed(1)}% non-empty`
+                          : ""}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-3 py-2 text-xs text-muted-foreground">
+                  No saved sessions yet.
+                </div>
+              )}
             </div>
           )}
         </div>

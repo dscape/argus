@@ -16,6 +16,7 @@ import torch
 from torch.utils.data import Dataset
 
 from argus.chess.board_state import fen_to_square_targets
+from pipeline.physical import splits
 from pipeline.physical.board_data import INPUT_SIZE, preprocess_board_image
 from pipeline.physical.eval_dataset import (
     DEFAULT_BOARD_SIZE,
@@ -25,7 +26,7 @@ from pipeline.physical.eval_dataset import (
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_CLIPS_DIR = _PROJECT_ROOT / "data" / "argus" / "train_real"
-_DEFAULT_EVAL_ROOT = _PROJECT_ROOT / "data" / "physical" / "eval"
+_DEFAULT_EVAL_ROOT = _PROJECT_ROOT / "data" / "physical" / "val"
 _REAL_CLIP_RE = re.compile(r"^clip_[^_]+_(?P<video_id>[^_]+)_.*\.pt$")
 
 
@@ -109,6 +110,7 @@ def load_real_board_rows(
     refine_corners: bool = True,
     exclude_move_neighborhood: int = -1,
 ) -> list[PhysicalRealBoardRow]:
+    splits.ensure_annotation_layout_migrated()
     if frame_stride <= 0:
         raise ValueError(f"frame_stride must be > 0, got {frame_stride}")
     if exclude_move_neighborhood < -1:
@@ -178,6 +180,7 @@ def infer_channel_corner_templates(
     *,
     eval_root: str | Path = _DEFAULT_EVAL_ROOT,
 ) -> dict[str, tuple[tuple[float, float], ...]]:
+    splits.ensure_annotation_layout_migrated()
     annotations_path = Path(eval_root) / "board_annotations.jsonl"
     if not annotations_path.exists():
         return {}
@@ -240,7 +243,10 @@ def replay_clip_display_fens(clip: dict[str, Any]) -> list[str | None]:
         return [None] * int(frames.shape[0])
 
     moves_by_sample_index: dict[int, list[str]] = {}
-    frame_to_sample_index = {frame_index: index for index, frame_index in enumerate(sampled_frame_indices)}
+    frame_to_sample_index = {
+        frame_index: index
+        for index, frame_index in enumerate(sampled_frame_indices)
+    }
     for frame_index, move_uci in zip(move_frame_indices, move_ucis):
         sample_index = frame_to_sample_index.get(frame_index)
         if sample_index is None:

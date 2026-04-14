@@ -45,7 +45,7 @@ def test_physical_synthetic_square_dataset_shape() -> None:
 
 def test_physical_eval_square_dataset_loads_manifest_rows(tmp_path) -> None:
     project_root = tmp_path
-    crop_path = project_root / "data" / "physical" / "eval" / "squares" / "sample_a8.jpg"
+    crop_path = project_root / "data" / "physical" / "val" / "squares" / "sample_a8.jpg"
     crop_path.parent.mkdir(parents=True)
     assert cv2.imwrite(str(crop_path), np.full((16, 16, 3), 127, dtype=np.uint8))
 
@@ -53,7 +53,7 @@ def test_physical_eval_square_dataset_loads_manifest_rows(tmp_path) -> None:
         rows=[
             PhysicalEvalRow(
                 annotation_id="ann-1",
-                crop_path="data/physical/eval/squares/sample_a8.jpg",
+                crop_path="data/physical/val/squares/sample_a8.jpg",
                 label_index=4,
                 label_name="R",
                 source_video_id="video-1",

@@ -17,8 +17,18 @@ def test_save_board_annotation_writes_manual_train_manifest_and_crops(
     tmp_path,
     monkeypatch,
 ) -> None:
-    dataset_root = tmp_path / "data" / "physical" / "train_manual"
+    dataset_root = tmp_path / "data" / "physical" / "train"
     monkeypatch.setattr(manual_train_dataset, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        manual_train_dataset.splits,
+        "ensure_annotation_layout_migrated",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        manual_train_dataset.splits,
+        "assign_source_video_split",
+        lambda _source_video_id, _split: _split,
+    )
     monkeypatch.setattr(manual_train_dataset, "DATASET_ROOT", dataset_root)
     monkeypatch.setattr(manual_train_dataset, "BOARDS_DIR", dataset_root / "boards")
     monkeypatch.setattr(manual_train_dataset, "SQUARES_DIR", dataset_root / "squares")
@@ -59,9 +69,9 @@ def test_save_board_annotation_writes_manual_train_manifest_and_crops(
         if line.strip()
     ]
     assert len(square_rows) == 2
-    assert {row["split"] for row in square_rows} == {"train_manual"}
+    assert {row["split"] for row in square_rows} == {"train"}
 
     summary = manual_train_dataset.get_annotation_summary()
-    assert summary["dataset_root"] == "data/physical/train_manual"
+    assert summary["dataset_root"] == "data/physical/train"
     assert summary["board_annotation_count"] == 1
     assert summary["square_crop_count"] == 2

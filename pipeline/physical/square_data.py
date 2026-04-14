@@ -13,6 +13,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from pipeline.physical import splits
 from pipeline.shared import NUM_SQUARE_CLASSES, SQUARE_CLASS_NAMES
 
 try:
@@ -42,7 +43,7 @@ PIECE_TYPES = [
 _IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406), dtype=torch.float32).view(3, 1, 1)
 _IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225), dtype=torch.float32).view(3, 1, 1)
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_EVAL_ROOT = _PROJECT_ROOT / "data" / "physical" / "eval"
+_DEFAULT_VAL_ROOT = _PROJECT_ROOT / "data" / "physical" / "val"
 
 
 @dataclass(frozen=True)
@@ -90,22 +91,22 @@ class PhysicalSyntheticSquareDataset(Dataset[tuple[torch.Tensor, int]]):
         return preprocess_square_image(image, size=self.image_size), class_index
 
 
-class PhysicalEvalSquareDataset(Dataset[tuple[torch.Tensor, int]]):
-    """Held-out real square crops saved by the physical annotation workflow."""
+class PhysicalValSquareDataset(Dataset[tuple[torch.Tensor, int]]):
+    """Held-out real square crops used for physical validation."""
 
     def __init__(
         self,
         *,
-        eval_root: str | Path = _DEFAULT_EVAL_ROOT,
+        annotation_root: str | Path = _DEFAULT_VAL_ROOT,
         image_size: int = INPUT_SIZE,
         rows: list[PhysicalEvalRow] | None = None,
         max_per_class: int | None = None,
         seed: int = 42,
     ) -> None:
-        self.eval_root = Path(eval_root)
+        self.annotation_root = Path(annotation_root)
         self.image_size = image_size
         if rows is None:
-            rows = load_eval_rows(self.eval_root)
+            rows = load_eval_rows(self.annotation_root)
         if max_per_class is not None:
             rows = _sample_rows_per_class(rows, max_per_class=max_per_class, seed=seed)
         self.rows = rows
@@ -121,12 +122,16 @@ class PhysicalEvalSquareDataset(Dataset[tuple[torch.Tensor, int]]):
         return preprocess_square_image(image, size=self.image_size), row.label_index
 
 
+PhysicalEvalSquareDataset = PhysicalValSquareDataset
+
+
 def load_eval_rows(
-    eval_root: str | Path = _DEFAULT_EVAL_ROOT,
+    eval_root: str | Path = _DEFAULT_VAL_ROOT,
 ) -> list[PhysicalEvalRow]:
+    splits.ensure_annotation_layout_migrated()
     manifest_path = Path(eval_root) / "square_manifest.jsonl"
     if not manifest_path.exists():
-        raise ValueError(f"Physical eval square manifest not found: {manifest_path}")
+        raise ValueError(f"Physical validation square manifest not found: {manifest_path}")
 
     rows: list[PhysicalEvalRow] = []
     for line in manifest_path.read_text().splitlines():

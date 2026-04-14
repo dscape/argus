@@ -29,7 +29,7 @@ def test_export_physical_training_dataset_requires_held_out_videos(
         lambda: [],
     )
 
-    with pytest.raises(ValueError, match="annotate the eval set"):
+    with pytest.raises(ValueError, match="annotate the validation set"):
         export_physical_training_dataset(tmp_path / "clips", tmp_path / "dataset")
 
 

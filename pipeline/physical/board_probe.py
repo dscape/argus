@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
@@ -141,9 +143,7 @@ def board_probe_config_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, 
         "transformer_layers": int(
             probe_config.get("transformer_layers", _DEFAULT_TRANSFORMER_LAYERS)
         ),
-        "transformer_heads": int(
-            probe_config.get("transformer_heads", _DEFAULT_TRANSFORMER_HEADS)
-        ),
+        "transformer_heads": int(probe_config.get("transformer_heads", _DEFAULT_TRANSFORMER_HEADS)),
         "transformer_ff_dim": int(
             probe_config.get("transformer_ff_dim", _DEFAULT_TRANSFORMER_FF_DIM)
         ),
@@ -167,30 +167,11 @@ def dino_patches_to_square_tokens(patch_tokens: torch.Tensor) -> torch.Tensor:
     Accepts either DINO-style tokens with a leading CLS token or plain square
     grids such as the YOLO-derived frontend.
     """
-    if patch_tokens.ndim != 3:
-        raise ValueError(f"Expected (B, N, D) patch tokens, got {tuple(patch_tokens.shape)}")
-
-    token_count = patch_tokens.shape[1]
-    cls_grid_size = int((token_count - 1) ** 0.5)
-    plain_grid_size = int(token_count**0.5)
-
-    if cls_grid_size * cls_grid_size == token_count - 1:
-        tokens = patch_tokens[:, 1:, :]
-        grid_size = cls_grid_size
-    elif plain_grid_size * plain_grid_size == token_count:
-        tokens = patch_tokens
-        grid_size = plain_grid_size
-    else:
-        raise ValueError(
-            f"Token count {token_count} is neither a square grid nor a square grid plus CLS"
-        )
-
+    tokens, grid_size = _tokens_and_grid_size_from_patch_tokens(patch_tokens)
     if grid_size % 8 != 0:
-        raise ValueError(
-            f"Patch grid {grid_size}x{grid_size} cannot map cleanly to 8x8 squares"
-        )
+        raise ValueError(f"Patch grid {grid_size}x{grid_size} cannot map cleanly to 8x8 squares")
 
-    batch_size, patch_count, embed_dim = tokens.shape
+    batch_size, _patch_count, embed_dim = tokens.shape
     patches_per_square = grid_size // 8
     reshaped = tokens.reshape(batch_size, grid_size, grid_size, embed_dim)
     square_tokens = reshaped.reshape(
@@ -202,6 +183,100 @@ def dino_patches_to_square_tokens(patch_tokens: torch.Tensor) -> torch.Tensor:
         embed_dim,
     ).mean(dim=(2, 4))
     return square_tokens.reshape(batch_size, 64, embed_dim)
+
+
+def _tokens_and_grid_size_from_patch_tokens(
+    patch_tokens: torch.Tensor,
+) -> tuple[torch.Tensor, int]:
+    if patch_tokens.ndim != 3:
+        raise ValueError(f"Expected (B, N, D) patch tokens, got {tuple(patch_tokens.shape)}")
+
+    token_count = patch_tokens.shape[1]
+    cls_grid_size = int((token_count - 1) ** 0.5)
+    plain_grid_size = int(token_count**0.5)
+
+    if cls_grid_size * cls_grid_size == token_count - 1:
+        return patch_tokens[:, 1:, :], cls_grid_size
+    if plain_grid_size * plain_grid_size == token_count:
+        return patch_tokens, plain_grid_size
+    raise ValueError(
+        f"Token count {token_count} is neither a square grid nor a square grid plus CLS"
+    )
+
+
+def sample_oblique_square_tokens_from_patch_tokens(
+    patch_tokens: torch.Tensor,
+    *,
+    corners: torch.Tensor,
+    image_size: int,
+) -> torch.Tensor:
+    """Pool contextual square regions from an oblique whole-board image."""
+    tokens, grid_size = _tokens_and_grid_size_from_patch_tokens(patch_tokens)
+    batch_size, patch_count, _embed_dim = tokens.shape
+    if corners.shape != (batch_size, 4, 2):
+        raise ValueError(
+            f"Expected corners with shape ({batch_size}, 4, 2), got {tuple(corners.shape)}"
+        )
+
+    board_points = np.array(
+        [
+            [0.0, 0.0],
+            [8.0, 0.0],
+            [8.0, 8.0],
+            [0.0, 8.0],
+        ],
+        dtype=np.float32,
+    )
+    patch_axis = np.linspace(0.0, float(image_size - 1), grid_size, dtype=np.float32)
+    patch_points = np.stack(np.meshgrid(patch_axis, patch_axis), axis=-1).reshape(patch_count, 2)
+
+    square_token_batches: list[torch.Tensor] = []
+    for sample_index, sample_corners in enumerate(corners.detach().cpu().numpy()):
+        image_to_board = cv2.getPerspectiveTransform(
+            sample_corners.astype(np.float32),
+            board_points,
+        )
+        board_coords = cv2.perspectiveTransform(
+            patch_points.reshape(1, patch_count, 2),
+            image_to_board,
+        ).reshape(patch_count, 2)
+        sample_tokens = tokens[sample_index]
+        sample_square_tokens: list[torch.Tensor] = []
+        for row in range(8):
+            depth = 1.0 - (row / 7.0)
+            top_margin = 0.55 + 0.35 * depth
+            bottom_margin = 0.10
+            side_margin = 0.20
+            col_tokens: list[torch.Tensor] = []
+            for col in range(8):
+                x_min = float(col) - side_margin
+                x_max = float(col + 1) + side_margin
+                y_min = float(row) - top_margin
+                y_max = float(row + 1) + bottom_margin
+                region_mask = (
+                    (board_coords[:, 0] >= x_min)
+                    & (board_coords[:, 0] <= x_max)
+                    & (board_coords[:, 1] >= y_min)
+                    & (board_coords[:, 1] <= y_max)
+                )
+                region_indices = np.flatnonzero(region_mask)
+                if len(region_indices) == 0:
+                    center = np.array([float(col) + 0.5, float(row) + 0.5], dtype=np.float32)
+                    nearest_index = int(
+                        np.argmin(np.sum((board_coords - center[None, :]) ** 2, axis=1))
+                    )
+                    col_tokens.append(sample_tokens[nearest_index])
+                else:
+                    index_tensor = torch.tensor(
+                        region_indices.tolist(),
+                        dtype=torch.long,
+                        device=sample_tokens.device,
+                    )
+                    col_tokens.append(sample_tokens.index_select(0, index_tensor).mean(dim=0))
+            sample_square_tokens.extend(col_tokens)
+        square_token_batches.append(torch.stack(sample_square_tokens, dim=0))
+
+    return torch.stack(square_token_batches, dim=0)
 
 
 def extract_square_token_features(
@@ -216,9 +291,37 @@ def extract_square_token_features(
     label_batches: list[torch.Tensor] = []
     encoder.eval()
     with torch.no_grad():
-        for images, labels in loader:
-            patch_tokens = encoder.forward_patches(images.to(device)).cpu()
-            square_tokens = dino_patches_to_square_tokens(patch_tokens)
+        for batch in loader:
+            corners: torch.Tensor | None = None
+            if not isinstance(batch, (tuple, list)):
+                raise ValueError("Expected dataloader batch to be a tuple or list")
+            if len(batch) == 2:
+                images, labels = batch
+            elif len(batch) == 3:
+                images, labels, corners = batch
+            else:
+                raise ValueError(f"Unsupported dataset batch shape: {len(batch)} items")
+
+            if images.ndim == 5:
+                batch_size_actual, square_count, channels, height, width = images.shape
+                square_images = images.reshape(
+                    batch_size_actual * square_count,
+                    channels,
+                    height,
+                    width,
+                )
+                square_embeddings = encoder.forward_pooled(square_images.to(device)).cpu()
+                square_tokens = square_embeddings.reshape(batch_size_actual, square_count, -1)
+            else:
+                patch_tokens = encoder.forward_patches(images.to(device)).cpu()
+                if corners is None:
+                    square_tokens = dino_patches_to_square_tokens(patch_tokens)
+                else:
+                    square_tokens = sample_oblique_square_tokens_from_patch_tokens(
+                        patch_tokens,
+                        corners=corners,
+                        image_size=images.shape[-1],
+                    )
             feature_batches.append(square_tokens)
             label_batches.append(labels.cpu())
     return torch.cat(feature_batches, dim=0), torch.cat(label_batches, dim=0)
@@ -266,16 +369,22 @@ def train_board_probe(
     train_board_weights = None if board_weights is None else board_weights.to(device=device)
     best_state: dict[str, torch.Tensor] | None = None
     best_selection_score = float("-inf")
-    eval_square_tokens = val_square_tokens if selection_square_tokens is None else selection_square_tokens
+    eval_square_tokens = (
+        val_square_tokens if selection_square_tokens is None else selection_square_tokens
+    )
     eval_labels = val_labels if selection_labels is None else selection_labels
 
     for _epoch in range(epochs):
         probe.train()
         logits = probe(train_features)
-        per_square_loss = criterion(logits.reshape(-1, logits.shape[-1]), train_targets.reshape(-1))
-        per_board_loss = per_square_loss.reshape(train_targets.shape[0], train_targets.shape[1]).mean(
-            dim=1
+        per_square_loss = criterion(
+            logits.reshape(-1, logits.shape[-1]),
+            train_targets.reshape(-1),
         )
+        per_board_loss = per_square_loss.reshape(
+            train_targets.shape[0],
+            train_targets.shape[1],
+        ).mean(dim=1)
         if train_board_weights is None:
             loss = per_board_loss.mean()
         else:
@@ -318,7 +427,6 @@ def selection_score_for_metrics(metrics: ProbeMetrics, selection_metric: str) ->
     if selection_metric == "non_empty_plus_macro":
         return (metrics.non_empty_accuracy + metrics.macro_f1) / 2.0
     raise ValueError(f"Unsupported selection metric: {selection_metric}")
-
 
 
 def evaluate_board_probe(

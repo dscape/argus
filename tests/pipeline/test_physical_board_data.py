@@ -62,7 +62,7 @@ def test_apply_piece_rectification_artifacts_preserves_rgba_shape() -> None:
 
 def test_physical_eval_board_dataset_loads_rectified_boards(tmp_path) -> None:
     project_root = tmp_path
-    board_path = project_root / "data" / "physical" / "eval" / "boards" / "sample.jpg"
+    board_path = project_root / "data" / "physical" / "val" / "boards" / "sample.jpg"
     board_path.parent.mkdir(parents=True)
     assert cv2.imwrite(str(board_path), np.full((32, 32, 3), 127, dtype=np.uint8))
 
@@ -70,7 +70,7 @@ def test_physical_eval_board_dataset_loads_rectified_boards(tmp_path) -> None:
         rows=[
             PhysicalEvalBoardRow(
                 annotation_id="ann-1",
-                board_path="data/physical/eval/boards/sample.jpg",
+                board_path="data/physical/val/boards/sample.jpg",
                 labels=tuple([0] * 64),
                 source_video_id="video-1",
             )
@@ -93,7 +93,7 @@ def test_physical_eval_board_dataset_loads_rectified_boards(tmp_path) -> None:
 
 def test_physical_manual_train_board_dataset_loads_rectified_boards(tmp_path) -> None:
     project_root = tmp_path
-    board_path = project_root / "data" / "physical" / "train_manual" / "boards" / "sample.jpg"
+    board_path = project_root / "data" / "physical" / "train" / "boards" / "sample.jpg"
     board_path.parent.mkdir(parents=True)
     assert cv2.imwrite(str(board_path), np.full((32, 32, 3), 127, dtype=np.uint8))
 
@@ -101,7 +101,7 @@ def test_physical_manual_train_board_dataset_loads_rectified_boards(tmp_path) ->
         rows=[
             PhysicalEvalBoardRow(
                 annotation_id="ann-1",
-                board_path="data/physical/train_manual/boards/sample.jpg",
+                board_path="data/physical/train/boards/sample.jpg",
                 labels=tuple([0] * 64),
                 source_video_id="video-1",
             )

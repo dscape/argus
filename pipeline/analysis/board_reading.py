@@ -100,6 +100,7 @@ class HybridFrameReader(OverlayFrameReader):
         self._physical_reader = PhysicalBoardSequenceReader(device=config.device)
 
     def read(self, frame_rgb: np.ndarray) -> FrameReadResult:
+        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
         result = super().read(frame_rgb)
         if result.fen is not None:
             self._physical_reader.reset()
@@ -107,6 +108,20 @@ class HybridFrameReader(OverlayFrameReader):
 
         from pipeline.analysis.board_segmenter import segment_board
         from pipeline.analysis.piece_detector import detect_pieces
+        from pipeline.physical.board_localizer import localize_board
+
+        localization = localize_board(frame_bgr, device=self.config.device)
+        if localization is not None:
+            state = detect_pieces(
+                frame_bgr,
+                self.config,
+                segmenter_method=localization.method,
+                board_corners=localization.corners,
+                physical_sequence_reader=self._physical_reader,
+            )
+            if state is not None and _fen_looks_plausible(state.fen):
+                return FrameReadResult(fen=state.fen, method=f"hybrid_{state.method}")
+            self._physical_reader.reset()
 
         segment = segment_board(frame_rgb, self.config)
         if segment is None:

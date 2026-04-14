@@ -16,7 +16,9 @@ from pipeline.db.connection import get_conn
 from pipeline.paths import PROJECT_ROOT
 from pipeline.physical.board_data import PhysicalEvalBoardDataset, PhysicalEvalBoardRow
 from pipeline.physical.runtime_visualization import (
+    VisualizedRuntimeFrame,
     _collect_visualized_frames,
+    _collect_visualized_frames_for_indices,
     _group_rows_by_clip,
     _select_clip_path,
     render_contact_sheet,
@@ -114,77 +116,70 @@ def inspect_runtime_frame(
     panel_size: int = 240,
     device: str = "cpu",
 ) -> dict[str, Any]:
-    if panel_size <= 0:
-        raise ValueError(f"panel_size must be > 0, got {panel_size}")
-
-    selected_row, clip_rows = _find_row_and_clip_rows(annotation_id)
-    if selected_row.frame_index is None:
-        raise ValueError(f"Annotation {annotation_id} is missing frame_index")
-
-    started_at = time.perf_counter()
-    visualized_frames = _collect_visualized_frames(
-        clip_rows,
-        frame_start=int(selected_row.frame_index),
-        frame_count=1,
+    results = inspect_runtime_frames(
+        annotation_ids=[annotation_id],
+        panel_size=panel_size,
         device=device,
     )
-    elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 1)
+    if len(results) != 1:
+        raise ValueError(f"Expected exactly one result for {annotation_id}, got {len(results)}")
+    return results[0]
 
-    if len(visualized_frames) != 1:
-        raise ValueError(
-            "Expected exactly one visualized frame for "
-            f"{annotation_id}, got {len(visualized_frames)}"
-        )
 
-    frame = visualized_frames[0]
-    rendered = render_visualized_runtime_frame(frame, panel_size=panel_size)
-    non_empty_square_count = sum(int(value != _EMPTY_CLASS_ID) for value in frame.gt_class_ids)
-    temporal_non_empty_correct_count = _count_non_empty_correct(
-        frame.temporal_class_ids,
-        frame.gt_class_ids,
-    )
-    stateless_non_empty_correct_count = _count_non_empty_correct(
-        frame.stateless_class_ids,
-        frame.gt_class_ids,
-    )
 
-    return {
-        "annotation_id": frame.annotation_id,
-        "clip_path": selected_row.clip_path,
-        "clip_filename": _clip_filename(selected_row),
-        "frame_index": frame.frame_index,
-        "board_path": frame.board_path,
-        "source_video_id": selected_row.source_video_id,
-        "gt_change_count": frame.gt_change_count,
-        "stateless_change_count": frame.stateless_change_count,
-        "temporal_change_count": frame.temporal_change_count,
-        "stateless_error_count": frame.stateless_error_count,
-        "temporal_error_count": frame.temporal_error_count,
-        "stateless_square_accuracy": round((64 - frame.stateless_error_count) / 64.0, 4),
-        "temporal_square_accuracy": round((64 - frame.temporal_error_count) / 64.0, 4),
-        "non_empty_square_count": non_empty_square_count,
-        "stateless_non_empty_correct_count": stateless_non_empty_correct_count,
-        "temporal_non_empty_correct_count": temporal_non_empty_correct_count,
-        "stateless_non_empty_accuracy": round(
-            stateless_non_empty_correct_count / non_empty_square_count,
-            4,
+def inspect_runtime_frames(
+    *,
+    annotation_ids: list[str],
+    panel_size: int = 240,
+    device: str = "cpu",
+) -> list[dict[str, Any]]:
+    if panel_size <= 0:
+        raise ValueError(f"panel_size must be > 0, got {panel_size}")
+    if not annotation_ids:
+        return []
+
+    rows_by_clip = _rows_by_clip()
+    selected_rows_by_annotation_id = _find_rows_by_annotation_ids(annotation_ids, rows_by_clip)
+    selected_rows_by_clip: dict[str, list[PhysicalEvalBoardRow]] = {}
+    for annotation_id in annotation_ids:
+        selected_row = selected_rows_by_annotation_id[annotation_id]
+        clip_key = selected_row.clip_path or selected_row.annotation_id
+        selected_rows_by_clip.setdefault(clip_key, []).append(selected_row)
+
+    results_by_annotation_id: dict[str, dict[str, Any]] = {}
+    for clip_key, clip_selected_rows in selected_rows_by_clip.items():
+        clip_rows = rows_by_clip[clip_key]
+        started_at = time.perf_counter()
+        visualized_frames = _collect_visualized_frames_for_indices(
+            clip_rows,
+            selected_frame_indices={
+                int(row.frame_index)
+                for row in clip_selected_rows
+                if row.frame_index is not None
+            },
+            device=device,
         )
-        if non_empty_square_count > 0
-        else None,
-        "temporal_non_empty_accuracy": round(
-            temporal_non_empty_correct_count / non_empty_square_count,
-            4,
-        )
-        if non_empty_square_count > 0
-        else None,
-        "stateless_exact_match": frame.stateless_error_count == 0,
-        "temporal_exact_match": frame.temporal_error_count == 0,
-        "stateless_mean_confidence": round(frame.stateless_mean_confidence, 4),
-        "temporal_mean_confidence": round(frame.temporal_mean_confidence, 4),
-        "elapsed_ms": elapsed_ms,
-        "thumbnail_b64": _image_to_base64(Image.fromarray(frame.crop_rgb)),
-        "image_b64": _image_to_base64(rendered),
-    }
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 1)
+        elapsed_ms_per_frame = round(elapsed_ms / len(visualized_frames), 1)
+
+        visualized_by_annotation_id = {
+            frame.annotation_id: frame for frame in visualized_frames
+        }
+        for selected_row in clip_selected_rows:
+            frame = visualized_by_annotation_id.get(selected_row.annotation_id)
+            if frame is None:
+                raise ValueError(
+                    "Expected visualized frame for "
+                    f"{selected_row.annotation_id}, got {len(visualized_frames)} frames"
+                )
+            results_by_annotation_id[selected_row.annotation_id] = _runtime_result_from_frame(
+                selected_row,
+                frame,
+                panel_size=panel_size,
+                elapsed_ms=elapsed_ms_per_frame,
+            )
+
+    return [results_by_annotation_id[annotation_id] for annotation_id in annotation_ids]
 
 
 def save_physical_runtime_eval(
@@ -366,16 +361,88 @@ def get_session_image_path(session_id: str, filename: str) -> Path | None:
     return path if path.exists() else None
 
 
-def _find_row_and_clip_rows(
-    annotation_id: str,
-) -> tuple[PhysicalEvalBoardRow, list[PhysicalEvalBoardRow]]:
-    dataset = PhysicalEvalBoardDataset()
-    rows_by_clip = _group_rows_by_clip(dataset.rows)
-    for clip_rows in rows_by_clip.values():
-        for row in clip_rows:
-            if row.annotation_id == annotation_id:
-                return row, clip_rows
-    raise FileNotFoundError(f"Physical validation annotation {annotation_id} not found")
+def _runtime_result_from_frame(
+    selected_row: PhysicalEvalBoardRow,
+    frame: VisualizedRuntimeFrame,
+    *,
+    panel_size: int,
+    elapsed_ms: float,
+) -> dict[str, Any]:
+    rendered = render_visualized_runtime_frame(frame, panel_size=panel_size)
+    non_empty_square_count = sum(int(value != _EMPTY_CLASS_ID) for value in frame.gt_class_ids)
+    temporal_non_empty_correct_count = _count_non_empty_correct(
+        frame.temporal_class_ids,
+        frame.gt_class_ids,
+    )
+    stateless_non_empty_correct_count = _count_non_empty_correct(
+        frame.stateless_class_ids,
+        frame.gt_class_ids,
+    )
+
+    return {
+        "annotation_id": frame.annotation_id,
+        "clip_path": selected_row.clip_path,
+        "clip_filename": _clip_filename(selected_row),
+        "frame_index": frame.frame_index,
+        "board_path": frame.board_path,
+        "source_video_id": selected_row.source_video_id,
+        "gt_change_count": frame.gt_change_count,
+        "stateless_change_count": frame.stateless_change_count,
+        "temporal_change_count": frame.temporal_change_count,
+        "stateless_error_count": frame.stateless_error_count,
+        "temporal_error_count": frame.temporal_error_count,
+        "stateless_square_accuracy": round((64 - frame.stateless_error_count) / 64.0, 4),
+        "temporal_square_accuracy": round((64 - frame.temporal_error_count) / 64.0, 4),
+        "non_empty_square_count": non_empty_square_count,
+        "stateless_non_empty_correct_count": stateless_non_empty_correct_count,
+        "temporal_non_empty_correct_count": temporal_non_empty_correct_count,
+        "stateless_non_empty_accuracy": round(
+            stateless_non_empty_correct_count / non_empty_square_count,
+            4,
+        )
+        if non_empty_square_count > 0
+        else None,
+        "temporal_non_empty_accuracy": round(
+            temporal_non_empty_correct_count / non_empty_square_count,
+            4,
+        )
+        if non_empty_square_count > 0
+        else None,
+        "stateless_exact_match": frame.stateless_error_count == 0,
+        "temporal_exact_match": frame.temporal_error_count == 0,
+        "stateless_mean_confidence": round(frame.stateless_mean_confidence, 4),
+        "temporal_mean_confidence": round(frame.temporal_mean_confidence, 4),
+        "elapsed_ms": elapsed_ms,
+        "thumbnail_b64": _image_to_base64(Image.fromarray(frame.crop_rgb)),
+        "image_b64": _image_to_base64(rendered),
+    }
+
+
+
+def _rows_by_clip() -> dict[str, list[PhysicalEvalBoardRow]]:
+    return _group_rows_by_clip(PhysicalEvalBoardDataset().rows)
+
+
+
+def _find_rows_by_annotation_ids(
+    annotation_ids: list[str],
+    rows_by_clip: dict[str, list[PhysicalEvalBoardRow]],
+) -> dict[str, PhysicalEvalBoardRow]:
+    rows_by_annotation_id = {
+        row.annotation_id: row
+        for clip_rows in rows_by_clip.values()
+        for row in clip_rows
+    }
+    selected_rows: dict[str, PhysicalEvalBoardRow] = {}
+    for annotation_id in annotation_ids:
+        selected_row = rows_by_annotation_id.get(annotation_id)
+        if selected_row is None:
+            raise FileNotFoundError(f"Physical validation annotation {annotation_id} not found")
+        if selected_row.frame_index is None:
+            raise ValueError(f"Annotation {annotation_id} is missing frame_index")
+        selected_rows[annotation_id] = selected_row
+    return selected_rows
+
 
 
 def _count_non_empty_correct(

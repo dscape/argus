@@ -23,6 +23,7 @@ from argus.datagen.piece_renderer import (
     select_random_material,
 )
 from argus.datagen.synth import generate_dataset as generate_synthetic_clips
+from pipeline.physical import splits
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 INPUT_SIZE = 224
@@ -30,8 +31,8 @@ NUM_SQUARE_CLASSES = len(SQUARE_CLASS_NAMES)
 _IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406), dtype=torch.float32).view(3, 1, 1)
 _IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225), dtype=torch.float32).view(3, 1, 1)
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_EVAL_ROOT = _PROJECT_ROOT / "data" / "physical" / "eval"
-_DEFAULT_MANUAL_TRAIN_ROOT = _PROJECT_ROOT / "data" / "physical" / "train_manual"
+_DEFAULT_VAL_ROOT = _PROJECT_ROOT / "data" / "physical" / "val"
+_DEFAULT_TRAIN_ROOT = _PROJECT_ROOT / "data" / "physical" / "train"
 
 
 @dataclass(frozen=True)
@@ -154,34 +155,39 @@ class PhysicalAnnotatedBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         return preprocess_board_image(image, size=self.image_size), targets
 
 
-class PhysicalEvalBoardDataset(PhysicalAnnotatedBoardDataset):
-    """Held-out real rectified boards saved by the physical annotation workflow."""
+class PhysicalValBoardDataset(PhysicalAnnotatedBoardDataset):
+    """Held-out real rectified boards used for physical validation."""
 
     def __init__(
         self,
         *,
-        eval_root: str | Path = _DEFAULT_EVAL_ROOT,
-        image_size: int = INPUT_SIZE,
-        rows: list[PhysicalEvalBoardRow] | None = None,
-    ) -> None:
-        super().__init__(annotation_root=eval_root, image_size=image_size, rows=rows)
-
-
-class PhysicalManualTrainBoardDataset(PhysicalAnnotatedBoardDataset):
-    """Manually labeled non-held-out boards for physical training."""
-
-    def __init__(
-        self,
-        *,
-        annotation_root: str | Path = _DEFAULT_MANUAL_TRAIN_ROOT,
+        annotation_root: str | Path = _DEFAULT_VAL_ROOT,
         image_size: int = INPUT_SIZE,
         rows: list[PhysicalEvalBoardRow] | None = None,
     ) -> None:
         super().__init__(annotation_root=annotation_root, image_size=image_size, rows=rows)
 
 
+class PhysicalTrainBoardDataset(PhysicalAnnotatedBoardDataset):
+    """Manually labeled non-held-out boards for physical training."""
+
+    def __init__(
+        self,
+        *,
+        annotation_root: str | Path = _DEFAULT_TRAIN_ROOT,
+        image_size: int = INPUT_SIZE,
+        rows: list[PhysicalEvalBoardRow] | None = None,
+    ) -> None:
+        super().__init__(annotation_root=annotation_root, image_size=image_size, rows=rows)
+
+
+PhysicalEvalBoardDataset = PhysicalValBoardDataset
+PhysicalManualTrainBoardDataset = PhysicalTrainBoardDataset
+
+
 
 def load_annotated_board_rows(annotation_root: str | Path) -> list[PhysicalEvalBoardRow]:
+    splits.ensure_annotation_layout_migrated()
     annotations_path = Path(annotation_root) / "board_annotations.jsonl"
     if not annotations_path.exists():
         raise ValueError(f"Physical board annotations not found: {annotations_path}")
@@ -220,8 +226,14 @@ def load_annotated_board_rows(annotation_root: str | Path) -> list[PhysicalEvalB
 
 
 
+def load_val_board_rows(
+    annotation_root: str | Path = _DEFAULT_VAL_ROOT,
+) -> list[PhysicalEvalBoardRow]:
+    return load_annotated_board_rows(annotation_root)
+
+
 def load_eval_board_rows(
-    eval_root: str | Path = _DEFAULT_EVAL_ROOT,
+    eval_root: str | Path = _DEFAULT_VAL_ROOT,
 ) -> list[PhysicalEvalBoardRow]:
     return load_annotated_board_rows(eval_root)
 

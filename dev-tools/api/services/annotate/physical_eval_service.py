@@ -1,4 +1,4 @@
-"""Service layer for building the held-out physical square evaluation set."""
+"""Service layer for held-out physical-board validation annotations."""
 
 from __future__ import annotations
 
@@ -12,12 +12,12 @@ import chess
 import cv2
 import numpy as np
 import torch
-
-from api.services.data import clip_service
 from pipeline.overlay.overlay_move_detector import find_move_between_positions
 from pipeline.overlay.replay import build_replay_board
-from pipeline.physical import eval_dataset
+from pipeline.physical import eval_dataset, splits
 from pipeline.shared import SQUARE_CLASS_NAMES
+
+from api.services.data import clip_service
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 _DEFAULT_CLIPS_DIR = _PROJECT_ROOT / "data" / "argus" / "train_real"
@@ -30,7 +30,12 @@ def list_clip_files(
     *,
     limit: int = 200,
 ) -> dict[str, Any]:
-    return _list_clip_files(eval_dataset, clips_dir, limit=limit)
+    return _list_clip_files(
+        eval_dataset,
+        clips_dir,
+        limit=limit,
+        split_name=eval_dataset.DATASET_SPLIT,
+    )
 
 
 
@@ -97,8 +102,9 @@ def _list_clip_files(
     clips_dir: str,
     *,
     limit: int,
-    exclude_source_video_ids: set[str] | None = None,
+    split_name: str,
 ) -> dict[str, Any]:
+    splits.ensure_annotation_layout_migrated()
     directory = _resolve_within_project(clips_dir)
     if not directory.exists():
         return {"clips_dir": str(directory.relative_to(_PROJECT_ROOT)), "clips": []}
@@ -108,7 +114,8 @@ def _list_clip_files(
     for path in sorted(directory.glob("clip_*.pt"), key=lambda p: p.stat().st_mtime, reverse=True):
         match = _REAL_CLIP_RE.match(path.name)
         source_video_id = match.group("video_id") if match else None
-        if source_video_id is not None and exclude_source_video_ids and source_video_id in exclude_source_video_ids:
+        assigned_split = splits.get_source_video_split(source_video_id)
+        if assigned_split is not None and assigned_split != split_name:
             continue
 
         stat = path.stat()
@@ -127,6 +134,7 @@ def _list_clip_files(
                 "annotated_frame_count": annotated_frame_count,
                 "num_frames": num_frames,
                 "fully_annotated": fully_annotated,
+                "assigned_split": assigned_split,
             }
         )
         if len(clips) >= limit:
@@ -150,7 +158,8 @@ def _get_frame_annotation(
     frame_index: int,
 ) -> dict[str, Any] | None:
     resolved = _resolve_within_project(clip_path)
-    return dataset_module.load_board_annotation(str(resolved.relative_to(_PROJECT_ROOT)), frame_index)
+    relative_clip_path = str(resolved.relative_to(_PROJECT_ROOT))
+    return dataset_module.load_board_annotation(relative_clip_path, frame_index)
 
 
 
@@ -318,7 +327,11 @@ def _build_move_corrections(
                 "uci": move.uci(),
                 "san": san,
                 "detect_value": original_move.get("detect_value") if original_move else None,
-                "timestamp_seconds": _move_timestamp(original_move, frame_timestamps_seconds, frame_index),
+                "timestamp_seconds": _move_timestamp(
+                    original_move,
+                    frame_timestamps_seconds,
+                    frame_index,
+                ),
                 "estimated_otb_frame_index": (
                     original_move.get("estimated_otb_frame_index") if original_move else None
                 ),
@@ -586,7 +599,10 @@ def _move_timestamp(
     frame_timestamps_seconds: list[float],
     frame_index: int,
 ) -> float | None:
-    if original_move is not None and isinstance(original_move.get("timestamp_seconds"), (int, float)):
+    if original_move is not None and isinstance(
+        original_move.get("timestamp_seconds"),
+        (int, float),
+    ):
         return float(original_move["timestamp_seconds"])
     if frame_index < len(frame_timestamps_seconds):
         return float(frame_timestamps_seconds[frame_index])
