@@ -55,6 +55,11 @@ class PatchPoolingHead(nn.Module):
 
     def _forward_square_attention(self, spatial_tokens: torch.Tensor) -> torch.Tensor:
         square_tokens = self.to_square_tokens(spatial_tokens)
+        return self.pool_square_tokens(square_tokens)
+
+    def pool_square_tokens(self, square_tokens: torch.Tensor) -> torch.Tensor:
+        if self.pooling_type == "mean":
+            return square_tokens.mean(dim=1)
         square_tokens = square_tokens + self.square_pos_embed.unsqueeze(0)
         square_tokens = square_tokens + self.square_mlp(self.square_norm(square_tokens))
         attn_logits = self.attn_proj(square_tokens).squeeze(-1)

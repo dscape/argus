@@ -31,7 +31,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_SYNTHETIC_ROOT = _PROJECT_ROOT / "data" / "argus" / "training_dataset"
 _DEFAULT_REAL_CLIPS_DIR = _PROJECT_ROOT / "data" / "argus" / "train_real"
 _DEFAULT_OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "physical_move_model"
-_DEFAULT_DINO_MODEL = "facebook/dinov2-base"
+_DEFAULT_SIGLIP2_MODEL = "google/siglip2-base-patch16-224"
 
 
 class MoveLossMaskDataset(Dataset):
@@ -53,6 +53,22 @@ class MoveLossMaskDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         sample = dict(self.base_dataset[index])
+        if "move_loss_mask" in sample:
+            if self.loss_mode == "all_frames" and "move_loss_weights" not in sample:
+                move_mask = sample["move_loss_mask"].to(torch.bool)
+                loss_weights = torch.full_like(
+                    sample["detect_targets"],
+                    fill_value=self.no_move_loss_weight,
+                    dtype=torch.float32,
+                )
+                loss_weights = torch.where(
+                    move_mask,
+                    torch.full_like(loss_weights, self.move_frame_loss_weight),
+                    loss_weights,
+                )
+                sample["move_loss_weights"] = loss_weights
+            return sample
+
         move_mask = sample["move_mask"].to(torch.bool)
         if self.loss_mode == "move_frames":
             sample["move_loss_mask"] = move_mask.clone()
@@ -130,6 +146,11 @@ def main() -> None:
                 None if not real_val_source_video_ids else real_val_source_video_ids
             ),
             exclude_selection_source_video_ids=True,
+            observation_mode=args.observation_mode,
+            move_target_pre_frames=args.move_target_pre_frames,
+            detect_target_radius=args.detect_target_radius,
+            detect_target_decay=args.detect_target_decay,
+            oblique_crop_margin=args.oblique_crop_margin,
         )
         if real_train_clips:
             train_parts.append(
@@ -154,6 +175,11 @@ def main() -> None:
                 None if not real_val_source_video_ids else real_val_source_video_ids
             ),
             exclude_selection_source_video_ids=False,
+            observation_mode=args.observation_mode,
+            move_target_pre_frames=args.move_target_pre_frames,
+            detect_target_radius=args.detect_target_radius,
+            detect_target_decay=args.detect_target_decay,
+            oblique_crop_margin=args.oblique_crop_margin,
         )
         if real_val_clips:
             val_dataset = MoveLossMaskDataset(
@@ -203,17 +229,20 @@ def main() -> None:
 
     model = ArgusModel(
         vision_encoder_name=args.model_name,
-        vision_encoder_type="dinov2",
+        vision_encoder_type=args.vision_encoder_type,
         frozen_vision=True,
-        vision_feature_layer_indices=parse_feature_layer_indices(args.dino_feature_layer_indices),
+        vision_feature_layer_indices=parse_feature_layer_indices(args.feature_layer_indices),
         temporal_d_model=args.temporal_d_model,
         temporal_n_layers=args.temporal_layers,
         temporal_d_state=args.temporal_d_state,
         temporal_expand=args.temporal_expand,
         move_vocab_size=1970,
-        pooling_type="mean",
+        pooling_type=args.pooling_type,
         square_pool_size=8,
         square_head_enabled=args.square_loss_weight > 0.0,
+        square_token_mode=args.square_token_mode,
+        square_query_num_heads=args.square_query_num_heads,
+        square_query_dropout=args.square_query_dropout,
         use_detector=False,
     )
 
@@ -301,7 +330,13 @@ def main() -> None:
     summary = {
         "train_dataset_size": len(train_dataset),
         "val_dataset_size": len(val_dataset),
+        "observation_mode": args.observation_mode,
+        "vision_encoder_type": args.vision_encoder_type,
+        "square_token_mode": args.square_token_mode,
         "train_move_loss_mode": args.train_move_loss_mode,
+        "move_target_pre_frames": args.move_target_pre_frames,
+        "detect_target_radius": args.detect_target_radius,
+        "detect_target_decay": args.detect_target_decay,
         "move_frame_loss_weight": args.move_frame_loss_weight,
         "no_move_loss_weight": args.no_move_loss_weight,
         "square_loss_weight": args.square_loss_weight,
@@ -329,13 +364,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clip-grad-norm", type=float, default=1.0)
     parser.add_argument("--precision", type=str, default="bf16")
     parser.add_argument("--detect-loss-weight", type=float, default=0.5)
-    parser.add_argument("--square-loss-weight", type=float, default=0.0)
+    parser.add_argument("--square-loss-weight", type=float, default=1.0)
     parser.add_argument("--augment", action="store_true")
+    parser.add_argument(
+        "--observation-mode",
+        choices=("rectified", "oblique"),
+        default="oblique",
+    )
     parser.add_argument(
         "--train-move-loss-mode",
         choices=("move_frames", "all_frames"),
         default="move_frames",
     )
+    parser.add_argument("--move-target-pre-frames", type=int, default=2)
+    parser.add_argument("--detect-target-radius", type=int, default=1)
+    parser.add_argument("--detect-target-decay", type=float, default=0.5)
     parser.add_argument("--move-frame-loss-weight", type=float, default=1.0)
     parser.add_argument("--no-move-loss-weight", type=float, default=1.0)
     parser.add_argument("--use-synthetic", action="store_true")
@@ -345,8 +388,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--real-val-source-videos", type=str, default="psrPAoHr4wA")
     parser.add_argument("--real-negative-window-stride", type=int, default=8)
     parser.add_argument("--real-max-negative-windows-per-clip", type=int, default=4)
-    parser.add_argument("--model-name", type=str, default=_DEFAULT_DINO_MODEL)
-    parser.add_argument("--dino-feature-layer-indices", type=str, default="8,10,11")
+    parser.add_argument("--oblique-crop-margin", type=float, default=0.18)
+    parser.add_argument(
+        "--vision-encoder-type",
+        choices=("dinov2", "siglip", "siglip2", "yolo"),
+        default="siglip2",
+    )
+    parser.add_argument("--model-name", type=str, default=_DEFAULT_SIGLIP2_MODEL)
+    parser.add_argument("--feature-layer-indices", type=str, default="")
+    parser.add_argument(
+        "--pooling-type",
+        choices=("mean", "square_attention"),
+        default="square_attention",
+    )
+    parser.add_argument(
+        "--square-token-mode",
+        choices=("pooled", "oblique_square_queries"),
+        default="oblique_square_queries",
+    )
+    parser.add_argument("--square-query-num-heads", type=int, default=8)
+    parser.add_argument("--square-query-dropout", type=float, default=0.0)
     parser.add_argument("--temporal-d-model", type=int, default=512)
     parser.add_argument("--temporal-layers", type=int, default=4)
     parser.add_argument("--temporal-d-state", type=int, default=128)
@@ -371,13 +432,15 @@ def physical_move_collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, 
         )
     if all("square_targets" in sample for sample in batch):
         collated["square_targets"] = torch.stack([sample["square_targets"] for sample in batch])
+    if all("board_corners" in sample for sample in batch):
+        collated["board_corners"] = torch.stack([sample["board_corners"] for sample in batch])
     return collated
 
 
-def parse_feature_layer_indices(raw_value: str) -> list[int]:
+def parse_feature_layer_indices(raw_value: str) -> list[int] | None:
     values = [part.strip() for part in raw_value.split(",") if part.strip()]
     if not values:
-        raise ValueError("feature layer indices must not be empty")
+        return None
     return [int(value) for value in values]
 
 

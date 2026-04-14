@@ -9,6 +9,7 @@ import torch.nn as nn
 
 from argus.model.board_detector import BoardDetector
 from argus.model.move_head import MoveHead
+from argus.model.oblique_square_decoder import ObliqueSquareQueryDecoder
 from argus.model.patch_pooling import PatchPoolingHead
 from argus.model.square_head import SquareHead
 from argus.model.temporal import MambaTemporalModule
@@ -38,6 +39,10 @@ class ArgusModel(nn.Module):
         square_pool_size: int = 8,
         square_head_enabled: bool = False,
         square_vocab_size: int = 13,
+        square_token_mode: str = "pooled",
+        square_query_num_heads: int = 8,
+        square_query_dropout: float = 0.0,
+        square_query_mlp_ratio: float = 4.0,
         use_detector: bool = False,
         vision_encoder_type: str = "dinov2",
         vision_feature_layer_indices: list[int] | tuple[int, ...] | None = None,
@@ -45,6 +50,7 @@ class ArgusModel(nn.Module):
     ) -> None:
         super().__init__()
         self.use_detector = use_detector
+        self.square_token_mode = square_token_mode
         self.vision_encoder = VisionEncoder(
             model_name=vision_encoder_name,
             frozen=frozen_vision,
@@ -78,12 +84,23 @@ class ArgusModel(nn.Module):
             "square_pool_size": square_pool_size,
             "square_head_enabled": square_head_enabled,
             "square_vocab_size": square_vocab_size,
+            "square_token_mode": square_token_mode,
+            "square_query_num_heads": square_query_num_heads,
+            "square_query_dropout": square_query_dropout,
+            "square_query_mlp_ratio": square_query_mlp_ratio,
             "use_detector": use_detector,
         }
         self.patch_pooling = PatchPoolingHead(
             embed_dim=resolved_embed_dim,
             pooling_type=pooling_type,
             square_size=square_pool_size,
+        )
+        self.square_tokenizer = self._build_square_tokenizer(
+            embed_dim=resolved_embed_dim,
+            square_token_mode=square_token_mode,
+            square_query_num_heads=square_query_num_heads,
+            square_query_dropout=square_query_dropout,
+            square_query_mlp_ratio=square_query_mlp_ratio,
         )
         self.temporal = MambaTemporalModule(
             d_model=temporal_d_model,
@@ -108,25 +125,81 @@ class ArgusModel(nn.Module):
                 input_dim=resolved_embed_dim,
             )
 
+    def _build_square_tokenizer(
+        self,
+        *,
+        embed_dim: int,
+        square_token_mode: str,
+        square_query_num_heads: int,
+        square_query_dropout: float,
+        square_query_mlp_ratio: float,
+    ) -> ObliqueSquareQueryDecoder | None:
+        if square_token_mode == "pooled":
+            return None
+        if square_token_mode == "oblique_square_queries":
+            return ObliqueSquareQueryDecoder(
+                embed_dim=embed_dim,
+                num_heads=square_query_num_heads,
+                dropout=square_query_dropout,
+                mlp_ratio=square_query_mlp_ratio,
+            )
+        raise ValueError(f"Unsupported square_token_mode: {square_token_mode}")
+
+    def _square_tokens_from_patches(
+        self,
+        patch_tokens: torch.Tensor,
+        *,
+        board_corners: torch.Tensor | None,
+        image_height: int,
+        image_width: int,
+    ) -> torch.Tensor | None:
+        if self.square_tokenizer is not None:
+            square_tokens: torch.Tensor = self.square_tokenizer(
+                patch_tokens,
+                corners=board_corners,
+                image_size=(image_height, image_width),
+            )
+            return square_tokens
+        if self.square_head is not None or self.patch_pooling.pooling_type == "square_attention":
+            square_tokens = self.patch_pooling.to_square_tokens(patch_tokens)
+            return square_tokens
+        return None
+
     def forward_single_board(
         self,
         crops: torch.Tensor,
         legal_masks: torch.Tensor | None = None,
+        board_corners: torch.Tensor | None = None,
     ) -> ModelOutput:
-        B, T, C, H, W = crops.shape
-        flat_crops = crops.reshape(B * T, C, H, W)
+        batch_size, seq_len, _channels, image_height, image_width = crops.shape
+        flat_crops = crops.reshape(batch_size * seq_len, crops.shape[2], image_height, image_width)
         patch_tokens = self.vision_encoder.forward_patches(flat_crops)
+        flat_board_corners = None
+        if board_corners is not None:
+            flat_board_corners = board_corners.reshape(batch_size * seq_len, 4, 2)
+
+        square_tokens = self._square_tokens_from_patches(
+            patch_tokens,
+            board_corners=flat_board_corners,
+            image_height=image_height,
+            image_width=image_width,
+        )
         square_logits = None
         if self.square_head is not None:
-            square_tokens = self.patch_pooling.to_square_tokens(patch_tokens)
+            if square_tokens is None:
+                raise RuntimeError("Square head requires square tokens, but none were produced")
             square_logits = self.square_head(square_tokens).reshape(
-                B,
-                T,
+                batch_size,
+                seq_len,
                 -1,
                 self._model_config["square_vocab_size"],
             )
-        features = self.patch_pooling(patch_tokens)
-        features = features.reshape(B, T, -1)
+
+        if square_tokens is not None and self.square_tokenizer is not None:
+            features = self.patch_pooling.pool_square_tokens(square_tokens)
+        else:
+            features = self.patch_pooling(patch_tokens)
+        features = features.reshape(batch_size, seq_len, -1)
         temporal_features = self.temporal(features)
         move_logits, move_probs, detect_logits = self.move_head(temporal_features, legal_masks)
         return ModelOutput(
@@ -143,23 +216,25 @@ class ArgusModel(nn.Module):
         board_ids: torch.Tensor | None = None,
         legal_masks: torch.Tensor | None = None,
     ) -> ModelOutput:
-        B, T, C, H, W = frames.shape
-        flat_frames = frames.reshape(B * T, C, H, W)
+        batch_size, seq_len, channels, image_height, image_width = frames.shape
+        flat_frames = frames.reshape(batch_size * seq_len, channels, image_height, image_width)
         patch_features = self.vision_encoder.forward_patches(flat_frames)
         bboxes, confidences, identities = self.board_detector(patch_features)
-        NQ = bboxes.shape[1]
-        bboxes = bboxes.reshape(B, T, NQ, 4)
-        confidences = confidences.reshape(B, T, NQ)
-        identities = identities.reshape(B, T, NQ, -1)
+        num_queries = bboxes.shape[1]
+        bboxes = bboxes.reshape(batch_size, seq_len, num_queries, 4)
+        confidences = confidences.reshape(batch_size, seq_len, num_queries)
+        identities = identities.reshape(batch_size, seq_len, num_queries, -1)
 
         if board_crops is not None:
-            N = board_crops.shape[2]
-            flat_crops = board_crops.reshape(B * T * N, C, H, W)
+            num_boards = board_crops.shape[2]
+            flat_crops = board_crops.reshape(
+                batch_size * seq_len * num_boards, channels, image_height, image_width
+            )
             patch_tokens = self.vision_encoder.forward_patches(flat_crops)
             crop_features = self.patch_pooling(patch_tokens)
-            crop_features = crop_features.reshape(B, T, N, -1)
+            crop_features = crop_features.reshape(batch_size, seq_len, num_boards, -1)
             all_move_logits, all_move_probs, all_detect_logits = [], [], []
-            for board_idx in range(N):
+            for board_idx in range(num_boards):
                 board_features = crop_features[:, :, board_idx, :]
                 temporal_out = self.temporal(board_features)
                 board_masks = legal_masks[:, :, board_idx, :] if legal_masks is not None else None
@@ -197,10 +272,10 @@ class ArgusModel(nn.Module):
         legal_masks: torch.Tensor | None = None,
         board_crops: torch.Tensor | None = None,
         board_ids: torch.Tensor | None = None,
+        board_corners: torch.Tensor | None = None,
     ) -> ModelOutput:
         if crops is not None:
-            return self.forward_single_board(crops, legal_masks)
-        elif frames is not None and self.use_detector:
+            return self.forward_single_board(crops, legal_masks, board_corners=board_corners)
+        if frames is not None and self.use_detector:
             return self.forward_multi_board(frames, board_crops, board_ids, legal_masks)
-        else:
-            raise ValueError("Provide 'crops' (single-board) or 'frames' with use_detector=True")
+        raise ValueError("Provide 'crops' (single-board) or 'frames' with use_detector=True")

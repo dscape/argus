@@ -5,7 +5,12 @@ from __future__ import annotations
 import chess
 
 
-def build_replay_board(initial_board_fen: str, first_move_uci: str | None = None) -> chess.Board:
+def build_replay_board(
+    initial_board_fen: str,
+    first_move_uci: str | None = None,
+    *,
+    initial_side_to_move: str | None = None,
+) -> chess.Board:
     """Build a board for replay from a stored piece-placement FEN.
 
     Real clips currently persist only ``board_fen()`` piece placement, not a full
@@ -16,6 +21,10 @@ def build_replay_board(initial_board_fen: str, first_move_uci: str | None = None
 
     board = chess.Board()
     board.set_board_fen(initial_board_fen)
+
+    if initial_side_to_move in {"w", "b"}:
+        board.turn = chess.WHITE if initial_side_to_move == "w" else chess.BLACK
+        return board
 
     if first_move_uci is None:
         return board

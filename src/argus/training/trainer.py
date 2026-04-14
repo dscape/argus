@@ -210,9 +210,14 @@ class Trainer:
             square_targets = batch.get("square_targets")
             if square_targets is not None:
                 square_targets = square_targets.to(self.device)
+            board_corners = batch.get("board_corners")
+            if board_corners is not None:
+                board_corners = board_corners.to(self.device)
 
             with autocast(device_type=self.device.type, dtype=self.amp_dtype, enabled=self.use_amp):
-                output = self.model(crops=frames, legal_masks=legal_masks)
+                output = self.model(
+                    crops=frames, legal_masks=legal_masks, board_corners=board_corners
+                )
 
                 # Remove the board dimension for single-board
                 move_logits = output.move_logits.squeeze(2)  # (B, T, VOCAB_SIZE)
@@ -310,8 +315,11 @@ class Trainer:
             square_targets = batch.get("square_targets")
             if square_targets is not None:
                 square_targets = square_targets.to(self.device)
+            board_corners = batch.get("board_corners")
+            if board_corners is not None:
+                board_corners = board_corners.to(self.device)
 
-            output = self.model(crops=frames, legal_masks=legal_masks)
+            output = self.model(crops=frames, legal_masks=legal_masks, board_corners=board_corners)
 
             move_logits = output.move_logits.squeeze(2)
             detect_logits = output.detect_logits.squeeze(2)

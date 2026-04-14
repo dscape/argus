@@ -4,12 +4,15 @@ import chess
 import torch
 from pipeline.shared.board_tracking import (
     LegalMoveStateTracker,
+    LegalSequenceBeamDecoder,
     LookaheadLegalMoveStateTracker,
     board_to_class_ids,
     build_board_hypotheses,
     score_board_state,
     score_legal_move,
 )
+
+from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
 
 
 def _logits_for_board(board: chess.Board, *, preferred_logit: float = 5.0) -> torch.Tensor:
@@ -27,6 +30,13 @@ def test_build_board_hypotheses_returns_white_and_black_turns() -> None:
     assert boards[1].board_fen() == chess.STARTING_BOARD_FEN
     assert boards[0].turn is chess.WHITE
     assert boards[1].turn is chess.BLACK
+
+
+def test_build_board_hypotheses_uses_known_initial_side_to_move() -> None:
+    boards = build_board_hypotheses(chess.STARTING_BOARD_FEN, initial_side_to_move="b")
+
+    assert len(boards) == 1
+    assert boards[0].turn is chess.BLACK
 
 
 def test_score_board_state_prefers_matching_board() -> None:
@@ -165,3 +175,34 @@ def test_tracker_resolves_unknown_turn_from_first_move() -> None:
     assert result.move_uci == "e2e1q"
     assert result.turn_resolved is True
     assert tracker.board.turn is chess.WHITE
+
+
+def test_legal_sequence_beam_decoder_combines_board_and_move_evidence() -> None:
+    vocab = get_vocabulary()
+    board = chess.Board()
+    moved_board = board.copy(stack=False)
+    moved_board.push_uci("e2e4")
+
+    square_logits = [_logits_for_board(board), _logits_for_board(moved_board)]
+    move_logits = torch.full((2, vocab.size), -8.0)
+    move_logits[0, vocab.uci_to_index("e2e4")] = -1.0
+    move_logits[0, NO_MOVE_IDX] = 0.0
+    move_logits[1, vocab.uci_to_index("e2e4")] = 6.0
+    move_logits[1, NO_MOVE_IDX] = -2.0
+    detect_logits = torch.tensor([-4.0, 4.0], dtype=torch.float32)
+
+    decoded = LegalSequenceBeamDecoder(
+        chess.STARTING_BOARD_FEN,
+        beam_size=4,
+        top_move_candidates=8,
+        board_weight=1.0,
+        move_weight=1.0,
+        detect_weight=1.0,
+    ).decode(
+        square_logits,
+        sequence_move_logits=move_logits,
+        sequence_detect_logits=detect_logits,
+    )
+
+    assert [frame.move_uci for frame in decoded.frames] == [None, "e2e4"]
+    assert decoded.frames[-1].fen == moved_board.board_fen()

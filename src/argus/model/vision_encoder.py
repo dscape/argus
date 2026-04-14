@@ -9,16 +9,27 @@ from typing import Any, Protocol, cast
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import Dinov2Model
+from transformers import Dinov2Model, Siglip2VisionModel, SiglipVisionModel
 from ultralytics import YOLO  # type: ignore[attr-defined]
 
 _WEIGHTS_ROOT = Path(__file__).resolve().parent.parent.parent.parent / "weights"
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD = (0.229, 0.224, 0.225)
+_SIGLIP_MEAN = (0.5, 0.5, 0.5)
+_SIGLIP_STD = (0.5, 0.5, 0.5)
 
 
 def _resolve_dino_model_path(model_name: str) -> str:
     """Return a local DINO weights path if available, otherwise the HF repo id."""
+    short = model_name.split("/")[-1]
+    local = _WEIGHTS_ROOT / short
+    if (local / "config.json").exists():
+        return str(local)
+    return model_name
+
+
+def _resolve_siglip_model_path(model_name: str) -> str:
+    """Return a local SigLIP weights path if available, otherwise the HF repo id."""
     short = model_name.split("/")[-1]
     local = _WEIGHTS_ROOT / short
     if (local / "config.json").exists():
@@ -107,6 +118,260 @@ class Dinov2Backbone(nn.Module):
     def forward_pooled(self, x: torch.Tensor) -> torch.Tensor:
         patches = self.forward_patches(x)
         return patches[:, 1:, :].mean(dim=1)
+
+    def forward(self, x: torch.Tensor, return_patches: bool = False) -> torch.Tensor:
+        if return_patches:
+            return self.forward_patches(x)
+        return self.forward_pooled(x)
+
+
+class _SiglipNormalizationMixin:
+    input_mean: torch.Tensor
+    input_std: torch.Tensor
+    siglip_mean: torch.Tensor
+    siglip_std: torch.Tensor
+
+    def register_buffer(
+        self,
+        name: str,
+        tensor: torch.Tensor,
+        persistent: bool = False,
+    ) -> None: ...
+
+    def _register_input_buffers(self) -> None:
+        self.register_buffer(
+            "input_mean",
+            torch.tensor(_IMAGENET_MEAN, dtype=torch.float32).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "input_std",
+            torch.tensor(_IMAGENET_STD, dtype=torch.float32).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "siglip_mean",
+            torch.tensor(_SIGLIP_MEAN, dtype=torch.float32).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "siglip_std",
+            torch.tensor(_SIGLIP_STD, dtype=torch.float32).view(1, 3, 1, 1),
+            persistent=False,
+        )
+
+    def _prepare_inputs(self, x: torch.Tensor) -> torch.Tensor:
+        imagenet_mean = self.input_mean.to(device=x.device, dtype=x.dtype)
+        imagenet_std = self.input_std.to(device=x.device, dtype=x.dtype)
+        siglip_mean = self.siglip_mean.to(device=x.device, dtype=x.dtype)
+        siglip_std = self.siglip_std.to(device=x.device, dtype=x.dtype)
+        rgb = (x * imagenet_std + imagenet_mean).clamp(0.0, 1.0)
+        return (rgb - siglip_mean) / siglip_std
+
+
+class SiglipBackbone(nn.Module, _SiglipNormalizationMixin):
+    """SigLIP vision wrapper exposing dense patch tokens."""
+
+    def __init__(
+        self,
+        model_name: str = "google/siglip-base-patch16-224",
+        frozen: bool = True,
+        embed_dim: int | None = None,
+        feature_layer_indices: Sequence[int] | None = None,
+    ) -> None:
+        super().__init__()
+        resolved = _resolve_siglip_model_path(model_name)
+        try:
+            self.model = SiglipVisionModel.from_pretrained(resolved, local_files_only=True)
+        except OSError:
+            self.model = SiglipVisionModel.from_pretrained(model_name)
+
+        hidden_size = int(self.model.config.hidden_size)
+        raw_feature_layers = feature_layer_indices or ()
+        self.feature_layer_indices = tuple(int(idx) for idx in raw_feature_layers)
+        num_hidden_layers = int(self.model.config.num_hidden_layers)
+        for layer_index in self.feature_layer_indices:
+            if layer_index < 0 or layer_index >= num_hidden_layers:
+                raise ValueError(
+                    "Invalid SigLIP feature layer index"
+                    f" {layer_index}; expected 0 <= idx < {num_hidden_layers}"
+                )
+        if embed_dim is not None and embed_dim != hidden_size:
+            raise ValueError(
+                f"Requested SigLIP embed_dim={embed_dim}, but model outputs {hidden_size}"
+            )
+        self.embed_dim = hidden_size
+        self._register_input_buffers()
+        if frozen:
+            self.freeze()
+
+    def freeze(self) -> None:
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_layers(self, n: int) -> None:
+        self.freeze()
+        if n <= 0:
+            return
+        for layer in self.model.vision_model.encoder.layers[-n:]:
+            for param in layer.parameters():
+                param.requires_grad = True
+
+    def unfreeze(self) -> None:
+        for param in self.model.parameters():
+            param.requires_grad = True
+
+    def forward_patches(self, x: torch.Tensor) -> torch.Tensor:
+        prepared = self._prepare_inputs(x)
+        if not self.feature_layer_indices:
+            outputs = self.model(pixel_values=prepared)
+            result: torch.Tensor = outputs.last_hidden_state
+            return result
+
+        outputs = self.model(pixel_values=prepared, output_hidden_states=True)
+        hidden_states = outputs.hidden_states
+        if hidden_states is None:
+            raise RuntimeError("SigLIP encoder did not return hidden states")
+        selected_states = [
+            hidden_states[layer_index + 1] for layer_index in self.feature_layer_indices
+        ]
+        result = torch.stack(selected_states, dim=0).mean(dim=0)
+        return result
+
+    def forward_pooled(self, x: torch.Tensor) -> torch.Tensor:
+        patches = self.forward_patches(x)
+        return patches.mean(dim=1)
+
+    def forward(self, x: torch.Tensor, return_patches: bool = False) -> torch.Tensor:
+        if return_patches:
+            return self.forward_patches(x)
+        return self.forward_pooled(x)
+
+
+class Siglip2Backbone(nn.Module, _SiglipNormalizationMixin):
+    """SigLIP2 vision wrapper exposing dense patch tokens."""
+
+    def __init__(
+        self,
+        model_name: str = "google/siglip2-base-patch16-224",
+        frozen: bool = True,
+        embed_dim: int | None = None,
+        feature_layer_indices: Sequence[int] | None = None,
+    ) -> None:
+        super().__init__()
+        resolved = _resolve_siglip_model_path(model_name)
+        try:
+            self.model = Siglip2VisionModel.from_pretrained(resolved, local_files_only=True)
+        except OSError:
+            self.model = Siglip2VisionModel.from_pretrained(model_name)
+
+        hidden_size = int(self.model.config.hidden_size)
+        raw_feature_layers = feature_layer_indices or ()
+        self.feature_layer_indices = tuple(int(idx) for idx in raw_feature_layers)
+        num_hidden_layers = int(self.model.config.num_hidden_layers)
+        for layer_index in self.feature_layer_indices:
+            if layer_index < 0 or layer_index >= num_hidden_layers:
+                raise ValueError(
+                    "Invalid SigLIP2 feature layer index"
+                    f" {layer_index}; expected 0 <= idx < {num_hidden_layers}"
+                )
+        if embed_dim is not None and embed_dim != hidden_size:
+            raise ValueError(
+                f"Requested SigLIP2 embed_dim={embed_dim}, but model outputs {hidden_size}"
+            )
+        self.embed_dim = hidden_size
+        self.patch_size = int(self.model.config.patch_size)
+        self._register_input_buffers()
+        if frozen:
+            self.freeze()
+
+    def freeze(self) -> None:
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_layers(self, n: int) -> None:
+        self.freeze()
+        if n <= 0:
+            return
+        for layer in self.model.vision_model.encoder.layers[-n:]:
+            for param in layer.parameters():
+                param.requires_grad = True
+
+    def unfreeze(self) -> None:
+        for param in self.model.parameters():
+            param.requires_grad = True
+
+    def _resize_to_patch_grid(self, x: torch.Tensor) -> torch.Tensor:
+        _, _, height, width = x.shape
+        target_height = max(self.patch_size, round(height / self.patch_size) * self.patch_size)
+        target_width = max(self.patch_size, round(width / self.patch_size) * self.patch_size)
+        if target_height == height and target_width == width:
+            return x
+        return F.interpolate(
+            x,
+            size=(target_height, target_width),
+            mode="bilinear",
+            align_corners=False,
+        )
+
+    def _patchify(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        resized = self._resize_to_patch_grid(x)
+        batch_size, channels, height, width = resized.shape
+        patches_h = height // self.patch_size
+        patches_w = width // self.patch_size
+        patches = resized.unfold(2, self.patch_size, self.patch_size).unfold(
+            3,
+            self.patch_size,
+            self.patch_size,
+        )
+        patches = patches.permute(0, 2, 3, 1, 4, 5).reshape(
+            batch_size,
+            patches_h * patches_w,
+            channels * self.patch_size * self.patch_size,
+        )
+        attention_mask = torch.ones(
+            batch_size,
+            patches_h * patches_w,
+            dtype=torch.bool,
+            device=resized.device,
+        )
+        spatial_shapes = torch.tensor(
+            [[patches_h, patches_w]] * batch_size,
+            dtype=torch.long,
+            device=resized.device,
+        )
+        return patches, attention_mask, spatial_shapes
+
+    def forward_patches(self, x: torch.Tensor) -> torch.Tensor:
+        prepared = self._prepare_inputs(x)
+        patch_values, pixel_attention_mask, spatial_shapes = self._patchify(prepared)
+        if not self.feature_layer_indices:
+            outputs = self.model(
+                pixel_values=patch_values,
+                pixel_attention_mask=pixel_attention_mask,
+                spatial_shapes=spatial_shapes,
+            )
+            result: torch.Tensor = outputs.last_hidden_state
+            return result
+
+        outputs = self.model(
+            pixel_values=patch_values,
+            pixel_attention_mask=pixel_attention_mask,
+            spatial_shapes=spatial_shapes,
+            output_hidden_states=True,
+        )
+        hidden_states = outputs.hidden_states
+        if hidden_states is None:
+            raise RuntimeError("SigLIP2 encoder did not return hidden states")
+        selected_states = [
+            hidden_states[layer_index + 1] for layer_index in self.feature_layer_indices
+        ]
+        result = torch.stack(selected_states, dim=0).mean(dim=0)
+        return result
+
+    def forward_pooled(self, x: torch.Tensor) -> torch.Tensor:
+        patches = self.forward_patches(x)
+        return patches.mean(dim=1)
 
     def forward(self, x: torch.Tensor, return_patches: bool = False) -> torch.Tensor:
         if return_patches:
@@ -248,7 +513,7 @@ class VisionBackboneProtocol(Protocol):
 
 
 class VisionEncoder(nn.Module):
-    """Unified frontend wrapper for DINOv2 and YOLO-derived features."""
+    """Unified frontend wrapper for DINOv2, SigLIP, SigLIP2, and YOLO features."""
 
     def __init__(
         self,
@@ -266,6 +531,20 @@ class VisionEncoder(nn.Module):
         self.backend: VisionBackboneProtocol
         if normalized_type in {"dino", "dinov2"}:
             self.backend = Dinov2Backbone(
+                model_name=model_name,
+                frozen=frozen,
+                embed_dim=embed_dim,
+                feature_layer_indices=feature_layer_indices,
+            )
+        elif normalized_type == "siglip":
+            self.backend = SiglipBackbone(
+                model_name=model_name,
+                frozen=frozen,
+                embed_dim=embed_dim,
+                feature_layer_indices=feature_layer_indices,
+            )
+        elif normalized_type == "siglip2":
+            self.backend = Siglip2Backbone(
                 model_name=model_name,
                 frozen=frozen,
                 embed_dim=embed_dim,

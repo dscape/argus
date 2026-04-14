@@ -35,6 +35,12 @@ def argus_collate_fn(
     }
     if "square_targets" in batch[0]:
         collated["square_targets"] = torch.stack([s["square_targets"] for s in batch])
+    if "board_corners" in batch[0]:
+        collated["board_corners"] = torch.stack([s["board_corners"] for s in batch])
+    if "move_loss_mask" in batch[0]:
+        collated["move_loss_mask"] = torch.stack([s["move_loss_mask"] for s in batch])
+    if "move_loss_weights" in batch[0]:
+        collated["move_loss_weights"] = torch.stack([s["move_loss_weights"] for s in batch])
     return collated
 
 

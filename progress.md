@@ -724,3 +724,69 @@
   - unrelated existing failure: `tests/pipeline/test_physical_board_probe_train_script.py::test_build_synthetic_dataset_supports_oblique_board_with_rendered_source`
   - cause here is Blender crashing under sandbox restrictions during rendered synthetic data generation (`Segmentation fault: 11`), not the physical evaluate changes.
 - Passed: `.venv/bin/python3 -m pytest tests/pipeline/test_physical_runtime_visualization.py tests/dev_tools/test_physical_runtime_service.py`
+
+### Oblique joint reader + video-native legal decoder foundations
+- Extended `src/argus/model/vision_encoder.py` with SigLIP and SigLIP2 backbones.
+  - Both now fit the existing normalized-input contract by undoing ImageNet normalization and applying SigLIP-style `[-1, 1]` normalization inside the backbone.
+  - `SigLIP2` support patchifies board crops directly in-model, so the new physical path can use a SigLIP2-class dense encoder without rewriting the rest of Argus first.
+- Added `src/argus/model/oblique_square_decoder.py` and wired it into `src/argus/model/argus_model.py`.
+  - New `square_token_mode="oblique_square_queries"` decodes `64` square tokens jointly from one full-board crop using:
+    - learned square queries
+    - corner-derived square geometry embeddings
+    - cross-attention over dense patch tokens
+  - `ArgusModel.forward(...)` now accepts optional `board_corners`, and the move head can pool from those learned square tokens instead of only from global patch means.
+- Extended the Argus clip data path for joint oblique training signals.
+  - `src/argus/data/dataset.py`, `src/argus/data/collate.py`, and `src/argus/training/trainer.py` now preserve and batch optional:
+    - `board_corners`
+    - `move_loss_mask`
+    - `move_loss_weights`
+- Reworked `pipeline/physical/move_data.py` toward the phase-2 recipe.
+  - Real physical move windows can now be exported in either:
+    - `rectified` mode, or
+    - `oblique` mode with per-frame scaled board corners.
+  - Added causal tolerant move supervision for replay clips:
+    - backward move-identity targets over configurable pre-move frames
+    - soft move/no-move detect targets over a configurable event radius
+    - explicit `move_loss_mask` / `move_loss_weights` for the training loop
+- Replaced the decoder contract seed in `pipeline/shared/board_tracking.py`.
+  - Added `LegalSequenceBeamDecoder`, which beam-searches only over legal board trajectories while combining:
+    - board-state evidence from square logits
+    - move identity evidence from move logits
+    - move/no-move evidence from detect logits
+  - This is the first shared decoder in the repo that matches the intended final contract instead of only patching single-frame board reads after the fact.
+- Updated the physical move-model scripts to point at the new direction.
+  - `scripts/train_physical_move_model.py` now supports:
+    - `--observation-mode {rectified,oblique}`
+    - tolerant timing-label controls
+    - configurable encoder type, with `siglip2` as the new default
+    - `square_token_mode="oblique_square_queries"` and `square_attention` pooling as first-class options
+  - `scripts/eval_physical_move_model.py` now supports:
+    - held-out eval in `oblique` mode
+    - legality-aware `beam` decoding over full sequences
+- Added regression coverage for the new foundations.
+  - `tests/test_argus_model.py`
+    - learned oblique square-query decoder shape test
+    - ArgusModel forward pass with oblique square queries + board corners
+  - `tests/test_argus_dataset.py`
+    - board-corner and move-loss-weight preservation/padding
+  - `tests/pipeline/test_physical_move_data.py`
+    - tolerant causal move-label construction
+    - known-side-to-move hypothesis handling
+  - `tests/pipeline/test_shared_board_tracking.py`
+    - joint legal beam decoder using board + move evidence
+    - known-side-to-move hypothesis handling
+- Tightened decoder initialization against clip metadata.
+  - `initial_side_to_move` from clip payloads is now propagated through:
+    - replay-target construction
+    - held-out move-sequence loading
+    - greedy/lookahead board tracker eval
+    - legal beam decoding
+  - This removes an unnecessary white-vs-black ambiguity whenever the clip metadata already tells us whose turn it is at sequence start.
+
+### Validation
+- Passed: `make typecheck`
+- Passed: `make lint`
+- Failed in this sandbox: `make test`
+  - unrelated existing failure: `tests/pipeline/test_physical_board_probe_train_script.py::test_build_synthetic_dataset_supports_oblique_board_with_rendered_source`
+  - cause here is Blender crashing under sandbox restrictions during rendered synthetic data generation (`Segmentation fault: 11`), not the new oblique reader / decoder work.
+- Passed: `.venv/bin/python3 -m pytest tests/test_argus_model.py tests/test_argus_dataset.py tests/pipeline/test_physical_move_data.py tests/pipeline/test_shared_board_tracking.py`

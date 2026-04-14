@@ -65,3 +65,24 @@ def test_argus_dataset_derives_square_targets_from_fens(tmp_path) -> None:
     assert sample["square_targets"].shape == (2, 64)
     assert sample["square_targets"][0, 56].item() == 6
     assert sample["square_targets"][0, 63].item() == 12
+
+
+def test_argus_dataset_preserves_board_corners_and_move_loss_weights(tmp_path) -> None:
+    clip = _make_clip(frames=torch.zeros(2, 3, 2, 2, dtype=torch.float32))
+    clip["board_corners"] = torch.tensor(
+        [
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            [[0.1, 0.0], [1.0, 0.1], [0.9, 1.0], [0.0, 0.9]],
+        ],
+        dtype=torch.float32,
+    )
+    clip["move_loss_mask"] = torch.tensor([False, True], dtype=torch.bool)
+    clip["move_loss_weights"] = torch.tensor([0.0, 1.0], dtype=torch.float32)
+    torch.save(clip, tmp_path / "clip_demo_0.pt")
+
+    sample = ArgusDataset(tmp_path, clip_length=3)[0]
+
+    assert sample["board_corners"].shape == (3, 4, 2)
+    assert torch.allclose(sample["board_corners"][-1], sample["board_corners"][-2])
+    assert torch.equal(sample["move_loss_mask"], torch.tensor([False, True, False]))
+    assert torch.allclose(sample["move_loss_weights"], torch.tensor([0.0, 1.0, 0.0]))

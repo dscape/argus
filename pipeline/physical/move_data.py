@@ -16,6 +16,7 @@ from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
 from pipeline.overlay.overlay_move_detector import find_move_between_positions
 from pipeline.physical import splits
 from pipeline.physical.annotation_dataset import rectify_board_image
+from pipeline.physical.oblique_board_data import extract_oblique_board_crop
 from pipeline.physical.oblique_square_context import (
     _load_clip_frame_bgr,
     load_annotated_oblique_rows,
@@ -48,7 +49,9 @@ class PhysicalEvalMoveSequence:
     clip_path: str
     source_video_id: str | None
     initial_board_fen: str
+    initial_side_to_move: str | None
     frames: torch.Tensor
+    board_corners: torch.Tensor | None
     frame_indices: tuple[int, ...]
     labels: tuple[tuple[int, ...], ...]
     inferred_move_targets: tuple[int, ...]
@@ -65,6 +68,11 @@ def build_real_move_window_clips(
     max_negative_windows_per_clip: int = 4,
     selection_source_video_ids: set[str] | None = None,
     exclude_selection_source_video_ids: bool = False,
+    observation_mode: str = "rectified",
+    move_target_pre_frames: int = 0,
+    detect_target_radius: int = 0,
+    detect_target_decay: float = 0.5,
+    oblique_crop_margin: float = 0.18,
 ) -> tuple[list[dict[str, Any]], list[PhysicalMoveWindowMetadata]]:
     """Build fixed-length real physical move windows from replay metadata."""
     splits.ensure_annotation_layout_migrated()
@@ -72,6 +80,14 @@ def build_real_move_window_clips(
         raise ValueError(f"clip_length must be > 0, got {clip_length}")
     if negative_window_stride <= 0:
         raise ValueError(f"negative_window_stride must be > 0, got {negative_window_stride}")
+    if observation_mode not in {"rectified", "oblique"}:
+        raise ValueError(f"Unsupported observation_mode: {observation_mode}")
+    if move_target_pre_frames < 0:
+        raise ValueError(f"move_target_pre_frames must be >= 0, got {move_target_pre_frames}")
+    if detect_target_radius < 0:
+        raise ValueError(f"detect_target_radius must be >= 0, got {detect_target_radius}")
+    if not 0.0 <= detect_target_decay <= 1.0:
+        raise ValueError(f"detect_target_decay must be in [0, 1], got {detect_target_decay}")
 
     rows = load_real_board_rows(
         clips_dir=clips_dir,
@@ -104,6 +120,11 @@ def build_real_move_window_clips(
             clip_path=clip_path,
             clip_rows=clip_rows,
             image_size=image_size,
+            observation_mode=observation_mode,
+            move_target_pre_frames=move_target_pre_frames,
+            detect_target_radius=detect_target_radius,
+            detect_target_decay=detect_target_decay,
+            oblique_crop_margin=oblique_crop_margin,
         )
         if clip_data is None:
             continue
@@ -132,8 +153,13 @@ def load_eval_move_sequences(
     *,
     annotation_root: str | Path = _DEFAULT_EVAL_ROOT,
     image_size: int = _DEFAULT_IMAGE_SIZE,
+    observation_mode: str = "rectified",
+    oblique_crop_margin: float = 0.18,
 ) -> list[PhysicalEvalMoveSequence]:
     """Load held-out annotated sequences for move-model evaluation."""
+    if observation_mode not in {"rectified", "oblique"}:
+        raise ValueError(f"Unsupported observation_mode: {observation_mode}")
+
     rows = load_annotated_oblique_rows(annotation_root)
     rows_by_clip: dict[str, list[Any]] = defaultdict(list)
     for row in rows:
@@ -143,20 +169,35 @@ def load_eval_move_sequences(
     sequences: list[PhysicalEvalMoveSequence] = []
     for clip_path, clip_rows in rows_by_clip.items():
         clip_rows.sort(key=lambda row: row.frame_index)
-        initial_board_fen = _initial_board_fen_for_clip(clip_path)
-        inference = _infer_annotated_moves(clip_rows, initial_board_fen)
+        initial_board_fen, initial_side_to_move = _initial_board_state_for_clip(clip_path)
+        inference = _infer_annotated_moves(
+            clip_rows,
+            initial_board_fen,
+            initial_side_to_move=initial_side_to_move,
+        )
 
         frames = []
         labels = []
         frame_indices = []
+        board_corners = []
         for row in clip_rows:
             image_bgr = _load_clip_frame_bgr(row, clip_cache=clip_cache)
-            rectified = rectify_board_image(
-                cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB),
-                [list(point) for point in row.corners],
-                output_size=image_size,
-            )
-            frames.append(torch.from_numpy(rectified).permute(2, 0, 1).float() / 255.0)
+            if observation_mode == "rectified":
+                rectified = rectify_board_image(
+                    cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB),
+                    [list(point) for point in row.corners],
+                    output_size=image_size,
+                )
+                frames.append(torch.from_numpy(rectified).permute(2, 0, 1).float() / 255.0)
+            else:
+                oblique_image, scaled_corners = _prepare_oblique_clip_frame(
+                    image_bgr,
+                    row.corners,
+                    image_size=image_size,
+                    crop_margin=oblique_crop_margin,
+                )
+                frames.append(oblique_image)
+                board_corners.append(scaled_corners)
             labels.append(tuple(int(value) for value in row.labels))
             frame_indices.append(int(row.frame_index))
 
@@ -165,7 +206,9 @@ def load_eval_move_sequences(
                 clip_path=clip_path,
                 source_video_id=clip_rows[0].source_video_id,
                 initial_board_fen=initial_board_fen,
+                initial_side_to_move=initial_side_to_move,
                 frames=torch.stack(frames, dim=0),
+                board_corners=(None if not board_corners else torch.stack(board_corners, dim=0)),
                 frame_indices=tuple(frame_indices),
                 labels=tuple(labels),
                 inferred_move_targets=tuple(inference[0]),
@@ -182,6 +225,11 @@ def _build_real_clip_sample(
     clip_path: str,
     clip_rows: list[Any],
     image_size: int,
+    observation_mode: str,
+    move_target_pre_frames: int,
+    detect_target_radius: int,
+    detect_target_decay: float,
+    oblique_crop_margin: float,
 ) -> dict[str, Any] | None:
     frames = clip.get("frames")
     initial_board_fen = clip.get("initial_board_fen")
@@ -189,32 +237,64 @@ def _build_real_clip_sample(
         return None
 
     corners = clip_rows[0].corners
-    replay_targets = _replay_targets_for_clip(clip)
+    exact_replay_targets = _replay_targets_for_clip(clip)
+    if exact_replay_targets is None:
+        return None
+    replay_targets = _build_replay_supervision_targets(
+        clip,
+        move_target_pre_frames=move_target_pre_frames,
+        detect_target_radius=detect_target_radius,
+        detect_target_decay=detect_target_decay,
+    )
     if replay_targets is None:
         return None
-    move_targets, detect_targets, legal_masks, board_fens = replay_targets
+    (
+        move_targets,
+        detect_targets,
+        legal_masks,
+        board_fens,
+        move_loss_mask,
+        move_loss_weights,
+    ) = replay_targets
     if int(frames.shape[0]) != len(move_targets):
         return None
 
-    rectified_frames: list[torch.Tensor] = []
+    clip_frames: list[torch.Tensor] = []
+    board_corners: list[torch.Tensor] = []
     for frame_index in range(int(frames.shape[0])):
         image_rgb = _frame_tensor_to_rgb(frames[frame_index])
-        rectified = rectify_board_image(
-            image_rgb,
-            [list(point) for point in corners],
-            output_size=image_size,
-        )
-        rectified_frames.append(torch.from_numpy(rectified).permute(2, 0, 1).float() / 255.0)
+        if observation_mode == "rectified":
+            rectified = rectify_board_image(
+                image_rgb,
+                [list(point) for point in corners],
+                output_size=image_size,
+            )
+            clip_frames.append(torch.from_numpy(rectified).permute(2, 0, 1).float() / 255.0)
+        else:
+            oblique_image, scaled_corners = _prepare_oblique_clip_frame(
+                cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR),
+                corners,
+                image_size=image_size,
+                crop_margin=oblique_crop_margin,
+            )
+            clip_frames.append(oblique_image)
+            board_corners.append(scaled_corners)
 
-    return {
+    payload: dict[str, Any] = {
         "clip_path": clip_path,
-        "frames": torch.stack(rectified_frames, dim=0),
+        "frames": torch.stack(clip_frames, dim=0),
         "move_targets": move_targets,
         "detect_targets": detect_targets,
         "legal_masks": legal_masks,
         "move_mask": detect_targets > 0.5,
+        "exact_move_mask": exact_replay_targets[1] > 0.5,
+        "move_loss_mask": move_loss_mask,
+        "move_loss_weights": move_loss_weights,
         "fens": board_fens,
     }
+    if board_corners:
+        payload["board_corners"] = torch.stack(board_corners, dim=0)
+    return payload
 
 
 def _slice_move_windows(
@@ -229,12 +309,19 @@ def _slice_move_windows(
     detect_targets = clip_data["detect_targets"]
     legal_masks = clip_data["legal_masks"]
     board_fens = clip_data.get("fens")
+    board_corners = clip_data.get("board_corners")
+    move_loss_mask = clip_data.get("move_loss_mask")
+    move_loss_weights = clip_data.get("move_loss_weights")
+    exact_move_mask = clip_data.get("exact_move_mask")
     total_frames = int(frames.shape[0])
     if total_frames == 0:
         return []
 
     window_starts: dict[int, bool] = {}
-    move_indices = torch.nonzero(detect_targets > 0.5, as_tuple=False).reshape(-1).tolist()
+    positive_window_mask = (
+        exact_move_mask if isinstance(exact_move_mask, torch.Tensor) else detect_targets > 0.5
+    )
+    move_indices = torch.nonzero(positive_window_mask, as_tuple=False).reshape(-1).tolist()
     for move_index in move_indices:
         window_start = _window_start_for_index(
             move_index, total_frames=total_frames, clip_length=clip_length
@@ -265,8 +352,66 @@ def _slice_move_windows(
         }
         if isinstance(board_fens, list):
             payload["fens"] = list(board_fens[window_start:window_end])
+        if isinstance(board_corners, torch.Tensor):
+            payload["board_corners"] = board_corners[window_start:window_end].clone()
+        if isinstance(move_loss_mask, torch.Tensor):
+            payload["move_loss_mask"] = move_loss_mask[window_start:window_end].clone()
+        if isinstance(move_loss_weights, torch.Tensor):
+            payload["move_loss_weights"] = move_loss_weights[window_start:window_end].clone()
+        if isinstance(exact_move_mask, torch.Tensor):
+            payload["exact_move_mask"] = exact_move_mask[window_start:window_end].clone()
         windows.append((payload, window_start, window_end, contains_move))
     return windows
+
+
+def _build_replay_supervision_targets(
+    clip: dict[str, Any],
+    *,
+    move_target_pre_frames: int,
+    detect_target_radius: int,
+    detect_target_decay: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[str], torch.Tensor, torch.Tensor] | None:
+    replay_targets = _replay_targets_for_clip(clip)
+    if replay_targets is None:
+        return None
+    move_targets, detect_targets, legal_masks, board_fens = replay_targets
+
+    tolerant_move_targets = torch.full_like(move_targets, NO_MOVE_IDX)
+    move_loss_mask = torch.zeros_like(move_targets, dtype=torch.bool)
+    move_loss_weights = torch.zeros_like(detect_targets, dtype=torch.float32)
+    tolerant_detect_targets = detect_targets.clone()
+
+    move_indices = torch.nonzero(detect_targets > 0.5, as_tuple=False).reshape(-1).tolist()
+    for move_index in move_indices:
+        target_move = int(move_targets[move_index].item())
+        for offset in range(move_target_pre_frames + 1):
+            frame_index = move_index - offset
+            if frame_index < 0:
+                break
+            weight = detect_target_decay**offset if offset > 0 else 1.0
+            if weight <= float(move_loss_weights[frame_index].item()):
+                continue
+            tolerant_move_targets[frame_index] = target_move
+            move_loss_mask[frame_index] = True
+            move_loss_weights[frame_index] = weight
+        for offset in range(-detect_target_radius, detect_target_radius + 1):
+            frame_index = move_index + offset
+            if frame_index < 0 or frame_index >= len(tolerant_detect_targets):
+                continue
+            weight = detect_target_decay ** abs(offset) if offset != 0 else 1.0
+            tolerant_detect_targets[frame_index] = torch.maximum(
+                tolerant_detect_targets[frame_index],
+                torch.tensor(weight, dtype=tolerant_detect_targets.dtype),
+            )
+
+    return (
+        tolerant_move_targets,
+        tolerant_detect_targets,
+        legal_masks,
+        board_fens,
+        move_loss_mask,
+        move_loss_weights,
+    )
 
 
 def _window_start_for_index(index: int, *, total_frames: int, clip_length: int) -> int:
@@ -304,7 +449,13 @@ def _replay_targets_for_clip(
         return None
 
     vocab = get_vocabulary()
-    board = _build_replay_board(initial_board_fen, move_ucis[0] if move_ucis else None)
+    initial_side_to_move = clip.get("initial_side_to_move")
+    side_to_move = initial_side_to_move if isinstance(initial_side_to_move, str) else None
+    board = _build_replay_board(
+        initial_board_fen,
+        move_ucis[0] if move_ucis else None,
+        initial_side_to_move=side_to_move,
+    )
     move_targets: list[int] = []
     detect_targets: list[float] = []
     legal_masks: list[torch.Tensor] = []
@@ -342,9 +493,14 @@ def _replay_targets_for_clip(
 def _infer_annotated_moves(
     clip_rows: list[Any],
     initial_board_fen: str,
+    *,
+    initial_side_to_move: str | None = None,
 ) -> tuple[list[int], list[float]]:
     vocab = get_vocabulary()
-    board_hypotheses = build_board_hypotheses_from_piece_fen(initial_board_fen)
+    board_hypotheses = build_board_hypotheses_from_piece_fen(
+        initial_board_fen,
+        initial_side_to_move=initial_side_to_move,
+    )
     current_board = board_hypotheses[0]
 
     move_targets: list[int] = []
@@ -382,7 +538,17 @@ def _infer_annotated_moves(
     return move_targets, detect_targets
 
 
-def build_board_hypotheses_from_piece_fen(initial_board_fen: str) -> list[chess.Board]:
+def build_board_hypotheses_from_piece_fen(
+    initial_board_fen: str,
+    *,
+    initial_side_to_move: str | None = None,
+) -> list[chess.Board]:
+    if initial_side_to_move in {"w", "b"}:
+        board = chess.Board()
+        board.set_board_fen(initial_board_fen)
+        board.turn = chess.WHITE if initial_side_to_move == "w" else chess.BLACK
+        return [board]
+
     white_board = chess.Board()
     white_board.set_board_fen(initial_board_fen)
     white_board.turn = chess.WHITE
@@ -420,14 +586,36 @@ def _labels_to_board_fen(labels: tuple[int, ...]) -> str | None:
     return "/".join(ranks)
 
 
-def _initial_board_fen_for_clip(clip_path: str) -> str:
+def _prepare_oblique_clip_frame(
+    image_bgr: Any,
+    corners: tuple[tuple[float, float], ...] | list[list[float]],
+    *,
+    image_size: int,
+    crop_margin: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    crop = extract_oblique_board_crop(image_bgr, corners, crop_margin=crop_margin)
+    rgb = cv2.cvtColor(crop.image_bgr, cv2.COLOR_BGR2RGB)
+    interpolation = cv2.INTER_AREA if min(rgb.shape[:2]) >= image_size else cv2.INTER_LINEAR
+    resized = cv2.resize(rgb, (image_size, image_size), interpolation=interpolation)
+    image_tensor = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
+
+    height, width = crop.image_bgr.shape[:2]
+    scaled_corners = crop.corners.copy()
+    scaled_corners[:, 0] *= float(image_size) / max(float(width), 1.0)
+    scaled_corners[:, 1] *= float(image_size) / max(float(height), 1.0)
+    return image_tensor, torch.from_numpy(scaled_corners.astype("float32"))
+
+
+def _initial_board_state_for_clip(clip_path: str) -> tuple[str, str | None]:
     clip = torch.load(_PROJECT_ROOT / clip_path, map_location="cpu", weights_only=False)
     if not isinstance(clip, dict):
         raise ValueError(f"Invalid clip payload: {clip_path}")
     initial_board_fen = clip.get("initial_board_fen")
     if not isinstance(initial_board_fen, str):
         raise ValueError(f"Clip is missing initial_board_fen: {clip_path}")
-    return initial_board_fen
+    raw_side_to_move = clip.get("initial_side_to_move")
+    side_to_move = raw_side_to_move if isinstance(raw_side_to_move, str) else None
+    return initial_board_fen, side_to_move
 
 
 _CLASS_NAMES = [

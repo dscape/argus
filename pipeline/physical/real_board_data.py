@@ -99,7 +99,6 @@ class PhysicalRealBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         return clip
 
 
-
 def load_real_board_rows(
     *,
     clips_dir: str | Path = _DEFAULT_CLIPS_DIR,
@@ -175,7 +174,6 @@ def load_real_board_rows(
     return rows
 
 
-
 def infer_channel_corner_templates(
     *,
     eval_root: str | Path = _DEFAULT_EVAL_ROOT,
@@ -223,7 +221,6 @@ def infer_channel_corner_templates(
     return templates
 
 
-
 def replay_clip_display_fens(clip: dict[str, Any]) -> list[str | None]:
     frames = clip.get("frames")
     if not isinstance(frames, torch.Tensor):
@@ -244,8 +241,7 @@ def replay_clip_display_fens(clip: dict[str, Any]) -> list[str | None]:
 
     moves_by_sample_index: dict[int, list[str]] = {}
     frame_to_sample_index = {
-        frame_index: index
-        for index, frame_index in enumerate(sampled_frame_indices)
+        frame_index: index for index, frame_index in enumerate(sampled_frame_indices)
     }
     for frame_index, move_uci in zip(move_frame_indices, move_ucis):
         sample_index = frame_to_sample_index.get(frame_index)
@@ -253,7 +249,13 @@ def replay_clip_display_fens(clip: dict[str, Any]) -> list[str | None]:
             return [None] * int(frames.shape[0])
         moves_by_sample_index.setdefault(sample_index, []).append(move_uci)
 
-    board = _build_replay_board(initial_board_fen, move_ucis[0] if move_ucis else None)
+    initial_side_to_move = clip.get("initial_side_to_move")
+    side_to_move = initial_side_to_move if isinstance(initial_side_to_move, str) else None
+    board = _build_replay_board(
+        initial_board_fen,
+        move_ucis[0] if move_ucis else None,
+        initial_side_to_move=side_to_move,
+    )
     frame_fens: list[str | None] = []
     total_frames = int(frames.shape[0])
     for sample_index in range(total_frames):
@@ -276,7 +278,6 @@ def replay_clip_display_fens(clip: dict[str, Any]) -> list[str | None]:
     return frame_fens
 
 
-
 def replay_clip_move_sample_indices(clip: dict[str, Any]) -> set[int]:
     sampled_frame_indices = sampled_clip_frame_indices(clip)
     move_frame_indices = set(_int_list(clip.get("move_frame_indices")))
@@ -285,7 +286,6 @@ def replay_clip_move_sample_indices(clip: dict[str, Any]) -> set[int]:
         for sample_index, frame_index in enumerate(sampled_frame_indices)
         if frame_index in move_frame_indices
     }
-
 
 
 def build_excluded_move_neighborhood(
@@ -306,7 +306,6 @@ def build_excluded_move_neighborhood(
     return excluded
 
 
-
 def sampled_clip_frame_indices(clip: dict[str, Any]) -> list[int]:
     frames = clip.get("frames")
     if not isinstance(frames, torch.Tensor):
@@ -315,7 +314,6 @@ def sampled_clip_frame_indices(clip: dict[str, Any]) -> list[int]:
     if len(sampled_frame_indices) == int(frames.shape[0]):
         return sampled_frame_indices
     return list(range(int(frames.shape[0])))
-
 
 
 def _refine_clip_corners(
@@ -367,7 +365,6 @@ def _refine_clip_corners(
     return tuple((float(point[0]), float(point[1])) for point in corners)
 
 
-
 def _rectified_board_score(board_rgb: np.ndarray) -> float:
     gray = cv2.cvtColor(board_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
     crop = gray[12:-12, 12:-12]
@@ -384,16 +381,12 @@ def _rectified_board_score(board_rgb: np.ndarray) -> float:
     )
 
 
-
 def _orientation_score(means: np.ndarray, stds: np.ndarray, mask: np.ndarray) -> float:
     light = means[mask]
     dark = means[~mask]
     return float(
-        abs(light.mean() - dark.mean())
-        - 0.75 * (light.std() + dark.std())
-        - 0.25 * stds.mean()
+        abs(light.mean() - dark.mean()) - 0.75 * (light.std() + dark.std()) - 0.25 * stds.mean()
     )
-
 
 
 def _corners_are_valid(corners: np.ndarray, *, width: int, height: int) -> bool:
@@ -413,10 +406,17 @@ def _corners_are_valid(corners: np.ndarray, *, width: int, height: int) -> bool:
     return abs(area) > 100.0
 
 
-
-def _build_replay_board(initial_board_fen: str, first_move_uci: str | None) -> chess.Board:
+def _build_replay_board(
+    initial_board_fen: str,
+    first_move_uci: str | None,
+    *,
+    initial_side_to_move: str | None = None,
+) -> chess.Board:
     board = chess.Board()
     board.set_board_fen(initial_board_fen)
+    if initial_side_to_move in {"w", "b"}:
+        board.turn = chess.WHITE if initial_side_to_move == "w" else chess.BLACK
+        return board
     if first_move_uci is None:
         return board
 
@@ -432,7 +432,6 @@ def _build_replay_board(initial_board_fen: str, first_move_uci: str | None) -> c
     if first_move in black_board.legal_moves and first_move not in white_board.legal_moves:
         return black_board
     return white_board
-
 
 
 def _frame_tensor_to_rgb(frame: torch.Tensor) -> np.ndarray:
@@ -456,7 +455,6 @@ def _frame_tensor_to_rgb(frame: torch.Tensor) -> np.ndarray:
     return array.astype(np.uint8)
 
 
-
 def _source_video_id_from_clip(clip: dict[str, Any], clip_path: Path) -> str | None:
     source_video_id = clip.get("source_video_id")
     if isinstance(source_video_id, str):
@@ -465,14 +463,12 @@ def _source_video_id_from_clip(clip: dict[str, Any], clip_path: Path) -> str | N
     return None if match is None else str(match.group("video_id"))
 
 
-
 def _int_list(value: Any) -> list[int]:
     if isinstance(value, torch.Tensor):
         return [int(item) for item in value.tolist()]
     if isinstance(value, list):
         return [int(item) for item in value]
     return []
-
 
 
 def _string_list(value: Any) -> list[str]:

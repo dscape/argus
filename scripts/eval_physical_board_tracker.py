@@ -159,14 +159,18 @@ def main() -> None:
             continue
 
         if args.tracker_mode == "lookahead":
+            initial_board_fen, initial_side_to_move = _initial_board_state_for_row(usable_rows[0])
             sequence_results = LookaheadLegalMoveStateTracker(
-                _initial_board_fen_for_row(usable_rows[0]),
+                initial_board_fen,
+                initial_side_to_move=initial_side_to_move,
                 lookahead_window=args.lookahead_window,
                 move_score_margin=args.lookahead_margin,
             ).decode(clip_logits)
         else:
+            initial_board_fen, initial_side_to_move = _initial_board_state_for_row(usable_rows[0])
             tracker = LegalMoveStateTracker(
-                _initial_board_fen_for_row(usable_rows[0]),
+                initial_board_fen,
+                initial_side_to_move=initial_side_to_move,
                 move_accept_threshold=args.move_accept_threshold,
                 move_accept_margin=args.move_accept_margin,
             )
@@ -240,7 +244,7 @@ def _load_row_image(
     return _load_clip_frame_bgr(row, clip_cache=clip_cache)
 
 
-def _initial_board_fen_for_row(row: object) -> str:
+def _initial_board_state_for_row(row: object) -> tuple[str, str | None]:
     clip_path = getattr(row, "clip_path", None)
     if not isinstance(clip_path, str):
         raise ValueError("Held-out eval row is missing clip_path")
@@ -248,7 +252,9 @@ def _initial_board_fen_for_row(row: object) -> str:
     initial_board_fen = clip.get("initial_board_fen") if isinstance(clip, dict) else None
     if not isinstance(initial_board_fen, str):
         raise ValueError(f"Clip is missing initial_board_fen: {clip_path}")
-    return initial_board_fen
+    raw_side_to_move = clip.get("initial_side_to_move") if isinstance(clip, dict) else None
+    side_to_move = raw_side_to_move if isinstance(raw_side_to_move, str) else None
+    return initial_board_fen, side_to_move
 
 
 def compute_tracker_sequence_metrics(

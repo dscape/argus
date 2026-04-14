@@ -3,6 +3,7 @@ from pathlib import Path
 import torch
 
 from argus.model.argus_model import ArgusModel
+from argus.model.oblique_square_decoder import ObliqueSquareQueryDecoder
 from argus.model.patch_pooling import PatchPoolingHead
 from argus.model.vision_encoder import VisionEncoder
 
@@ -100,5 +101,66 @@ def test_patch_pooling_head_square_attention_returns_embed_dim() -> None:
     head = PatchPoolingHead(embed_dim=8, pooling_type="square_attention", square_size=8)
 
     pooled = head(tokens)
+    square_tokens = head.to_square_tokens(tokens)
+    pooled_from_square_tokens = head.pool_square_tokens(square_tokens)
 
     assert pooled.shape == (3, 8)
+    assert pooled_from_square_tokens.shape == (3, 8)
+
+
+def test_oblique_square_query_decoder_returns_64_tokens() -> None:
+    decoder = ObliqueSquareQueryDecoder(embed_dim=16, num_heads=4)
+    patch_tokens = torch.randn(2, 14 * 14, 16)
+    corners = torch.tensor(
+        [
+            [[0.0, 0.0], [223.0, 0.0], [223.0, 223.0], [0.0, 223.0]],
+            [[8.0, 12.0], [210.0, 18.0], [220.0, 216.0], [16.0, 204.0]],
+        ],
+        dtype=torch.float32,
+    )
+
+    square_tokens = decoder(patch_tokens, corners=corners, image_size=224)
+
+    assert square_tokens.shape == (2, 64, 16)
+
+
+def test_argus_model_forward_supports_oblique_square_queries() -> None:
+    weights = Path("weights/yolo_base/yolo11n.pt")
+    assert weights.exists()
+
+    model = ArgusModel(
+        vision_encoder_type="yolo",
+        vision_encoder_name=str(weights),
+        vision_embed_dim=None,
+        frozen_vision=True,
+        temporal_d_model=128,
+        temporal_n_layers=1,
+        temporal_d_state=32,
+        temporal_expand=2,
+        move_vocab_size=1970,
+        pooling_type="square_attention",
+        square_pool_size=8,
+        square_head_enabled=True,
+        square_token_mode="oblique_square_queries",
+        square_query_num_heads=8,
+        use_detector=False,
+        vision_feature_layer_indices=[16, 19, 22],
+        vision_output_grid_size=14,
+    )
+    crops = torch.zeros(1, 2, 3, 224, 224, dtype=torch.float32)
+    board_corners = torch.tensor(
+        [
+            [
+                [[0.0, 0.0], [223.0, 0.0], [223.0, 223.0], [0.0, 223.0]],
+                [[10.0, 6.0], [214.0, 14.0], [220.0, 220.0], [8.0, 210.0]],
+            ]
+        ],
+        dtype=torch.float32,
+    )
+    legal_masks = torch.ones(1, 2, 1970, dtype=torch.bool)
+
+    output = model(crops=crops, board_corners=board_corners, legal_masks=legal_masks)
+
+    assert output.square_logits is not None
+    assert output.square_logits.shape == (1, 2, 64, 13)
+    assert output.move_logits.shape == (1, 2, 1, 1970)
