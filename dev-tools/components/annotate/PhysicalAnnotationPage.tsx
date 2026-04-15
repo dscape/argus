@@ -833,7 +833,7 @@ function AnnotationContent({
                   onPointerCancel={finishCornerDrag}
                   title={`Drag ${cornerLabel(i)}`}
                 >
-                  <svg width="24" height="24" viewBox="0 0 24 24" className="drop-shadow" style={{ transform: "translate(-50%, -50%)" }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" className="drop-shadow">
                     <line x1="12" y1="2" x2="12" y2="22" stroke="#dc2626" strokeWidth="2" />
                     <line x1="2" y1="12" x2="22" y2="12" stroke="#dc2626" strokeWidth="2" />
                     <line x1="12" y1="2" x2="12" y2="22" stroke="white" strokeWidth="0.75" />
