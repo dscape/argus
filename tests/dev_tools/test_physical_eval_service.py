@@ -28,8 +28,8 @@ def test_list_clip_files_returns_relative_project_paths(tmp_path, monkeypatch) -
     )
     monkeypatch.setattr(
         physical_eval_service.splits,
-        "get_source_video_split",
-        lambda _video_id: None,
+        "ensure_source_video_splits_assigned",
+        lambda _source_video_ids: {"demo": "val"},
     )
 
     result = physical_eval_service.list_clip_files("data/argus/train_real")
@@ -41,7 +41,7 @@ def test_list_clip_files_returns_relative_project_paths(tmp_path, monkeypatch) -
     assert result["clips"][0]["annotated_frame_count"] == 0
     assert result["clips"][0]["num_frames"] is None
     assert result["clips"][0]["fully_annotated"] is False
-    assert result["clips"][0]["assigned_split"] is None
+    assert result["clips"][0]["assigned_split"] == "val"
 
 
 def test_list_clip_files_marks_fully_annotated_clips(tmp_path, monkeypatch) -> None:
@@ -59,8 +59,8 @@ def test_list_clip_files_marks_fully_annotated_clips(tmp_path, monkeypatch) -> N
     )
     monkeypatch.setattr(
         physical_eval_service.splits,
-        "get_source_video_split",
-        lambda _video_id: "val",
+        "ensure_source_video_splits_assigned",
+        lambda _source_video_ids: {"demo": "val"},
     )
     monkeypatch.setattr(
         physical_eval_service.eval_dataset,

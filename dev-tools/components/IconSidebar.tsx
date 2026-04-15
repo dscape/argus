@@ -2,8 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useEffect } from "react";
-import { getVideoCounts } from "@/lib/api";
+import { useState } from "react";
 
 const navItems = [
   {
@@ -29,7 +28,6 @@ const navItems = [
   {
     href: "/annotate",
     label: "Annotate",
-    hasBadge: true,
     icon: (
       <svg
         viewBox="0 0 24 24"
@@ -90,18 +88,6 @@ const navItems = [
 export default function IconSidebar() {
   const pathname = usePathname();
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
-  const [unscreenedCount, setUnscreenedCount] = useState(0);
-
-  useEffect(() => {
-    const fetchCount = () => {
-      getVideoCounts()
-        .then((counts) => setUnscreenedCount(counts.unscreened ?? 0))
-        .catch(() => {});
-    };
-    fetchCount();
-    const interval = setInterval(fetchCount, 30_000);
-    return () => clearInterval(interval);
-  }, []);
 
   return (
     <aside className="flex flex-col items-center py-4 px-1.5">
@@ -122,12 +108,6 @@ export default function IconSidebar() {
               >
                 {item.icon}
               </Link>
-              {/* Red notification badge for unscreened count */}
-              {"hasBadge" in item && item.hasBadge && unscreenedCount > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center pointer-events-none">
-                  {unscreenedCount > 99 ? "99+" : unscreenedCount}
-                </span>
-              )}
               {hoveredItem === item.href && (
                 <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-2 py-1 rounded-md bg-foreground text-background text-xs font-medium whitespace-nowrap z-50 pointer-events-none">
                   {item.label}

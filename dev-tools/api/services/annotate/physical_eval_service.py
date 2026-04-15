@@ -110,11 +110,19 @@ def _list_clip_files(
         return {"clips_dir": str(directory.relative_to(_PROJECT_ROOT)), "clips": []}
 
     saved_frame_counts = dataset_module.get_saved_frame_counts_by_clip()
+    clip_paths = sorted(directory.glob("clip_*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
+    clip_matches = {path: _REAL_CLIP_RE.match(path.name) for path in clip_paths}
+    source_video_assignments = splits.ensure_source_video_splits_assigned(
+        match.group("video_id")
+        for match in clip_matches.values()
+        if match is not None
+    )
+
     clips: list[dict[str, Any]] = []
-    for path in sorted(directory.glob("clip_*.pt"), key=lambda p: p.stat().st_mtime, reverse=True):
-        match = _REAL_CLIP_RE.match(path.name)
+    for path in clip_paths:
+        match = clip_matches[path]
         source_video_id = match.group("video_id") if match else None
-        assigned_split = splits.get_source_video_split(source_video_id)
+        assigned_split = source_video_assignments.get(source_video_id) if source_video_id else None
         if assigned_split is not None and assigned_split != split_name:
             continue
 

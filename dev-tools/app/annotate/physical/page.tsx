@@ -2,12 +2,10 @@
 
 import { CheckCircle2 } from "lucide-react";
 import Link from "next/link";
-import { useMemo } from "react";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
 import { listPhysicalEvalClips, listPhysicalTrainClips, type PhysicalEvalClip } from "@/lib/api";
 
 type PhysicalAnnotationSplit = "val" | "train";
@@ -16,7 +14,20 @@ function normalizeSplit(value: string | null): PhysicalAnnotationSplit {
   return value === "train" ? "train" : "val";
 }
 
+function buildSplitUrl(
+  pathname: string,
+  searchParams: ReturnType<typeof useSearchParams>,
+  split: PhysicalAnnotationSplit,
+): string {
+  const params = new URLSearchParams(searchParams.toString());
+  params.set("split", split);
+  const query = params.toString();
+  return query ? `${pathname}?${query}` : pathname;
+}
+
 export default function PhysicalAnnotationIndexPage() {
+  const pathname = usePathname();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const split = normalizeSplit(searchParams.get("split"));
   const [clips, setClips] = useState<PhysicalEvalClip[]>([]);
@@ -51,18 +62,8 @@ export default function PhysicalAnnotationIndexPage() {
 
   const splitLabel = split === "train" ? "Train" : "Validation";
   const emptyMessage = split === "train"
-    ? "No eligible training clips found in data/argus/train_real."
-    : "No eligible validation clips found in data/argus/train_real.";
-  const helperText = split === "train"
-    ? `${clips.length} training-eligible clips in `
-    : `${clips.length} validation-eligible clips in `;
-
-  const splitDescription = useMemo(() => {
-    if (split === "train") {
-      return "Shows clips whose source video is assigned to train or still unassigned.";
-    }
-    return "Shows clips whose source video is assigned to val or still unassigned.";
-  }, [split]);
+    ? "No training clips found in data/argus/train_real."
+    : "No validation clips found in data/argus/train_real.";
 
   if (loading) {
     return <div className="text-sm text-muted-foreground">Loading clips…</div>;
@@ -70,21 +71,31 @@ export default function PhysicalAnnotationIndexPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-2">
-        <Button asChild variant={split === "val" ? "default" : "outline"}>
-          <Link href="/annotate/physical?split=val">Validation</Link>
-        </Button>
-        <Button asChild variant={split === "train" ? "default" : "outline"}>
-          <Link href="/annotate/physical?split=train">Train</Link>
-        </Button>
+      <div className="flex flex-wrap items-center gap-3 rounded-2xl border bg-muted/30 p-3">
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Split</span>
+          <select
+            value={split}
+            onChange={(event) => {
+              router.replace(
+                buildSplitUrl(pathname, searchParams, normalizeSplit(event.target.value)),
+              );
+            }}
+            className="h-9 rounded-md border bg-background px-3 text-sm shadow-sm outline-none transition-colors focus:border-ring"
+          >
+            <option value="train">Train</option>
+            <option value="val">Validation</option>
+          </select>
+        </label>
       </div>
 
       <div className="space-y-1 text-sm text-muted-foreground">
         <p>
-          {helperText}
-          <code>data/argus/train_real</code>
+          {clips.length} {split === "train" ? "training" : "validation"} clips in <code>data/argus/train_real</code>
         </p>
-        <p>{splitDescription}</p>
+        <p>
+          Source videos are assigned once with a stable pseudo-random 80/20 train/val split.
+        </p>
       </div>
 
       {clips.length === 0 ? (
@@ -92,16 +103,16 @@ export default function PhysicalAnnotationIndexPage() {
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {clips.map((clip) => {
-            const splitBadge = clip.assigned_split ?? "unassigned";
+            const splitBadge = clip.assigned_split ?? "unknown";
             return (
               <Link
                 key={clip.clip_path}
                 href={`/annotate/physical/${encodeURIComponent(clip.filename)}?split=${split}`}
-                className="rounded border p-3 text-sm transition-colors hover:bg-muted/40 block"
+                className="block rounded border p-3 text-sm transition-colors hover:bg-muted/40"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <div className="font-medium font-mono truncate">{clip.filename}</div>
+                    <div className="truncate font-mono font-medium">{clip.filename}</div>
                     <div className="mt-1 text-xs text-muted-foreground">
                       {clip.source_video_id ?? "unknown"} · clip {clip.clip_id ?? "-"} · {clip.size_mb.toFixed(1)} MB
                     </div>

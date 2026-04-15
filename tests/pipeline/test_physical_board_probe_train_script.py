@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+
+import pytest
+import scripts.train_physical_board_probe as train_physical_board_probe
+import torch
 from pipeline.physical.real_board_data import PhysicalRealBoardRow
 from scripts.train_physical_board_probe import (
     build_synthetic_dataset,
@@ -61,6 +66,58 @@ def test_sample_real_rows_respects_max_frames() -> None:
     assert {row.frame_index for row in sampled_rows}.issubset({0, 1, 2, 3, 4})
 
 
+def test_build_synthetic_dataset_routes_rendered_source_without_invoking_blender(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    class StubRenderedDataset:
+        def __init__(self, **kwargs: object) -> None:
+            captured_kwargs.update(kwargs)
+
+        def __len__(self) -> int:
+            return 1
+
+        def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+            assert index == 0
+            return torch.zeros((3, 64, 64)), torch.zeros((64,), dtype=torch.long)
+
+    monkeypatch.setattr(
+        train_physical_board_probe,
+        "PhysicalSyntheticRenderedBoardDataset",
+        StubRenderedDataset,
+    )
+
+    dataset = build_synthetic_dataset(
+        synthetic_source="rendered",
+        board_input_mode="oblique_board",
+        num_positions=1,
+        image_size=64,
+        seed=7,
+        augment=False,
+        min_moves=12,
+        max_moves=20,
+        min_ply=8,
+    )
+
+    image, labels, corners = dataset[0]
+    assert captured_kwargs == {
+        "num_positions": 1,
+        "image_size": 64,
+        "seed": 7,
+        "augment": False,
+        "min_moves": 12,
+        "max_moves": 20,
+    }
+    assert image.shape == (3, 64, 64)
+    assert labels.shape == (64,)
+    assert corners.shape == (4, 2)
+
+
+@pytest.mark.skipif(
+    os.environ.get("SANDBOX_RUNTIME") == "1",
+    reason="Blender segfaults under sandbox restrictions",
+)
 def test_build_synthetic_dataset_supports_oblique_board_with_rendered_source() -> None:
     dataset = build_synthetic_dataset(
         synthetic_source="rendered",

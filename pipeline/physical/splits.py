@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -25,6 +27,7 @@ _LEGACY_SPLIT_NAMES = {
     "val": "eval_holdout",
 }
 _VALID_SPLITS: tuple[PhysicalAnnotationSplit, ...] = ("train", "val")
+_VAL_SPLIT_FRACTION = 0.2
 
 
 def normalize_split(split: str) -> PhysicalAnnotationSplit:
@@ -54,12 +57,6 @@ def load_source_video_splits() -> dict[str, PhysicalAnnotationSplit]:
     return _load_existing_source_video_splits()
 
 
-def get_source_video_split(source_video_id: str | None) -> PhysicalAnnotationSplit | None:
-    if not source_video_id:
-        return None
-    return load_source_video_splits().get(str(source_video_id))
-
-
 def get_source_video_ids_for_split(split: str) -> list[str]:
     normalized_split = normalize_split(split)
     return sorted(
@@ -67,6 +64,24 @@ def get_source_video_ids_for_split(split: str) -> list[str]:
         for source_video_id, assigned_split in load_source_video_splits().items()
         if assigned_split == normalized_split
     )
+
+
+def ensure_source_video_splits_assigned(
+    source_video_ids: Iterable[str | None],
+) -> dict[str, PhysicalAnnotationSplit]:
+    assignments = load_source_video_splits()
+    missing_source_video_ids = sorted({
+        str(source_video_id)
+        for source_video_id in source_video_ids
+        if source_video_id and str(source_video_id) not in assignments
+    })
+    if not missing_source_video_ids:
+        return assignments
+
+    for source_video_id in missing_source_video_ids:
+        assignments[source_video_id] = _auto_assign_source_video_split(source_video_id)
+    _save_source_video_splits(assignments)
+    return assignments
 
 
 def assign_source_video_split(
@@ -90,6 +105,18 @@ def assign_source_video_split(
     assignments[source_video_id] = normalized_split
     _save_source_video_splits(assignments)
     return normalized_split
+
+
+def _auto_assign_source_video_split(source_video_id: str) -> PhysicalAnnotationSplit:
+    if _stable_assignment_fraction(source_video_id) < _VAL_SPLIT_FRACTION:
+        return "val"
+    return "train"
+
+
+def _stable_assignment_fraction(source_video_id: str) -> float:
+    digest = hashlib.sha256(source_video_id.encode("utf-8")).digest()
+    value = int.from_bytes(digest[:8], byteorder="big", signed=False)
+    return value / float(1 << 64)
 
 
 def _migrate_split_root(split: PhysicalAnnotationSplit) -> None:

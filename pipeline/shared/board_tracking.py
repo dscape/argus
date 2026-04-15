@@ -157,6 +157,7 @@ class _ScoredAction:
 class _BeamState:
     board: chess.Board
     score: float
+    search_score: float
     frames: tuple[SequenceTrackerFrameResult, ...]
 
 
@@ -276,21 +277,37 @@ class LegalSequenceBeamDecoder:
         initial_side_to_move: str | None = None,
         beam_size: int = 8,
         top_move_candidates: int = 16,
+        top_board_candidates: int = 0,
         board_weight: float = 1.0,
         move_weight: float = 1.0,
         detect_weight: float = 1.0,
+        move_score_margin: float = 0.0,
+        lookahead_window: int = 1,
+        lookahead_weight: float = 0.0,
+        lookahead_decay: float = 1.0,
     ) -> None:
         if beam_size <= 0:
             raise ValueError(f"beam_size must be > 0, got {beam_size}")
         if top_move_candidates <= 0:
             raise ValueError(f"top_move_candidates must be > 0, got {top_move_candidates}")
+        if top_board_candidates < 0:
+            raise ValueError(f"top_board_candidates must be >= 0, got {top_board_candidates}")
+        if lookahead_window <= 0:
+            raise ValueError(f"lookahead_window must be > 0, got {lookahead_window}")
+        if lookahead_decay <= 0.0 or lookahead_decay > 1.0:
+            raise ValueError(f"lookahead_decay must be in (0, 1], got {lookahead_decay}")
         self.initial_board_fen = initial_board_fen
         self.initial_side_to_move = initial_side_to_move
         self.beam_size = int(beam_size)
         self.top_move_candidates = int(top_move_candidates)
+        self.top_board_candidates = int(top_board_candidates)
         self.board_weight = float(board_weight)
         self.move_weight = float(move_weight)
         self.detect_weight = float(detect_weight)
+        self.move_score_margin = float(move_score_margin)
+        self.lookahead_window = int(lookahead_window)
+        self.lookahead_weight = float(lookahead_weight)
+        self.lookahead_decay = float(lookahead_decay)
         self.vocab = get_vocabulary()
 
     def decode(
@@ -313,7 +330,7 @@ class LegalSequenceBeamDecoder:
         )
 
         beam = [
-            _BeamState(board=board, score=0.0, frames=tuple())
+            _BeamState(board=board, score=0.0, search_score=0.0, frames=tuple())
             for board in build_board_hypotheses(
                 self.initial_board_fen,
                 initial_side_to_move=self.initial_side_to_move,
@@ -325,16 +342,17 @@ class LegalSequenceBeamDecoder:
             frame_detect_logits = None if detect_logits is None else detect_logits[frame_index]
 
             for state in beam:
-                stay_board_score = score_board_state(frame_board_log_probs, state.board)
-                stay_action_score = state.score + self._step_score(
-                    board_score=stay_board_score,
+                stay_step_score = self._step_score(
+                    board_score=score_board_state(frame_board_log_probs, state.board),
                     move_score=self._stay_move_score(state.board, frame_move_logits),
                     detect_score=_stay_detect_score(frame_detect_logits),
                 )
+                stay_action_score = state.score + stay_step_score
                 next_candidates.append(
                     _BeamState(
                         board=state.board.copy(stack=False),
                         score=stay_action_score,
+                        search_score=stay_action_score,
                         frames=state.frames
                         + (
                             SequenceTrackerFrameResult(
@@ -348,19 +366,35 @@ class LegalSequenceBeamDecoder:
                     )
                 )
 
-                for move, move_log_score in self._candidate_moves(state.board, frame_move_logits):
+                for move, move_log_score in self._candidate_moves(
+                    state.board,
+                    move_logits=frame_move_logits,
+                    board_log_probs=frame_board_log_probs,
+                    sequence_board_log_probs=board_log_probs,
+                    frame_index=frame_index,
+                ):
                     next_board = state.board.copy(stack=False)
                     next_board.push(move)
-                    move_board_score = score_board_state(frame_board_log_probs, next_board)
-                    move_action_score = state.score + self._step_score(
-                        board_score=move_board_score,
+                    move_step_score = self._step_score(
+                        board_score=score_board_state(frame_board_log_probs, next_board),
                         move_score=move_log_score,
                         detect_score=_move_detect_score(frame_detect_logits),
                     )
+                    lookahead_bonus = self._move_lookahead_bonus(
+                        board_log_probs,
+                        frame_index=frame_index,
+                        stay_board=state.board,
+                        move_board=next_board,
+                    )
+                    move_action_score = state.score + move_step_score
+                    move_search_score = move_action_score + lookahead_bonus
+                    if move_search_score < stay_action_score + self.move_score_margin:
+                        continue
                     next_candidates.append(
                         _BeamState(
                             board=next_board,
                             score=move_action_score,
+                            search_score=move_search_score,
                             frames=state.frames
                             + (
                                 SequenceTrackerFrameResult(
@@ -395,32 +429,94 @@ class LegalSequenceBeamDecoder:
     def _candidate_moves(
         self,
         board: chess.Board,
+        *,
         move_logits: torch.Tensor | None,
+        board_log_probs: torch.Tensor,
+        sequence_board_log_probs: list[torch.Tensor],
+        frame_index: int,
     ) -> list[tuple[chess.Move, float]]:
-        if move_logits is None:
-            return [(move, 0.0) for move in list(board.legal_moves)[: self.top_move_candidates]]
+        scored_by_uci: dict[str, tuple[chess.Move, float]] = {}
+        log_probs = None if move_logits is None else _legal_move_log_probs(board, move_logits)
 
-        log_probs = _legal_move_log_probs(board, move_logits)
-        scored_moves: list[tuple[chess.Move, float]] = []
-        for move in board.legal_moves:
-            uci = move.uci()
-            if not self.vocab.contains(uci):
-                continue
-            move_index = self.vocab.uci_to_index(uci)
-            if move_index in {NO_MOVE_IDX, UNKNOWN_IDX}:
-                continue
-            scored_moves.append((move, float(log_probs[move_index].item())))
-        scored_moves.sort(key=lambda item: item[1], reverse=True)
-        return scored_moves[: self.top_move_candidates]
+        if log_probs is None:
+            for move in list(board.legal_moves)[: self.top_move_candidates]:
+                scored_by_uci[move.uci()] = (move, 0.0)
+        else:
+            scored_moves: list[tuple[chess.Move, float]] = []
+            for move in board.legal_moves:
+                uci = move.uci()
+                if not self.vocab.contains(uci):
+                    continue
+                move_index = self.vocab.uci_to_index(uci)
+                if move_index in {NO_MOVE_IDX, UNKNOWN_IDX}:
+                    continue
+                scored_moves.append((move, float(log_probs[move_index].item())))
+            scored_moves.sort(key=lambda item: item[1], reverse=True)
+            for move, score in scored_moves[: self.top_move_candidates]:
+                scored_by_uci[move.uci()] = (move, score)
+
+        if self.top_board_candidates > 0:
+            stay_score = score_board_state(board_log_probs, board)
+            board_scored_moves = []
+            for move in board.legal_moves:
+                next_board = board.copy(stack=False)
+                next_board.push(move)
+                current_delta = score_legal_move(
+                    board_log_probs,
+                    board,
+                    move,
+                    stay_score=stay_score,
+                ).delta
+                lookahead_bonus = self._move_lookahead_bonus(
+                    sequence_board_log_probs,
+                    frame_index=frame_index,
+                    stay_board=board,
+                    move_board=next_board,
+                )
+                board_scored_moves.append((move, current_delta + lookahead_bonus))
+            board_scored_moves.sort(key=lambda item: item[1], reverse=True)
+            for move, _delta in board_scored_moves[: self.top_board_candidates]:
+                uci = move.uci()
+                if uci in scored_by_uci:
+                    continue
+                move_score = 0.0
+                if log_probs is not None and self.vocab.contains(uci):
+                    move_index = self.vocab.uci_to_index(uci)
+                    if move_index not in {NO_MOVE_IDX, UNKNOWN_IDX}:
+                        move_score = float(log_probs[move_index].item())
+                scored_by_uci[uci] = (move, move_score)
+
+        return list(scored_by_uci.values())
+
+    def _move_lookahead_bonus(
+        self,
+        board_log_probs: list[torch.Tensor],
+        *,
+        frame_index: int,
+        stay_board: chess.Board,
+        move_board: chess.Board,
+    ) -> float:
+        if self.lookahead_weight == 0.0 or self.lookahead_window <= 1:
+            return 0.0
+        bonus = 0.0
+        end_index = min(len(board_log_probs), frame_index + self.lookahead_window)
+        for future_index in range(frame_index + 1, end_index):
+            offset = future_index - frame_index - 1
+            decay = self.lookahead_decay**offset
+            bonus += decay * (
+                score_board_state(board_log_probs[future_index], move_board)
+                - score_board_state(board_log_probs[future_index], stay_board)
+            )
+        return self.lookahead_weight * bonus
 
     def _prune(self, candidates: list[_BeamState]) -> list[_BeamState]:
         best_by_fen: dict[str, _BeamState] = {}
         for candidate in candidates:
-            key = candidate.board.fen()
+            key = _state_dedupe_key(candidate.board)
             previous = best_by_fen.get(key)
-            if previous is None or candidate.score > previous.score:
+            if previous is None or candidate.search_score > previous.search_score:
                 best_by_fen[key] = candidate
-        return sorted(best_by_fen.values(), key=lambda state: state.score, reverse=True)[
+        return sorted(best_by_fen.values(), key=lambda state: state.search_score, reverse=True)[
             : self.beam_size
         ]
 
@@ -564,3 +660,8 @@ def _move_detect_score(detect_logits: torch.Tensor | None) -> float:
     if detect_logits is None:
         return 0.0
     return float(F.logsigmoid(detect_logits.reshape(()).to(torch.float32)).item())
+
+
+def _state_dedupe_key(board: chess.Board) -> str:
+    fen_fields = board.fen().split(" ")
+    return " ".join(fen_fields[:4])

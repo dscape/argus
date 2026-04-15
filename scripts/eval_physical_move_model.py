@@ -76,9 +76,14 @@ def main() -> None:
                     device=device,
                     beam_size=args.beam_size,
                     top_move_candidates=args.beam_top_moves,
+                    top_board_candidates=args.beam_top_board_moves,
                     board_weight=args.beam_board_weight,
                     move_weight=args.beam_move_weight,
                     detect_weight=args.beam_detect_weight,
+                    move_score_margin=args.beam_move_score_margin,
+                    lookahead_window=args.beam_lookahead_window,
+                    lookahead_weight=args.beam_lookahead_weight,
+                    lookahead_decay=args.beam_lookahead_decay,
                 )
             else:
                 candidate_boards = build_board_hypotheses_from_piece_fen(
@@ -150,6 +155,11 @@ def main() -> None:
         "beam_board_weight": args.beam_board_weight,
         "beam_move_weight": args.beam_move_weight,
         "beam_detect_weight": args.beam_detect_weight,
+        "beam_top_board_moves": args.beam_top_board_moves,
+        "beam_move_score_margin": args.beam_move_score_margin,
+        "beam_lookahead_window": args.beam_lookahead_window,
+        "beam_lookahead_weight": args.beam_lookahead_weight,
+        "beam_lookahead_decay": args.beam_lookahead_decay,
         "move_match_tolerance": args.move_match_tolerance,
         "metrics": metrics.to_dict(),
         "move_detection_recall": move_recall,
@@ -228,9 +238,14 @@ def decode_sequence_with_beam(
     device: torch.device,
     beam_size: int,
     top_move_candidates: int,
+    top_board_candidates: int,
     board_weight: float,
     move_weight: float,
     detect_weight: float,
+    move_score_margin: float,
+    lookahead_window: int,
+    lookahead_weight: float,
+    lookahead_decay: float,
 ) -> list[tuple[chess.Board, str | None]]:
     frames = transform(sequence.frames.clone()).unsqueeze(0).to(device)
     board_corners = None
@@ -247,9 +262,14 @@ def decode_sequence_with_beam(
         initial_side_to_move=sequence.initial_side_to_move,
         beam_size=beam_size,
         top_move_candidates=top_move_candidates,
+        top_board_candidates=top_board_candidates,
         board_weight=board_weight,
         move_weight=move_weight,
         detect_weight=detect_weight,
+        move_score_margin=move_score_margin,
+        lookahead_window=lookahead_window,
+        lookahead_weight=lookahead_weight,
+        lookahead_decay=lookahead_decay,
     ).decode(
         output.square_logits.squeeze(0),
         sequence_move_logits=output.move_logits.squeeze(0).squeeze(1),
@@ -324,9 +344,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--move-score-margin", type=float, default=1.0)
     parser.add_argument("--beam-size", type=int, default=8)
     parser.add_argument("--beam-top-moves", type=int, default=16)
+    parser.add_argument("--beam-top-board-moves", type=int, default=0)
     parser.add_argument("--beam-board-weight", type=float, default=1.0)
     parser.add_argument("--beam-move-weight", type=float, default=1.0)
     parser.add_argument("--beam-detect-weight", type=float, default=1.0)
+    parser.add_argument("--beam-move-score-margin", type=float, default=0.0)
+    parser.add_argument("--beam-lookahead-window", type=int, default=1)
+    parser.add_argument("--beam-lookahead-weight", type=float, default=0.0)
+    parser.add_argument("--beam-lookahead-decay", type=float, default=1.0)
     parser.add_argument("--move-match-tolerance", type=int, default=1)
     parser.add_argument("--output", type=Path, default=_DEFAULT_OUTPUT_PATH)
     return parser

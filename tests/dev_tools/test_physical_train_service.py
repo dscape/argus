@@ -18,8 +18,8 @@ def test_list_clip_files_excludes_held_out_videos(tmp_path, monkeypatch) -> None
     )
     monkeypatch.setattr(
         physical_train_service.physical_eval_service.splits,
-        "get_source_video_split",
-        lambda source_video_id: "val" if source_video_id == "heldout" else None,
+        "ensure_source_video_splits_assigned",
+        lambda _source_video_ids: {"demo": "train", "heldout": "val"},
     )
     monkeypatch.setattr(
         physical_train_service.manual_train_dataset,

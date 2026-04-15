@@ -1006,3 +1006,165 @@
   - unrelated existing failure: `tests/pipeline/test_physical_board_probe_train_script.py::test_build_synthetic_dataset_supports_oblique_board_with_rendered_source`
   - cause here is Blender crashing under sandbox restrictions during rendered synthetic data generation (`Segmentation fault: 11`), not the new oblique reader / decoder work.
 - Passed: `.venv/bin/python3 -m pytest tests/test_argus_model.py tests/test_argus_dataset.py tests/pipeline/test_physical_move_data.py tests/pipeline/test_shared_board_tracking.py tests/pipeline/test_physical_oblique_board_data.py tests/pipeline/test_physical_end_to_end_joint_board_reader.py`
+
+## 2026-04-15
+
+### Phase 2 decoder-only follow-up on the passing oblique sequence branch
+- Tightened `pipeline/shared/board_tracking.py:LegalSequenceBeamDecoder` so the legal decoder itself now has two missing controls that the older beam path lacked:
+  - `top_board_candidates`
+    - unions board-evidence-ranked legal moves into the beam candidate set instead of trusting move logits alone for candidate generation
+  - `move_score_margin`
+    - requires a move action to beat `stay` by a configurable per-frame score margin before the decoder expands it
+- Also fixed beam-state deduplication to ignore halfmove/fullmove counters when pruning.
+  - Previous pruning keyed on full `board.fen()`, which treated positionally equivalent states as different beam slots only because the counters differed.
+  - The decoder now dedupes on the first four FEN fields, which is the right legality state for this use case.
+- Extended `scripts/eval_physical_move_model.py` to expose the new decoder knobs:
+  - `--beam-top-board-moves`
+  - `--beam-move-score-margin`
+- Added regression coverage in `tests/pipeline/test_shared_board_tracking.py` for:
+  - board-driven candidate recovery when the move head misses the true move
+  - move-margin suppression of spurious move expansions
+
+### Decoder sweep result on the current passing checkpoint
+- Sweep artifact:
+  - `outputs/2026-04-15/legal_beam_decoder_margin_sweep_oblique_initfreeze/summary.json`
+  - `outputs/2026-04-15/legal_beam_decoder_margin_sweep_oblique_initfreeze/summary.md`
+- Checkpoint under test:
+  - `outputs/2026-04-14/physical_move_model_oblique_initfreeze_smoke1/best.pt`
+- Important result:
+  - the decoder refactor materially improved the old beam precision/recall trade-off.
+  - Example post-fix beam point with no extra board candidates:
+    - `move_weight=0.1`, `margin=0.0`
+    - board exact `0.0000`
+    - non-empty `0.6082`
+    - macro-F1 `0.5464`
+    - move recall `0.1719`
+    - false-change `0.0750`
+  - Compared to the older default beam behavior from `2026-04-14`:
+    - board exact `0.0000` -> `0.0000`
+    - non-empty `0.5647` -> `0.6082`
+    - macro-F1 `0.4807` -> `0.5464`
+    - false-change `0.7335` -> `0.0750`
+- But Phase 2 still does **not** pass.
+  - Best board-exact point in this first decoder-only sweep was only `0.0438`, still far below the current lookahead reference `~0.1137`.
+  - Higher move margins mostly recover strong frame metrics by freezing rather than by decoding the move sequence well.
+  - Adding board-driven move candidates did not improve the best board-exact point in this first pass.
+- Updated conclusion:
+  - this decoder refactor was correct and useful,
+  - but the current model+decoder pair still does not clear the Phase 2 gate,
+  - so the next decoder iteration should target **trajectory scoring quality**, not just candidate pruning.
+
+### Second Phase 2 follow-up: future-supported search and wider legal beams
+- Added a search-time future-support mechanism to `LegalSequenceBeamDecoder` in `pipeline/shared/board_tracking.py`:
+  - new optional knobs:
+    - `lookahead_window`
+    - `lookahead_weight`
+    - `lookahead_decay`
+  - implementation detail:
+    - move candidates now carry both an accumulated score and a separate `search_score`
+    - future board evidence is used as a **pruning heuristic** via `search_score`, while final trajectory selection still uses the accumulated score
+  - `top_board_candidates` ranking now also uses the same future board-support bonus
+- Extended `scripts/eval_physical_move_model.py` with:
+  - `--beam-lookahead-window`
+  - `--beam-lookahead-weight`
+  - `--beam-lookahead-decay`
+- Added a regression test that proves the heuristic can keep a future-supported move alive long enough to advance one frame earlier on a synthetic sequence.
+
+### Result: first lookahead-beam sweep regressed
+- Artifact:
+  - `outputs/2026-04-15/legal_beam_decoder_lookahead_sweep_oblique_initfreeze/summary.json`
+  - `outputs/2026-04-15/legal_beam_decoder_lookahead_sweep_oblique_initfreeze/summary.md`
+- On the current passing checkpoint, the future-support bonus did what it was designed to do — it made the beam more willing to keep move paths alive — but the net effect was bad.
+- Representative comparison:
+  - no lookahead, `move_weight=0.1`, `margin=2.0`:
+    - board exact `0.0036`
+    - non-empty `0.7539`
+    - macro-F1 `0.6583`
+    - move recall `0.0938`
+    - false-change `0.0246`
+  - lookahead, same base settings, `window=2`, `weight=1.0`:
+    - board exact `0.0012`
+    - non-empty `0.6953`
+    - macro-F1 `0.6070`
+    - move recall `0.1094`
+    - false-change `0.0466`
+- Interpretation:
+  - this first future-evidence heuristic mostly traded precision for a small recall gain,
+  - and therefore regressed the metrics that matter most.
+
+### Third Phase 2 follow-up: search width is not the bottleneck
+- Ran a wider search sweep without changing the model or the scoring contract:
+  - artifact:
+    - `outputs/2026-04-15/legal_beam_search_width_sweep_oblique_initfreeze/summary.json`
+    - `outputs/2026-04-15/legal_beam_search_width_sweep_oblique_initfreeze/summary.md`
+- Findings:
+  - increasing `beam_size` and `beam_top_moves` raised move recall,
+  - but board exact stayed `0.0` and both board metrics and false-change got worse.
+- Example comparison:
+  - `beam=8`, `top_moves=16`:
+    - board exact `0.0000`
+    - non-empty `0.6082`
+    - macro-F1 `0.5464`
+    - move recall `0.1719`
+    - false-change `0.0750`
+  - `beam=32`, `top_moves=64`:
+    - board exact `0.0000`
+    - non-empty `0.5574`
+    - macro-F1 `0.4630`
+    - move recall `0.2813`
+    - false-change `0.1100`
+- Updated conclusion:
+  - under-search is **not** the current blocker.
+  - the blocker is still the **trajectory scoring contract** itself.
+  - Next decoder work should be more conservative / segmental than a direct additive future bonus.
+
+### Validation
+- Passed: `make typecheck`
+- Passed: `make lint`
+- Failed in this sandbox: `make test`
+  - unrelated existing failure: `tests/pipeline/test_physical_board_probe_train_script.py::test_build_synthetic_dataset_supports_oblique_board_with_rendered_source`
+  - cause here is Blender crashing under sandbox restrictions during rendered synthetic data generation (`Segmentation fault: 11`), not the legal decoder changes.
+- Passed: `.venv/bin/python3 -m pytest tests/pipeline/test_shared_board_tracking.py tests/test_argus_model.py tests/test_argus_dataset.py tests/pipeline/test_physical_move_data.py`
+
+### Dev-tools sidebar cleanup
+- Removed the annotate sidebar notification badge in `dev-tools/components/IconSidebar.tsx`.
+  - Deleted the unscreened-count polling and the red `99+` badge rendering, so the annotate icon is now just a plain nav icon again.
+- Re-ran repo validation after the UI cleanup.
+  - Passed: `make typecheck`
+  - Passed: `make lint`
+  - Failed in this sandbox: `make test`
+    - same unrelated existing failure: `tests/pipeline/test_physical_board_probe_train_script.py::test_build_synthetic_dataset_supports_oblique_board_with_rendered_source`
+    - cause remains Blender crashing under sandbox restrictions (`Segmentation fault: 11`), not the sidebar change.
+
+### Physical annotation split filter + auto assignment
+- Replaced the train/validation button pair on `dev-tools/app/annotate/physical/page.tsx` with a single split filter dropdown driven by the existing `?split=` query param.
+- Changed physical clip listing to auto-assign previously unseen source videos into the split manifest the first time they are discovered.
+  - implementation lives in `pipeline/physical/splits.py` and `dev-tools/api/services/annotate/physical_eval_service.py`
+  - assignment is kept at the **source-video** level to avoid train/val leakage across clips from the same video
+  - the auto-assignment is a stable pseudo-random `80% train / 20% val` rule, then persisted into `data/physical/source_video_splits.json`
+- Updated split-related tests to cover the new auto-assignment path:
+  - `tests/pipeline/test_physical_splits.py`
+  - `tests/dev_tools/test_physical_eval_service.py`
+  - `tests/dev_tools/test_physical_train_service.py`
+- Validation for this change:
+  - Passed: `make typecheck`
+  - Passed: `make lint`
+  - Passed: `cd dev-tools && npx tsc --noEmit`
+  - Passed: `.venv/bin/python3 -m ruff check pipeline/physical/splits.py tests/dev_tools/test_physical_eval_service.py tests/dev_tools/test_physical_train_service.py tests/pipeline/test_physical_splits.py`
+  - Passed: `.venv/bin/python3 -m pytest tests/pipeline/test_physical_splits.py tests/dev_tools/test_physical_eval_service.py tests/dev_tools/test_physical_train_service.py`
+  - Failed in this sandbox: `make test`
+    - same unrelated existing failure: `tests/pipeline/test_physical_board_probe_train_script.py::test_build_synthetic_dataset_supports_oblique_board_with_rendered_source`
+    - cause remains Blender crashing under sandbox restrictions (`Segmentation fault: 11`), not the physical annotation split/filter change.
+
+### Blender rendered-data regression coverage without sandbox crashes
+- Kept real rendered-source coverage in `tests/pipeline/test_physical_board_probe_train_script.py` instead of deleting it.
+  - `test_build_synthetic_dataset_supports_oblique_board_with_rendered_source` remains as the real Blender-backed integration check.
+  - It is skipped only when `SANDBOX_RUNTIME=1`, because Blender is present here but crashes under the Pi sandbox.
+- Added a second unit-level regression test for the same path:
+  - `test_build_synthetic_dataset_routes_rendered_source_without_invoking_blender`
+  - this monkeypatches `PhysicalSyntheticRenderedBoardDataset` so sandbox runs still verify the rendered-source wiring and oblique wrapping logic without spawning Blender.
+- Validation:
+  - Passed: `.venv/bin/python3 -m pytest tests/pipeline/test_physical_board_probe_train_script.py`
+  - Passed: `make typecheck`
+  - Passed: `make lint`
+  - Passed: `make test`

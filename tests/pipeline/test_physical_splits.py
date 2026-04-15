@@ -82,3 +82,41 @@ def test_ensure_annotation_layout_migrated_moves_legacy_eval_into_val(
 
     split_manifest = json.loads((data_root / "source_video_splits.json").read_text())
     assert split_manifest["source_video_splits"] == {"demo": "val"}
+
+
+def test_ensure_source_video_splits_assigned_persists_auto_assignments(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / "repo"
+    data_root = project_root / "data" / "physical"
+
+    monkeypatch.setattr(splits, "_PROJECT_ROOT", project_root)
+    monkeypatch.setattr(splits, "_DATA_ROOT", data_root)
+    monkeypatch.setattr(splits, "_SOURCE_VIDEO_SPLITS_PATH", data_root / "source_video_splits.json")
+    monkeypatch.setattr(
+        splits,
+        "_CANONICAL_ROOTS",
+        {"train": data_root / "train", "val": data_root / "val"},
+    )
+    monkeypatch.setattr(
+        splits,
+        "_LEGACY_ROOTS",
+        {"train": data_root / "train_manual", "val": data_root / "eval"},
+    )
+    monkeypatch.setattr(
+        splits,
+        "_auto_assign_source_video_split",
+        lambda source_video_id: "val" if source_video_id == "new-val" else "train",
+    )
+
+    assignments = splits.ensure_source_video_splits_assigned(["new-train", None, "new-val"])
+
+    assert assignments["new-train"] == "train"
+    assert assignments["new-val"] == "val"
+
+    split_manifest = json.loads((data_root / "source_video_splits.json").read_text())
+    assert split_manifest["source_video_splits"] == {
+        "new-train": "train",
+        "new-val": "val",
+    }

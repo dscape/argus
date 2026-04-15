@@ -206,3 +206,112 @@ def test_legal_sequence_beam_decoder_combines_board_and_move_evidence() -> None:
 
     assert [frame.move_uci for frame in decoded.frames] == [None, "e2e4"]
     assert decoded.frames[-1].fen == moved_board.board_fen()
+
+
+def test_legal_sequence_beam_decoder_can_recover_move_from_board_candidates() -> None:
+    vocab = get_vocabulary()
+    board = chess.Board()
+    moved_board = board.copy(stack=False)
+    moved_board.push_uci("e2e4")
+
+    square_logits = [_logits_for_board(board), _logits_for_board(moved_board)]
+    move_logits = torch.full((2, vocab.size), -8.0)
+    move_logits[0, NO_MOVE_IDX] = 6.0
+    move_logits[1, vocab.uci_to_index("a2a3")] = 6.0
+    move_logits[1, vocab.uci_to_index("e2e4")] = -6.0
+    move_logits[1, NO_MOVE_IDX] = 0.0
+    detect_logits = torch.tensor([-4.0, 4.0], dtype=torch.float32)
+
+    decoded = LegalSequenceBeamDecoder(
+        chess.STARTING_BOARD_FEN,
+        beam_size=4,
+        top_move_candidates=1,
+        top_board_candidates=1,
+        board_weight=1.0,
+        move_weight=0.2,
+        detect_weight=0.1,
+    ).decode(
+        square_logits,
+        sequence_move_logits=move_logits,
+        sequence_detect_logits=detect_logits,
+    )
+
+    assert [frame.move_uci for frame in decoded.frames] == [None, "e2e4"]
+    assert decoded.frames[-1].fen == moved_board.board_fen()
+
+
+def test_legal_sequence_beam_decoder_move_score_margin_penalizes_spurious_moves() -> None:
+    vocab = get_vocabulary()
+    move_logits = torch.full((1, vocab.size), -8.0)
+    move_logits[0, vocab.uci_to_index("e2e4")] = 4.0
+    move_logits[0, NO_MOVE_IDX] = 0.0
+    detect_logits = torch.tensor([4.0], dtype=torch.float32)
+
+    eager = LegalSequenceBeamDecoder(
+        chess.STARTING_BOARD_FEN,
+        beam_size=2,
+        top_move_candidates=1,
+        board_weight=0.0,
+        move_weight=1.0,
+        detect_weight=1.0,
+        move_score_margin=0.0,
+    ).decode(
+        [_logits_for_board(chess.Board())],
+        sequence_move_logits=move_logits,
+        sequence_detect_logits=detect_logits,
+    )
+    conservative = LegalSequenceBeamDecoder(
+        chess.STARTING_BOARD_FEN,
+        beam_size=2,
+        top_move_candidates=1,
+        board_weight=0.0,
+        move_weight=1.0,
+        detect_weight=1.0,
+        move_score_margin=9.0,
+    ).decode(
+        [_logits_for_board(chess.Board())],
+        sequence_move_logits=move_logits,
+        sequence_detect_logits=detect_logits,
+    )
+
+    assert eager.frames[0].move_uci == "e2e4"
+    assert conservative.frames[0].move_uci is None
+
+
+def test_legal_sequence_beam_decoder_lookahead_bonus_advances_supported_move() -> None:
+    board = chess.Board()
+    moved_board = board.copy(stack=False)
+    moved_board.push_uci("e2e4")
+
+    first_frame = _logits_for_board(board)
+    noisy_transition = _logits_for_board(board)
+    noisy_transition[36, board_to_class_ids(moved_board)[36]] = 3.0
+    noisy_transition[52, board_to_class_ids(moved_board)[52]] = 0.0
+    settled_frame = _logits_for_board(moved_board)
+
+    plain = LegalSequenceBeamDecoder(
+        chess.STARTING_BOARD_FEN,
+        beam_size=1,
+        top_move_candidates=64,
+        board_weight=1.0,
+        move_weight=0.0,
+        detect_weight=0.0,
+        move_score_margin=0.1,
+    ).decode([first_frame, noisy_transition, settled_frame])
+    lookahead = LegalSequenceBeamDecoder(
+        chess.STARTING_BOARD_FEN,
+        beam_size=1,
+        top_move_candidates=64,
+        board_weight=1.0,
+        move_weight=0.0,
+        detect_weight=0.0,
+        move_score_margin=0.1,
+        lookahead_window=2,
+        lookahead_weight=1.0,
+    ).decode([first_frame, noisy_transition, settled_frame])
+
+    assert plain.frames[1].move_uci is None
+    assert plain.frames[1].fen == chess.STARTING_BOARD_FEN
+    assert plain.frames[2].move_uci == "e2e4"
+    assert lookahead.frames[1].move_uci == "e2e4"
+    assert lookahead.frames[1].fen == moved_board.board_fen()
