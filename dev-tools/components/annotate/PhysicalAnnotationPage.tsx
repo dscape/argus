@@ -818,26 +818,36 @@ function AnnotationContent({
               }}
               onClick={(e) => void handleImageClick(e)}
             />
-            {sourceImageSize && corners.map((pt, i) => (
-              <button
-                key={i}
-                type="button"
-                className={`absolute z-10 -translate-x-1/2 -translate-y-1/2 touch-none ${draggedCornerIndex === i ? "cursor-grabbing" : "cursor-grab"}`}
-                style={{ left: `${(pt.x / sourceImageSize.width) * 100}%`, top: `${(pt.y / sourceImageSize.height) * 100}%` }}
-                onPointerDown={(event) => handleCornerPointerDown(i, event)}
-                onPointerMove={handleCornerPointerMove}
-                onPointerUp={finishCornerDrag}
-                onPointerCancel={finishCornerDrag}
-                title={`Drag ${cornerLabel(i)}`}
-              >
-                <svg width="24" height="24" viewBox="0 0 24 24" className="drop-shadow" style={{ transform: "translate(-50%, -50%)" }}>
-                  <line x1="12" y1="2" x2="12" y2="22" stroke="#dc2626" strokeWidth="2" />
-                  <line x1="2" y1="12" x2="22" y2="12" stroke="#dc2626" strokeWidth="2" />
-                  <line x1="12" y1="2" x2="12" y2="22" stroke="white" strokeWidth="0.75" />
-                  <line x1="2" y1="12" x2="22" y2="12" stroke="white" strokeWidth="0.75" />
-                </svg>
-              </button>
-            ))}
+            {sourceImageSize && corners.map((pt, i) => {
+              const labelDx = (i === 0 || i === 3) ? -18 : 18;
+              const labelDy = (i === 0 || i === 1) ? -14 : 14;
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  className={`absolute z-10 -translate-x-1/2 -translate-y-1/2 touch-none ${draggedCornerIndex === i ? "cursor-grabbing" : "cursor-grab"}`}
+                  style={{ left: `${(pt.x / sourceImageSize.width) * 100}%`, top: `${(pt.y / sourceImageSize.height) * 100}%` }}
+                  onPointerDown={(event) => handleCornerPointerDown(i, event)}
+                  onPointerMove={handleCornerPointerMove}
+                  onPointerUp={finishCornerDrag}
+                  onPointerCancel={finishCornerDrag}
+                  title={`Drag ${cornerLabel(i)}`}
+                >
+                  <svg width="24" height="24" viewBox="0 0 24 24" className="drop-shadow" style={{ transform: "translate(-50%, -50%)" }}>
+                    <line x1="12" y1="2" x2="12" y2="22" stroke="#dc2626" strokeWidth="2" />
+                    <line x1="2" y1="12" x2="22" y2="12" stroke="#dc2626" strokeWidth="2" />
+                    <line x1="12" y1="2" x2="12" y2="22" stroke="white" strokeWidth="0.75" />
+                    <line x1="2" y1="12" x2="22" y2="12" stroke="white" strokeWidth="0.75" />
+                  </svg>
+                  <span
+                    className="absolute text-[9px] font-bold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] select-none"
+                    style={{ left: labelDx, top: labelDy, transform: "translate(-50%, -50%)" }}
+                  >
+                    {cornerLabel(i)}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
