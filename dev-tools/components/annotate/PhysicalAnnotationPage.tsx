@@ -268,6 +268,7 @@ function AnnotationContent({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const cornersRef = useRef<Array<{ x: number; y: number }>>([]);
+  const prevFrameCornersRef = useRef<Array<{ x: number; y: number }>>([]);
   const draggedCornerIndexRef = useRef<number | null>(null);
   const latestRectifyRequestIdRef = useRef(0);
   const liveRectifyTimerRef = useRef<number | null>(null);
@@ -610,6 +611,14 @@ function AnnotationContent({
     prefillFromFen();
   }, [prefillFromFen]);
 
+  const usePrevCorners = useCallback(async () => {
+    const prev = prevFrameCornersRef.current;
+    if (prev.length !== 4) return;
+    setCorners(prev);
+    cornersRef.current = prev;
+    await rectifyBoard(prev);
+  }, [rectifyBoard]);
+
   const copyFenFromPreviousFrame = useCallback(() => {
     if (!previousFrameDisplayedFen) return;
     try {
@@ -676,6 +685,8 @@ function AnnotationContent({
   // ── Load existing annotation on frame change, keeping corners if set ──
 
   useEffect(() => {
+    // Snapshot current corners before loading the new frame's annotation
+    prevFrameCornersRef.current = cornersRef.current;
     let cancelled = false;
     void (async () => {
       try {
@@ -905,6 +916,7 @@ function AnnotationContent({
                 </button>
               )}
               <button type="button" onClick={resetCorners} className={PANEL_BUTTON_CLASS}>Reset</button>
+              <button type="button" onClick={() => void usePrevCorners()} disabled={prevFrameCornersRef.current.length !== 4} className={PANEL_BUTTON_CLASS}>Prev corners</button>
               <button type="button" onClick={() => void runDetectCorners()} disabled={detecting} className={PANEL_BUTTON_CLASS}>
                 {detecting ? "Detecting\u2026" : "Detect"}
               </button>
