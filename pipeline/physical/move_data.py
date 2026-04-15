@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import Any
 import chess
 import cv2
 import torch
+
+logger = logging.getLogger(__name__)
 
 from argus.chess.constraint_mask import get_legal_mask
 from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
@@ -235,6 +238,13 @@ def _build_real_clip_sample(
     initial_board_fen = clip.get("initial_board_fen")
     if not isinstance(frames, torch.Tensor) or not isinstance(initial_board_fen, str):
         return None
+
+    # Warn about legacy 224x224 downscaled clips
+    if frames.shape[-1] == 224 and frames.shape[-2] == 224:
+        logger.warning(
+            "Clip %s has degraded 224x224 frames — regenerate for native resolution",
+            clip_path,
+        )
 
     corners = clip_rows[0].corners
     exact_replay_targets = _replay_targets_for_clip(clip)

@@ -139,10 +139,13 @@ def test_rectify_frame_reads_rgb_clip_tensor(monkeypatch) -> None:
     frames = torch.zeros((1, 3, 16, 16), dtype=torch.uint8)
     frames[0, 0] = 255
 
+    # _get_clip_frame_rgb delegates to clip_service.get_camera_frame_rgb which
+    # falls back to _get_stored_frame_rgb when source video is unavailable.
+    # Provide a session via _sessions so the fallback path works.
     monkeypatch.setattr(
         physical_eval_service.clip_service,
-        "get_session",
-        lambda _session_id: {"clip": {"frames": frames}},
+        "_sessions",
+        {"session-1": {"clip": {"frames": frames}, "filename": "test.pt"}},
     )
 
     result = physical_eval_service.rectify_frame(

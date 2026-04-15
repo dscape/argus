@@ -24,6 +24,7 @@ from pipeline.physical.square_probe import evaluate_probe
 from pipeline.shared import (
     SQUARE_CLASS_NAMES,
     LegalSequenceBeamDecoder,
+    SegmentalLegalSequenceDecoder,
     board_to_class_ids,
 )
 from scripts.eval_physical_board_tracker import (
@@ -62,6 +63,8 @@ def main() -> None:
     )
 
     predictions_by_clip: dict[str, list[FramePrediction]] = defaultdict(list)
+    decoder_diagnostics_by_clip: dict[str, dict[str, object]] = {}
+    decoder_anomalies_by_clip: dict[str, list[dict[str, object]]] = {}
     square_predictions: list[int] = []
     square_targets: list[int] = []
     board_annotation_ids: list[str] = []
@@ -85,6 +88,49 @@ def main() -> None:
                     lookahead_weight=args.beam_lookahead_weight,
                     lookahead_decay=args.beam_lookahead_decay,
                 )
+            elif args.decoder_mode == "segmental":
+                sequence_predictions, sequence_decoder_diagnostics = (
+                    decode_sequence_with_segmental_decoder(
+                        model=model,
+                        sequence=sequence,
+                        transform=transform,
+                        device=device,
+                        beam_size=args.beam_size,
+                        top_move_candidates=args.beam_top_moves,
+                        top_board_candidates=args.beam_top_board_moves,
+                        board_weight=args.beam_board_weight,
+                        move_weight=args.beam_move_weight,
+                        detect_weight=args.beam_detect_weight,
+                        move_score_margin=args.beam_move_score_margin,
+                        detect_peak_threshold=args.segmental_detect_peak_threshold,
+                        board_change_peak_threshold=args.segmental_board_change_peak_threshold,
+                        min_event_separation=args.segmental_min_event_separation,
+                        secondary_min_event_separation=(
+                            None
+                            if args.segmental_secondary_min_event_separation <= 0
+                            else args.segmental_secondary_min_event_separation
+                        ),
+                        secondary_peak_ratio=args.segmental_secondary_peak_ratio,
+                        state_aware_proposal_passes=args.segmental_state_aware_proposal_passes,
+                        anomaly_change_evidence_threshold=(
+                            args.segmental_anomaly_change_evidence_threshold
+                        ),
+                        anomaly_settled_gain_threshold=(
+                            args.segmental_anomaly_settled_gain_threshold
+                        ),
+                        event_window_radius=args.segmental_event_window_radius,
+                        max_event_proposals=args.segmental_max_event_proposals,
+                        diagnostic_settled_horizon=args.segmental_diagnostic_settled_horizon,
+                    )
+                )
+                sequence_anomalies = sequence_decoder_diagnostics.get(
+                    "possible_illegal_segments",
+                    [],
+                )
+                if sequence_anomalies:
+                    decoder_anomalies_by_clip[sequence.clip_path] = sequence_anomalies
+                if args.include_decoder_diagnostics:
+                    decoder_diagnostics_by_clip[sequence.clip_path] = sequence_decoder_diagnostics
             else:
                 candidate_boards = build_board_hypotheses_from_piece_fen(
                     sequence.initial_board_fen,
@@ -160,14 +206,53 @@ def main() -> None:
         "beam_lookahead_window": args.beam_lookahead_window,
         "beam_lookahead_weight": args.beam_lookahead_weight,
         "beam_lookahead_decay": args.beam_lookahead_decay,
+        "segmental_detect_peak_threshold": args.segmental_detect_peak_threshold,
+        "segmental_board_change_peak_threshold": args.segmental_board_change_peak_threshold,
+        "segmental_min_event_separation": args.segmental_min_event_separation,
+        "segmental_secondary_min_event_separation": args.segmental_secondary_min_event_separation,
+        "segmental_secondary_peak_ratio": args.segmental_secondary_peak_ratio,
+        "segmental_state_aware_proposal_passes": args.segmental_state_aware_proposal_passes,
+        "segmental_anomaly_change_evidence_threshold": (
+            args.segmental_anomaly_change_evidence_threshold
+        ),
+        "segmental_anomaly_settled_gain_threshold": (args.segmental_anomaly_settled_gain_threshold),
+        "segmental_event_window_radius": args.segmental_event_window_radius,
+        "segmental_max_event_proposals": args.segmental_max_event_proposals,
+        "segmental_diagnostic_settled_horizon": args.segmental_diagnostic_settled_horizon,
         "move_match_tolerance": args.move_match_tolerance,
         "metrics": metrics.to_dict(),
         "move_detection_recall": move_recall,
         "static_frame_false_change_rate": static_false_change_rate,
         "sequence_diagnostics": diagnostics,
     }
+    if args.decoder_mode == "segmental":
+        report["decoder_anomaly_summary"] = summarize_decoder_anomalies(decoder_anomalies_by_clip)
+    if decoder_diagnostics_by_clip:
+        report["decoder_diagnostics"] = decoder_diagnostics_by_clip
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True))
+
+
+def summarize_decoder_anomalies(
+    anomalies_by_clip: dict[str, list[dict[str, object]]],
+) -> dict[str, object]:
+    flattened = [
+        {"clip_path": clip_path, **segment}
+        for clip_path, segments in anomalies_by_clip.items()
+        for segment in segments
+    ]
+    flattened.sort(
+        key=lambda segment: (
+            float(segment.get("anomaly_score", 0.0)),
+            float(segment.get("change_evidence", 0.0)),
+        ),
+        reverse=True,
+    )
+    return {
+        "clips_with_possible_illegal_move": len(anomalies_by_clip),
+        "segments_with_possible_illegal_move": len(flattened),
+        "top_possible_illegal_segments": flattened[:10],
+    }
 
 
 def decode_frame(
@@ -278,6 +363,73 @@ def decode_sequence_with_beam(
     return [(chess.Board(frame.full_fen), frame.move_uci) for frame in decoded.frames]
 
 
+def decode_sequence_with_segmental_decoder(
+    *,
+    model: ArgusModel,
+    sequence: Any,
+    transform: ValidationTransform,
+    device: torch.device,
+    beam_size: int,
+    top_move_candidates: int,
+    top_board_candidates: int,
+    board_weight: float,
+    move_weight: float,
+    detect_weight: float,
+    move_score_margin: float,
+    detect_peak_threshold: float,
+    board_change_peak_threshold: float,
+    min_event_separation: int,
+    secondary_min_event_separation: int | None,
+    secondary_peak_ratio: float,
+    state_aware_proposal_passes: int,
+    anomaly_change_evidence_threshold: float,
+    anomaly_settled_gain_threshold: float,
+    event_window_radius: int,
+    max_event_proposals: int,
+    diagnostic_settled_horizon: int,
+) -> tuple[list[tuple[chess.Board, str | None]], dict[str, object]]:
+    frames = transform(sequence.frames.clone()).unsqueeze(0).to(device)
+    board_corners = None
+    if sequence.board_corners is not None:
+        board_corners = sequence.board_corners.unsqueeze(0).to(device)
+    output = model(crops=frames, board_corners=board_corners)
+    if output.square_logits is None:
+        raise ValueError(
+            "Segmental decoding requires square logits; train/eval with square head enabled"
+        )
+
+    decoded = SegmentalLegalSequenceDecoder(
+        sequence.initial_board_fen,
+        initial_side_to_move=sequence.initial_side_to_move,
+        beam_size=beam_size,
+        top_move_candidates=top_move_candidates,
+        top_board_candidates=top_board_candidates,
+        board_weight=board_weight,
+        move_weight=move_weight,
+        detect_weight=detect_weight,
+        move_score_margin=move_score_margin,
+        detect_peak_threshold=detect_peak_threshold,
+        board_change_peak_threshold=board_change_peak_threshold,
+        min_event_separation=min_event_separation,
+        secondary_min_event_separation=secondary_min_event_separation,
+        secondary_peak_ratio=secondary_peak_ratio,
+        state_aware_proposal_passes=state_aware_proposal_passes,
+        anomaly_change_evidence_threshold=anomaly_change_evidence_threshold,
+        anomaly_settled_gain_threshold=anomaly_settled_gain_threshold,
+        event_window_radius=event_window_radius,
+        max_event_proposals=max_event_proposals,
+        diagnostic_settled_horizon=diagnostic_settled_horizon,
+    ).decode(
+        output.square_logits.squeeze(0),
+        sequence_move_logits=output.move_logits.squeeze(0).squeeze(1),
+        sequence_detect_logits=output.detect_logits.squeeze(0).squeeze(1),
+    )
+    return (
+        [(chess.Board(frame.full_fen), frame.move_uci) for frame in decoded.frames],
+        {} if decoded.diagnostics is None else decoded.diagnostics,
+    )
+
+
 def _predict_frame(
     model: ArgusModel,
     sequence: Any,
@@ -336,7 +488,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--oblique-crop-margin", type=float, default=0.18)
     parser.add_argument(
         "--decoder-mode",
-        choices=("beam", "detect_threshold", "move_prob_margin"),
+        choices=("beam", "segmental", "detect_threshold", "move_prob_margin"),
         default="beam",
     )
     parser.add_argument("--detect-threshold", type=float, default=0.5)
@@ -352,6 +504,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--beam-lookahead-window", type=int, default=1)
     parser.add_argument("--beam-lookahead-weight", type=float, default=0.0)
     parser.add_argument("--beam-lookahead-decay", type=float, default=1.0)
+    parser.add_argument("--segmental-detect-peak-threshold", type=float, default=0.1)
+    parser.add_argument("--segmental-board-change-peak-threshold", type=float, default=0.03125)
+    parser.add_argument("--segmental-min-event-separation", type=int, default=4)
+    parser.add_argument("--segmental-secondary-min-event-separation", type=int, default=0)
+    parser.add_argument("--segmental-secondary-peak-ratio", type=float, default=0.8)
+    parser.add_argument("--segmental-state-aware-proposal-passes", type=int, default=0)
+    parser.add_argument("--segmental-anomaly-change-evidence-threshold", type=float, default=0.25)
+    parser.add_argument("--segmental-anomaly-settled-gain-threshold", type=float, default=0.0)
+    parser.add_argument("--segmental-event-window-radius", type=int, default=1)
+    parser.add_argument("--segmental-max-event-proposals", type=int, default=32)
+    parser.add_argument("--segmental-diagnostic-settled-horizon", type=int, default=8)
+    parser.add_argument("--include-decoder-diagnostics", action="store_true")
     parser.add_argument("--move-match-tolerance", type=int, default=1)
     parser.add_argument("--output", type=Path, default=_DEFAULT_OUTPUT_PATH)
     return parser

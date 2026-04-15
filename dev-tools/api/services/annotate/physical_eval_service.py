@@ -418,26 +418,9 @@ def _get_clip_num_frames(path: Path) -> int | None:
 
 
 def _get_clip_frame_rgb(session_id: str, frame_index: int, padding_px: int = 0) -> np.ndarray:
-    if padding_px > 0:
-        return clip_service.get_camera_frame_rgb(session_id, frame_index, padding_px=padding_px)
-
-    session = clip_service.get_session(session_id)
-    if session is None:
-        raise ValueError("Clip session not found")
-
-    clip = session["clip"]
-    frames = clip.get("frames")
-    if frames is None:
-        raise ValueError("No frames in clip")
-    if frame_index < 0 or frame_index >= frames.shape[0]:
-        raise ValueError(f"Frame index {frame_index} out of range [0, {frames.shape[0]})")
-
-    frame = frames[frame_index]
-    if frame.dtype == torch.uint8:
-        image_rgb = frame.permute(1, 2, 0).numpy()
-    else:
-        image_rgb = (frame.permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
-    return image_rgb
+    # Always use source video for consistent quality (falls back to stored tensor
+    # inside get_camera_frame_rgb when the source video is unavailable).
+    return clip_service.get_camera_frame_rgb(session_id, frame_index, padding_px=padding_px)
 
 
 def _encode_rgb_png(image_rgb: np.ndarray) -> str:

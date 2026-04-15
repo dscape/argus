@@ -46,7 +46,7 @@ except ImportError:
     VOCAB = None
 
 OUTPUT_DIR = os.path.join("data", "argus", "train_real")
-FRAME_SIZE = 224
+FRAME_SIZE = 224  # Legacy: no longer used for new clips (stored at native resolution)
 
 
 @dataclass
@@ -375,11 +375,10 @@ class OverlayClipGenerator:
         if num_frames < 5:
             return None
 
-        # Resize camera frames to training size
+        # Convert camera frames to RGB (stored at native resolution)
         resized = []
         for crop in segment_cameras:
-            r = cv2.resize(crop, (FRAME_SIZE, FRAME_SIZE))
-            rgb = cv2.cvtColor(r, cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
             resized.append(rgb)
 
         frames_tensor = (
@@ -427,6 +426,7 @@ class OverlayClipGenerator:
             "segment_end_time_seconds": float(segment.end_time),
             "training_target_timing": "overlay_confirm_post_move",
             "estimated_otb_delay_seconds": float(move_delay_seconds),
+            "frame_resolution": "native",
         }
 
         if VOCAB is None:

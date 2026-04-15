@@ -613,7 +613,9 @@ def get_camera_frame_rgb(
 ) -> np.ndarray:
     """Extract the camera crop from the source video as an RGB array with optional padding.
 
-    Falls back to the stored tensor frame when the source video is unavailable.
+    Always uses the source video for consistent image quality across all padding
+    levels.  Falls back to the stored tensor frame only when the source video is
+    unavailable (no DB camera_bbox, missing video file, etc.).
     """
     session = _sessions.get(session_id)
     if session is None:
@@ -623,35 +625,9 @@ def get_camera_frame_rgb(
     if context is None or "camera_bbox" not in context:
         return _get_stored_frame_rgb(session, frame_index)
 
-    # When camera_bbox is a placeholder, auto-detect from the stored tensor frame
+    # Placeholder bbox — fall back to stored tensor
     if _is_placeholder_bbox(context["camera_bbox"]):
-        stored_frame = _get_stored_frame_rgb(session, frame_index)
-        if padding_px == 0:
-            return stored_frame
-        # Detect the board bbox from the stored frame to bootstrap padding
-        try:
-            from pipeline.physical.board_localizer import localize_board
-
-            bgr = cv2.cvtColor(stored_frame, cv2.COLOR_RGB2BGR)
-            detection = localize_board(bgr)
-            if detection is not None:
-                corners = detection.corners
-                xs = [c[0] for c in corners]
-                ys = [c[1] for c in corners]
-                detected_bbox = (
-                    int(min(xs)), int(min(ys)),
-                    int(max(xs) - min(xs)), int(max(ys) - min(ys)),
-                )
-                # Apply padding to the detected bbox within the stored frame
-                h, w = stored_frame.shape[:2]
-                padded = _pad_bbox(detected_bbox, padding_px, w, h)
-                px, py, pw, ph = padded
-                crop = stored_frame[py : py + ph, px : px + pw]
-                if crop.size > 0:
-                    return crop
-        except Exception:
-            pass
-        return stored_frame
+        return _get_stored_frame_rgb(session, frame_index)
 
     source_frame_indices: torch.Tensor = context["frame_indices"]
     if frame_index < 0 or frame_index >= source_frame_indices.shape[0]:
@@ -696,12 +672,9 @@ def get_camera_frame_png(
 ) -> bytes:
     """Extract the camera crop from the source video as PNG bytes with optional padding.
 
-    Falls back to the stored tensor frame when the source video is unavailable.
+    Always uses the source video for consistent quality. Falls back to the stored
+    tensor frame when the source video is unavailable.
     """
-    if padding_px == 0:
-        # Fast path: use stored tensor frame
-        return get_frame_png(session_id, frame_index)
-
     rgb = get_camera_frame_rgb(session_id, frame_index, padding_px=padding_px)
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     ok, buffer = cv2.imencode(".png", bgr)

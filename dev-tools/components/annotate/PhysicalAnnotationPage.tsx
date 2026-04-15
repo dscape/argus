@@ -256,6 +256,7 @@ function AnnotationContent({
   // Auto-detect corners
   const [autoDetect, setAutoDetect] = useState(false);
   const [detecting, setDetecting] = useState(false);
+  const autoDetectRef = useRef(false);
 
   // Camera padding
   const [cameraPadding, setCameraPadding] = useState(0);
@@ -355,6 +356,10 @@ function AnnotationContent({
   useEffect(() => {
     cornersRef.current = corners;
   }, [corners]);
+
+  useEffect(() => {
+    autoDetectRef.current = autoDetect;
+  }, [autoDetect]);
 
   useEffect(() => {
     latestRectifyRequestIdRef.current += 1;
@@ -688,8 +693,8 @@ function AnnotationContent({
   // ── Load existing annotation on frame change, keeping corners if set ──
 
   useEffect(() => {
-    // Snapshot current corners before loading the new frame's annotation
-    prevFrameCornersRef.current = cornersRef.current;
+    // Snapshot current corners before loading the new frame's data
+    prevFrameCornersRef.current = [...cornersRef.current];
     let cancelled = false;
     void (async () => {
       try {
@@ -697,17 +702,18 @@ function AnnotationContent({
         if (cancelled) return;
         setExistingAnnotation(ann);
         if (ann) {
-          // Saved annotation for this frame — use its corners and labels
-          let loadedCorners = ann.corners.map(([x, y]) => ({ x, y }));
-          // Translate corners from stored-frame space (224x224) to padded image space
-          if (cameraPadding > 0 && sourceImageSize) {
-            const boardW = sourceImageSize.width - 2 * cameraPadding;
-            const boardH = sourceImageSize.height - 2 * cameraPadding;
-            if (boardW > 0 && boardH > 0) {
-              loadedCorners = loadedCorners.map((pt) => ({
-                x: (pt.x / 224) * boardW + cameraPadding,
-                y: (pt.y / 224) * boardH + cameraPadding,
-              }));
+          // Saved annotation — use its corners and labels
+          const loadedCorners = ann.corners.map(([x, y]) => ({ x, y }));
+          // Legacy annotations saved in 224x224 space need scaling to native resolution.
+          // Detect by checking if all corners fit within 224x224 bounds and the current
+          // image is significantly larger.
+          const maxCorner = Math.max(...loadedCorners.map((p) => Math.max(p.x, p.y)));
+          if (maxCorner <= 224 && sourceImageSize && sourceImageSize.width > 300) {
+            const scaleX = sourceImageSize.width / 224;
+            const scaleY = sourceImageSize.height / 224;
+            for (const pt of loadedCorners) {
+              pt.x *= scaleX;
+              pt.y *= scaleY;
             }
           }
           setCorners(loadedCorners);
@@ -716,7 +722,7 @@ function AnnotationContent({
         } else {
           // No saved annotation — auto-detect or keep current corners
           prefillFromFen();
-          if (autoDetect) {
+          if (autoDetectRef.current) {
             void runDetectCorners();
           } else {
             setCorners((prev) => {
@@ -732,11 +738,9 @@ function AnnotationContent({
       } catch { /* no annotation */ }
     })();
     return () => { cancelled = true; };
-  }, [autoDetect, clipPath, prefillFromFen, rectifyBoard, runDetectCorners, selectedFrame]);
+  }, [clipPath, prefillFromFen, rectifyBoard, runDetectCorners, selectedFrame]);
 
-  const frameUrl = (cameraPadding > 0)
-    ? clipCameraFrameUrl(sessionId, selectedFrame, cameraPadding)
-    : clipFrameUrl(sessionId, selectedFrame);
+  const frameUrl = clipCameraFrameUrl(sessionId, selectedFrame, cameraPadding);
 
   return (
     <div className="space-y-2">

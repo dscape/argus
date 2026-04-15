@@ -130,9 +130,10 @@ class TestBuildTrainingClip:
             assert "num_moves" in clip
 
     def test_frame_tensor_shape(self, generator):
-        """Frames tensor should be (T, 3, 224, 224) uint8."""
+        """Frames tensor should be (T, 3, H, W) uint8 at native crop resolution."""
         segment, frame_indices = _make_game_segment(ITALIAN_GAME, frames_per_move=3)
-        camera_crops = _make_camera_crops(len(frame_indices))
+        crop_size = 100
+        camera_crops = _make_camera_crops(len(frame_indices), size=crop_size)
 
         clip = generator._build_training_clip(
             camera_crops=camera_crops,
@@ -145,8 +146,8 @@ class TestBuildTrainingClip:
         frames = clip["frames"]
         assert frames.ndim == 4
         assert frames.shape[1] == 3  # C
-        assert frames.shape[2] == 224  # H
-        assert frames.shape[3] == 224  # W
+        assert frames.shape[2] == crop_size  # H (native resolution)
+        assert frames.shape[3] == crop_size  # W (native resolution)
         assert frames.dtype == torch.uint8
 
     def test_clip_includes_pgn_and_timing_metadata(self, generator):

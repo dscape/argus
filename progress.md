@@ -1126,6 +1126,307 @@
   - cause here is Blender crashing under sandbox restrictions during rendered synthetic data generation (`Segmentation fault: 11`), not the legal decoder changes.
 - Passed: `.venv/bin/python3 -m pytest tests/pipeline/test_shared_board_tracking.py tests/test_argus_model.py tests/test_argus_dataset.py tests/pipeline/test_physical_move_data.py`
 
+### Fourth Phase 2 follow-up: segmental legal decoder
+- Added a new decoder in `pipeline/shared/board_tracking.py`:
+  - `SegmentalLegalSequenceDecoder`
+- This decoder changes the unit of decoding from **framewise move decisions** to **sparse event proposals with piecewise-constant board segments**.
+  - event proposals come from local peaks in:
+    - move-detect logits, and
+    - frame-to-frame square-logit board changes
+  - accepted moves are scored on the whole following segment instead of one frame at a time
+  - this is the first decoder branch on this repo that directly encodes the intended "dwell" assumption rather than trying to get it indirectly from beam pruning
+- Extended `scripts/eval_physical_move_model.py` with a new mode:
+  - `--decoder-mode segmental`
+  - plus segmental controls:
+    - `--segmental-detect-peak-threshold`
+    - `--segmental-board-change-peak-threshold`
+    - `--segmental-min-event-separation`
+    - `--segmental-event-window-radius`
+    - `--segmental-max-event-proposals`
+- Added regression coverage in `tests/pipeline/test_shared_board_tracking.py` for:
+  - suppressing multi-frame move chatter from a long move peak
+  - returning a constant board when no events are proposed
+
+### Segmental decoder results
+- First sweep artifact:
+  - `outputs/2026-04-15/segmental_legal_decoder_sweep_oblique_initfreeze/summary.json`
+  - `outputs/2026-04-15/segmental_legal_decoder_sweep_oblique_initfreeze/summary.md`
+- Important first-sweep point:
+  - `move_weight=0.2`
+  - `detect_weight=0.1`
+  - `move_margin=1.0`
+  - `min_event_separation=8`
+  - board exact `0.0415`
+  - non-empty `0.7188`
+  - macro-F1 `0.6375`
+  - move recall `0.2813`
+  - false-change `0.0505`
+- Follow-up sweep artifact:
+  - `outputs/2026-04-15/segmental_legal_decoder_followup_oblique_initfreeze/summary.json`
+  - `outputs/2026-04-15/segmental_legal_decoder_followup_oblique_initfreeze/summary.md`
+- Best follow-up point so far:
+  - `move_weight=0.2`
+  - `detect_weight=0.1`
+  - `move_margin=2.0`
+  - `min_event_separation=16`
+  - `detect_peak_threshold=0.1`
+  - `max_event_proposals=20`
+  - board exact `0.0616`
+  - non-empty `0.7478`
+  - macro-F1 `0.6682`
+  - move recall `0.1875`
+  - false-change `0.0388`
+
+### Interpretation after the segmental decoder pass
+- This is the strongest decoder-only board-exact point so far on the current passing checkpoint.
+- It beats the older conservative detect-threshold point on both:
+  - board exact: `0.0616` vs `0.0533`
+  - false-change: `0.0388` vs `0.2626`
+- It also materially outperforms the older move-happy beam on false-change while keeping better board exact.
+- But Phase 2 still does **not** pass.
+  - best board exact is still only `0.0616`
+  - current lookahead tracker reference remains `~0.1137`
+- Updated conclusion:
+  - the segmental / dwell-aware direction is correct,
+  - but the current event proposal + segment scoring contract is still too weak to beat the stronger board-only lookahead baseline.
+  - Next decoder work should focus on better **event proposal quality / segment scoring**, not wider search.
+
+### Fifth Phase 2 follow-up: settled-frame diagnostics on the known-state continuation path
+- Extended `SegmentalLegalSequenceDecoder` to emit diagnostics in `SequenceBeamSearchResult.diagnostics`.
+  - These are explicitly **state-aware** diagnostics rather than stateless frame probes.
+  - For each final decoded segment, diagnostics now report:
+    - top settled-frame legal next-move peaks relative to the current known board
+    - global proposal centers kept by the current proposal generator
+    - candidate unexplained-change peaks where change evidence is present but no legal successor scores positively
+- Extended `scripts/eval_physical_move_model.py` with:
+  - `--include-decoder-diagnostics`
+  - `--segmental-diagnostic-settled-horizon`
+- Added regression coverage in `tests/pipeline/test_shared_board_tracking.py` for:
+  - diagnostics emission
+  - secondary-peak proposal retention behavior
+
+### Diagnostic result on the current best segmental point
+- Artifact:
+  - `outputs/2026-04-15/segmental_legal_decoder_diagnostics_best/report.json`
+  - `outputs/2026-04-15/segmental_legal_decoder_diagnostics_best/summary.md`
+- Important finding from the fixed diagnostic slice:
+  - the current decoder is often **not** failing because no legal move explains the video.
+  - it is often failing because the global proposal generator drops strong legal next-move peaks before the scorer gets to use them.
+- Representative example from `clip_overlay_7RaBQag34Hk_clip72_9.pt`:
+  - accepted change frames: `1, 17, 36`
+  - but settled-frame state-aware peaks inside the first long segment strongly support additional legal moves near frames `5` and `9`
+  - global proposals never kept those frames
+- Updated interpretation:
+  - the main blocker is now much clearer: **proposal suppression**, not lack of a legal explanation.
+
+### Sixth Phase 2 follow-up: first proposal-tightening sweep
+- Added an optional secondary-peak proposal path to `SegmentalLegalSequenceDecoder`.
+  - A second nearby peak can now be retained when it is strong enough relative to the dominant local peak.
+  - This is disabled by default; it was kept as an explicit experimental knob because the first sweep did not beat the existing conservative default.
+- Extended `scripts/eval_physical_move_model.py` with:
+  - `--segmental-secondary-min-event-separation`
+  - `--segmental-secondary-peak-ratio`
+- Sweep artifact:
+  - `outputs/2026-04-15/segmental_proposal_tightening_sweep_oblique_initfreeze/summary.json`
+  - `outputs/2026-04-15/segmental_proposal_tightening_sweep_oblique_initfreeze/summary.md`
+- Result:
+  - loosening proposal suppression does raise move recall,
+  - but the first heuristic is too blunt and trades away board exact / macro-F1 too quickly.
+- Representative points:
+  - conservative baseline (secondary peaks disabled):
+    - board exact `0.0605`
+    - non-empty `0.7475`
+    - macro `0.6678`
+    - move recall `0.1746`
+    - false-change `0.0388`
+  - secondary peaks with `secsep=8`, `ratio=0.90`:
+    - board exact `0.0486`
+    - non-empty `0.7257`
+    - macro `0.6451`
+    - move recall `0.2222`
+    - false-change `0.0466`
+- Updated conclusion:
+  - the fixed-slice diagnostics were useful and directionally right,
+  - but the next proposal change has to be **state-aware**, driven by the current board and its legal successors,
+  - not a generic “keep more nearby peaks” rule.
+
+### Seventh Phase 2 follow-up: first state-aware proposal generator
+- Added an explicit state-aware proposal refinement stage to `SegmentalLegalSequenceDecoder`.
+  - new knob: `state_aware_proposal_passes`
+  - the decoder now:
+    - builds the original board-agnostic event proposals first,
+    - decodes a legal trajectory,
+    - then optionally runs a small number of refinement passes where each pass can add **one** extra proposal frame
+    - the added frame must already be a raw detect/board-change peak that was suppressed earlier, and it must also have positive settled-frame legal-successor gain under the current decoded board state
+- Refactored proposal internals so raw candidate peaks are explicit instead of being buried only inside `_proposal_centers(...)`.
+- Extended `scripts/eval_physical_move_model.py` with:
+  - `--segmental-state-aware-proposal-passes`
+- Added regression coverage in `tests/pipeline/test_shared_board_tracking.py` for:
+  - recovering a second legal move that the global spacing rule suppresses
+
+### State-aware proposal diagnostics
+- Artifact:
+  - `outputs/2026-04-15/segmental_state_aware_proposal_diagnostics_oblique_initfreeze/report.json`
+  - `outputs/2026-04-15/segmental_state_aware_proposal_diagnostics_oblique_initfreeze/summary.md`
+- Representative fixed-slice result from `clip_overlay_7RaBQag34Hk_clip72_9.pt`:
+  - original global proposals: `1, 17, 36`
+  - state-aware refinement added: `5`
+  - final proposals: `1, 5, 17, 36`
+- Interpretation:
+  - this confirms the new generator is doing the intended architectural job:
+  - it can re-introduce a locally strong legal move frame that was dropped only because of global spacing suppression.
+
+### State-aware proposal sweep
+- Artifact:
+  - `outputs/2026-04-15/segmental_state_aware_proposal_sweep_oblique_initfreeze/summary.json`
+  - `outputs/2026-04-15/segmental_state_aware_proposal_sweep_oblique_initfreeze/summary.md`
+- Result on the current best segmental setting:
+  - baseline (`passes=0`):
+    - board exact `0.0605`
+    - non-empty `0.7475`
+    - macro `0.6678`
+    - move recall `0.1746`
+    - false-change `0.0388`
+  - `passes=1`:
+    - board exact `0.0593`
+    - non-empty `0.7382`
+    - macro `0.6577`
+    - move recall `0.1587`
+    - false-change `0.0414`
+  - `passes=2`:
+    - board exact `0.0569`
+    - non-empty `0.7347`
+    - macro `0.6533`
+    - move recall `0.2063`
+    - false-change `0.0466`
+- Updated conclusion:
+  - the state-aware proposal generator is now implemented and test-covered,
+  - but this first acceptance rule still does **not** beat the conservative baseline on held-out metrics,
+  - so it should remain an explicit experiment, not the new default best point.
+  - The next decoder iteration should keep the same architectural direction while using a stronger accept/reject rule or better proposal budget allocation.
+
+### Eighth Phase 2 follow-up: guarded state-aware proposal acceptance
+- Tightened the state-aware refinement rule in `SegmentalLegalSequenceDecoder`.
+  - Before: accept the first added proposal whose raw peak and settled legal gain looked strong enough.
+  - Now: accept an added proposal **only if re-decoding with that proposal increases the decoded move count**.
+- Why this guard was needed:
+  - the first state-aware pass often just pulled an already-decoded later move earlier in time,
+  - which raised churn without actually recovering a missing extra event.
+- Added regression coverage in `tests/pipeline/test_shared_board_tracking.py` for:
+  - refusing to retime an already-decoded move when refinement does not add a new event
+
+### Guarded state-aware proposal diagnostics
+- Artifact:
+  - `outputs/2026-04-15/segmental_state_aware_proposal_guarded_diagnostics_oblique_initfreeze/report.json`
+  - `outputs/2026-04-15/segmental_state_aware_proposal_guarded_diagnostics_oblique_initfreeze/summary.md`
+- Important result:
+  - after the move-count guard, only three held-out clips kept an extra proposal:
+    - `clip72_10`
+    - `clip72_9`
+    - `clip8_2`
+  - previously destructive retiming-only cases such as `clip69_1`, `clip70_9`, and `clip8_6` were no longer accepted.
+
+### Guarded state-aware proposal sweep
+- Artifact:
+  - `outputs/2026-04-15/segmental_state_aware_proposal_guarded_sweep_oblique_initfreeze/summary.json`
+  - `outputs/2026-04-15/segmental_state_aware_proposal_guarded_sweep_oblique_initfreeze/summary.md`
+- Default guarded pass sweep (`max_event_proposals=20`):
+  - baseline (`passes=0`):
+    - board exact `0.0616`
+    - non-empty `0.7478`
+    - macro `0.6682`
+    - move recall `0.1875`
+    - false-change `0.0388`
+  - guarded `passes=1`:
+    - board exact `0.0604`
+    - non-empty `0.7424`
+    - macro `0.6630`
+    - move recall `0.2188`
+    - false-change `0.0401`
+  - guarded `passes=2`:
+    - board exact `0.0581`
+    - non-empty `0.7418`
+    - macro `0.6620`
+    - move recall `0.2344`
+    - false-change `0.0414`
+- Small follow-up found a slightly better one-pass trade-off at:
+  - `state_aware_proposal_passes=1`
+  - `max_event_proposals=16`
+  - metrics:
+    - board exact `0.0604`
+    - non-empty `0.7436`
+    - macro `0.6661`
+    - move recall `0.2188`
+    - false-change `0.0401`
+
+### Updated conclusion after the guarded pass
+- This is the first state-aware proposal variant that gives a **plausible recall win** without obviously wrecking board metrics.
+- It still does **not** beat the conservative baseline on board exact, so Phase 2 remains open.
+- But the decoder direction is now clearer:
+  - state-aware refinement is worth keeping,
+  - and the right acceptance contract is “recover an additional decoded event”, not merely “find another strong nearby peak”.
+
+### Ninth Phase 2 follow-up: budget-aware proposal replacement
+- Extended the guarded state-aware proposal refinement again.
+  - When proposal budget is already full, the decoder can now replace the weakest **unused** existing proposal instead of only appending a new one.
+  - Acceptance is still guarded by the same rule: keep the change only if re-decoding increases decoded move count.
+- Added regression coverage in `tests/pipeline/test_shared_board_tracking.py` for:
+  - replacing an unused saturated-budget proposal with a better state-aware candidate
+- Artifacts:
+  - `outputs/2026-04-15/segmental_state_aware_proposal_budgeted_sweep_oblique_initfreeze/summary.json`
+  - `outputs/2026-04-15/segmental_state_aware_proposal_budgeted_sweep_oblique_initfreeze/summary.md`
+  - `outputs/2026-04-15/segmental_state_aware_proposal_budgeted_diagnostics_oblique_initfreeze/report.json`
+  - `outputs/2026-04-15/segmental_state_aware_proposal_budgeted_diagnostics_oblique_initfreeze/summary.md`
+- Main sweep result on the current checkpoint:
+  - baseline (`passes=0`):
+    - board exact `0.0616`
+    - non-empty `0.7478`
+    - macro `0.6682`
+    - move recall `0.1875`
+    - false-change `0.0388`
+  - budget-aware guarded `passes=1`:
+    - board exact `0.0604`
+    - non-empty `0.7424`
+    - macro `0.6630`
+    - move recall `0.2188`
+    - false-change `0.0401`
+- Important interpretation:
+  - the replacement path is architecturally correct and now implemented,
+  - but on the current held-out set it did **not** unlock additional gains beyond the guarded add-only refinement.
+  - The current best state-aware trade-off remains a single cautious refinement pass with `max_event_proposals=20`.
+
+### Tenth Phase 2 follow-up: explicit possible-illegal / no-legal-explanation output
+- Promoted the earlier raw `unexplained_change` diagnostic into an explicit anomaly path in `SegmentalLegalSequenceDecoder`.
+  - frame-level diagnostics now include:
+    - `possible_illegal_move`
+    - `anomaly_score`
+  - segment-level diagnostics now include:
+    - `possible_illegal_move`
+    - `anomaly_peak`
+  - top-level diagnostics now include:
+    - `possible_illegal_segments`
+    - `anomaly_settings`
+- Extended `scripts/eval_physical_move_model.py` so segmental eval reports now always include:
+  - `decoder_anomaly_summary`
+- Added regression coverage in `tests/pipeline/test_shared_board_tracking.py` for:
+  - a synthetic illegal-board case that produces a `possible_illegal_segment`
+- Artifact:
+  - `outputs/2026-04-15/segmental_possible_illegal_signal_oblique_initfreeze/report.json`
+  - `outputs/2026-04-15/segmental_possible_illegal_signal_oblique_initfreeze/summary.md`
+- Current held-out result:
+  - no held-out segments were flagged as `possible_illegal_move` at `change_evidence_threshold` values `0.15`, `0.2`, or `0.25`
+- Updated interpretation:
+  - that is fine; the important change is not that the current eval set suddenly contains illegal moves,
+  - it is that the decoder now has a first-class, explicit place to emit this signal when the continuation path cannot legally explain observed change evidence.
+
+### Validation
+- Passed: `make typecheck`
+- Passed: `make lint`
+- Passed: `.venv/bin/python3 -m pytest tests/pipeline/test_shared_board_tracking.py tests/test_argus_model.py tests/test_argus_dataset.py tests/pipeline/test_physical_move_data.py`
+- Failed on this branch during `make test`, but not because of the decoder work:
+  - unrelated failure: `tests/dev_tools/test_clip_service.py::test_get_overlay_frame_png_uses_source_video_and_db_clip`
+  - cause is a missing `_load_db_clip_overlay_row` attribute in `dev-tools/api/services/data/clip_service.py` from concurrent branch work, not the segmental decoder changes
+
 ### Dev-tools sidebar cleanup
 - Removed the annotate sidebar notification badge in `dev-tools/components/IconSidebar.tsx`.
   - Deleted the unscreened-count polling and the red `99+` badge rendering, so the annotate icon is now just a plain nav icon again.

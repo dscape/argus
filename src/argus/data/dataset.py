@@ -45,6 +45,12 @@ class ArgusDataset(Dataset):  # type: ignore[type-arg]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         clip_data = torch.load(self.clip_paths[idx], map_location="cpu", weights_only=True)
+        frames = clip_data.get("frames")
+        if isinstance(frames, torch.Tensor) and frames.shape[-1] == 224 and frames.shape[-2] == 224:
+            logger.warning(
+                "Degraded 224x224 clip: %s — regenerate for native resolution",
+                self.clip_paths[idx].name,
+            )
         return _prepare_sample(clip_data, clip_length=self.clip_length, transform=self.transform)
 
 
