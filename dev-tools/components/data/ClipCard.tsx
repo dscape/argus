@@ -15,6 +15,7 @@ interface ClipCardProps {
     Map<string, { sessionId: string; clipInfo: ClipInspectResponse }>
   >;
   isNew?: boolean;
+  overlay?: React.ReactNode;
   onInspected?: (clipInfo: ClipInspectResponse) => void;
 }
 
@@ -24,6 +25,7 @@ export function ClipCard({
   directory,
   cache,
   isNew,
+  overlay,
   onInspected,
 }: ClipCardProps) {
   const cardRef = useRef<HTMLAnchorElement>(null);
@@ -194,6 +196,7 @@ export function ClipCard({
             invalid
           </Badge>
         )}
+        {overlay}
       </div>
       <div className="space-y-1 p-2">
         {movesText ? (

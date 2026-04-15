@@ -75,6 +75,20 @@ async def get_clip_frame(session_id: str, frame_index: int):
         raise HTTPException(404, str(e))
 
 
+@router.get("/{session_id}/camera-frame/{frame_index}")
+async def get_clip_camera_frame(
+    session_id: str, frame_index: int, padding: int = Query(0, ge=0, le=500)
+):
+    """Get the camera crop from the source video with optional padding."""
+    try:
+        png_bytes = await run_in_threadpool(
+            clip_service.get_camera_frame_png, session_id, frame_index, padding_px=padding
+        )
+        return Response(content=png_bytes, media_type="image/png")
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 @router.get("/{session_id}/overlay-frame/{frame_index}")
 async def get_clip_overlay_frame(session_id: str, frame_index: int):
     """Get the corresponding overlay crop from the source video as a PNG image."""

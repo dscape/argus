@@ -9,6 +9,8 @@ interface ClipGalleryProps {
   clips: SyntheticClipFile[];
   directory: string;
   detailBasePath: string;
+  detailQueryString?: string;
+  renderOverlay?: (clip: SyntheticClipFile) => React.ReactNode;
   onClipInspected?: (clipInfo: ClipInspectResponse) => void;
 }
 
@@ -16,6 +18,8 @@ export function ClipGallery({
   clips,
   directory,
   detailBasePath,
+  detailQueryString,
+  renderOverlay,
   onClipInspected,
 }: ClipGalleryProps) {
   const cache = useRef<
@@ -71,10 +75,11 @@ export function ClipGallery({
         <ClipCard
           key={clip.filename}
           clip={clip}
-          detailHref={`${detailBasePath}/${encodeURIComponent(clip.filename)}`}
+          detailHref={`${detailBasePath}/${encodeURIComponent(clip.filename)}${detailQueryString ?? ""}`}
           directory={directory}
           cache={cache}
           isNew={newFilenames.has(clip.filename)}
+          overlay={renderOverlay?.(clip)}
           onInspected={onClipInspected}
         />
       ))}

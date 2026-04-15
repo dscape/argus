@@ -141,6 +141,10 @@ export function clipFrameUrl(sessionId: string, index: number): string {
   return `/api/clips/${sessionId}/frame/${index}`;
 }
 
+export function clipCameraFrameUrl(sessionId: string, index: number, padding: number = 0): string {
+  return `/api/clips/${sessionId}/camera-frame/${index}?padding=${padding}`;
+}
+
 export function clipOverlayFrameUrl(sessionId: string, index: number): string {
   return `/api/clips/${sessionId}/overlay-frame/${index}`;
 }
@@ -1771,8 +1775,23 @@ export async function rectifyPhysicalEvalFrame(body: {
   frame_index: number;
   corners: number[][];
   output_size?: number;
+  padding_px?: number;
 }): Promise<{ image_b64: string; output_size: number }> {
   const res = await fetch("/api/physical-eval/rectify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function detectPhysicalEvalCorners(body: {
+  session_id: string;
+  frame_index: number;
+  padding_px?: number;
+}): Promise<{ detection: { corners: number[][]; confidence: number; method: string } | null }> {
+  const res = await fetch("/api/physical-eval/detect-corners", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -1788,6 +1807,7 @@ export async function savePhysicalEvalAnnotation(body: {
   corners: number[][];
   labels: Array<number | null>;
   output_size?: number;
+  padding_px?: number;
 }): Promise<{ annotation: PhysicalEvalAnnotation; summary: PhysicalEvalSummary }> {
   const res = await fetch("/api/physical-eval/save", {
     method: "POST",
@@ -1850,8 +1870,23 @@ export async function rectifyPhysicalTrainFrame(body: {
   frame_index: number;
   corners: number[][];
   output_size?: number;
+  padding_px?: number;
 }): Promise<{ image_b64: string; output_size: number }> {
   const res = await fetch("/api/physical-train/rectify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function detectPhysicalTrainCorners(body: {
+  session_id: string;
+  frame_index: number;
+  padding_px?: number;
+}): Promise<{ detection: { corners: number[][]; confidence: number; method: string } | null }> {
+  const res = await fetch("/api/physical-train/detect-corners", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -1867,6 +1902,7 @@ export async function savePhysicalTrainAnnotation(body: {
   corners: number[][];
   labels: Array<number | null>;
   output_size?: number;
+  padding_px?: number;
 }): Promise<{ annotation: PhysicalEvalAnnotation; summary: PhysicalEvalSummary }> {
   const res = await fetch("/api/physical-train/save", {
     method: "POST",

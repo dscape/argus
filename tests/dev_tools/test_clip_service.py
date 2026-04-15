@@ -109,11 +109,12 @@ def test_get_overlay_frame_png_uses_source_video_and_db_clip(monkeypatch, tmp_pa
 
     monkeypatch.setattr(
         clip_service,
-        "_load_db_clip_overlay_row",
+        "_load_db_clip_row",
         lambda clip_id: {
             "id": clip_id,
             "video_id": "demo123",
             "overlay_bbox": overlay_bbox,
+            "camera_bbox": (0, 0, 100, 100),
             "ref_resolution": (64, 64),
         },
     )

@@ -1,14 +1,17 @@
 "use client";
 
 import { CheckCircle2 } from "lucide-react";
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
+import { ClipGallery } from "@/components/data/ClipGallery";
 import { listPhysicalEvalClips, listPhysicalTrainClips, type PhysicalEvalClip } from "@/lib/api";
+import type { SyntheticClipFile } from "@/lib/types";
 
 type PhysicalAnnotationSplit = "val" | "train";
+type StatusFilter = "all" | "complete" | "incomplete";
+type FrameFilter = "all" | "lt100" | "lt500" | "gt500";
 
 function normalizeSplit(value: string | null): PhysicalAnnotationSplit {
   return value === "train" ? "train" : "val";
@@ -32,6 +35,8 @@ export default function PhysicalAnnotationIndexPage() {
   const split = normalizeSplit(searchParams.get("split"));
   const [clips, setClips] = useState<PhysicalEvalClip[]>([]);
   const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [frameFilter, setFrameFilter] = useState<FrameFilter>("all");
 
   useEffect(() => {
     let cancelled = false;
@@ -60,13 +65,48 @@ export default function PhysicalAnnotationIndexPage() {
     };
   }, [split]);
 
-  const splitLabel = split === "train" ? "Train" : "Validation";
-  const emptyMessage = split === "train"
-    ? "No training clips found in data/argus/train_real."
-    : "No validation clips found in data/argus/train_real.";
+  const filteredClips = useMemo(() => clips.filter((clip) => {
+    if (statusFilter === "complete" && !clip.fully_annotated) return false;
+    if (statusFilter === "incomplete" && clip.fully_annotated) return false;
+    const nf = clip.num_frames ?? 0;
+    if (frameFilter === "lt100" && nf >= 100) return false;
+    if (frameFilter === "lt500" && nf >= 500) return false;
+    if (frameFilter === "gt500" && nf < 500) return false;
+    return true;
+  }), [clips, statusFilter, frameFilter]);
+
+  const galleryClips = useMemo(
+    () => filteredClips.map((clip) => ({ filename: clip.filename, size_mb: clip.size_mb, modified: clip.modified_at })),
+    [filteredClips],
+  );
+
+  const clipMetaByFilename = useMemo(() => {
+    const map = new Map<string, PhysicalEvalClip>();
+    for (const clip of clips) map.set(clip.filename, clip);
+    return map;
+  }, [clips]);
+
+  const renderOverlay = useCallback((clip: SyntheticClipFile) => {
+    const meta = clipMetaByFilename.get(clip.filename);
+    if (!meta) return null;
+    return (
+      <>
+        {meta.fully_annotated && (
+          <CheckCircle2 className="absolute left-1.5 top-1.5 h-4 w-4 text-green-500 drop-shadow" />
+        )}
+        {meta.annotated_frame_count > 0 && !meta.fully_annotated && (
+          <span className="absolute left-1.5 top-1.5 rounded bg-black/60 px-1 py-0.5 text-[9px] font-medium text-white">
+            {meta.annotated_frame_count}/{meta.num_frames ?? "?"}
+          </span>
+        )}
+      </>
+    );
+  }, [clipMetaByFilename]);
+
+  const completedCount = useMemo(() => clips.filter((c) => c.fully_annotated).length, [clips]);
 
   if (loading) {
-    return <div className="text-sm text-muted-foreground">Loading clips…</div>;
+    return <div className="text-sm text-muted-foreground">Loading clips...</div>;
   }
 
   return (
@@ -87,58 +127,52 @@ export default function PhysicalAnnotationIndexPage() {
             <option value="val">Validation</option>
           </select>
         </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Status</span>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+            className="h-9 rounded-md border bg-background px-3 text-sm shadow-sm outline-none transition-colors focus:border-ring"
+          >
+            <option value="all">All</option>
+            <option value="incomplete">Incomplete</option>
+            <option value="complete">Complete</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Frames</span>
+          <select
+            value={frameFilter}
+            onChange={(e) => setFrameFilter(e.target.value as FrameFilter)}
+            className="h-9 rounded-md border bg-background px-3 text-sm shadow-sm outline-none transition-colors focus:border-ring"
+          >
+            <option value="all">All</option>
+            <option value="lt100">&lt; 100</option>
+            <option value="lt500">&lt; 500</option>
+            <option value="gt500">&gt; 500</option>
+          </select>
+        </label>
+        <span className="text-sm text-muted-foreground">
+          {filteredClips.length}/{clips.length} clips ({completedCount} complete)
+        </span>
       </div>
 
-      <div className="space-y-1 text-sm text-muted-foreground">
-        <p>
-          {clips.length} {split === "train" ? "training" : "validation"} clips in <code>data/argus/train_real</code>
+      <details className="text-xs text-muted-foreground">
+        <summary className="cursor-pointer hover:text-foreground">How to add more clips</summary>
+        <p className="mt-1 pl-4">
+          Open a video from the <strong>Videos</strong> page, use the <strong>Calibrate</strong> tab to
+          auto-calibrate clips, then go to the <strong>Inspect</strong> tab and click <strong>Save to training</strong> on
+          clips you want to annotate. They will appear here.
         </p>
-        <p>
-          Source videos are assigned once with a stable pseudo-random 80/20 train/val split.
-        </p>
-      </div>
+      </details>
 
-      {clips.length === 0 ? (
-        <div className="text-sm text-muted-foreground">{emptyMessage}</div>
-      ) : (
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {clips.map((clip) => {
-            const splitBadge = clip.assigned_split ?? "unknown";
-            return (
-              <Link
-                key={clip.clip_path}
-                href={`/annotate/physical/${encodeURIComponent(clip.filename)}?split=${split}`}
-                className="block rounded border p-3 text-sm transition-colors hover:bg-muted/40"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-mono font-medium">{clip.filename}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {clip.source_video_id ?? "unknown"} · clip {clip.clip_id ?? "-"} · {clip.size_mb.toFixed(1)} MB
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      split: <span className="font-medium text-foreground">{splitBadge}</span>
-                    </div>
-                    {clip.annotated_frame_count > 0 && (
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {clip.num_frames !== null
-                          ? `${clip.annotated_frame_count}/${clip.num_frames} frames saved`
-                          : `${clip.annotated_frame_count} frames saved`}
-                      </div>
-                    )}
-                  </div>
-                  {clip.fully_annotated ? (
-                    <CheckCircle2
-                      className="h-4 w-4 shrink-0 text-green-600"
-                      aria-label={`Fully annotated ${splitLabel.toLowerCase()} clip`}
-                    />
-                  ) : null}
-                </div>
-              </Link>
-            );
-          })}
-        </div>
-      )}
+      <ClipGallery
+        clips={galleryClips}
+        directory="data/argus/train_real"
+        detailBasePath="/annotate/physical"
+        detailQueryString={`?split=${split}`}
+        renderOverlay={renderOverlay}
+      />
     </div>
   );
 }

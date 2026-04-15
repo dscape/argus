@@ -66,6 +66,7 @@ def save_annotation(
     labels: list[int | None],
     *,
     output_size: int = manual_train_dataset.DEFAULT_BOARD_SIZE,
+    padding_px: int = 0,
 ) -> dict[str, Any]:
     return physical_eval_service._save_annotation(
         manual_train_dataset,
@@ -75,4 +76,5 @@ def save_annotation(
         corners,
         labels,
         output_size=output_size,
+        padding_px=padding_px,
     )

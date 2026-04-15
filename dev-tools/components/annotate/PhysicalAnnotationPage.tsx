@@ -7,11 +7,14 @@ import { ChessBoard } from "@/components/ChessBoard";
 import { chessPieceSvg } from "@/components/chess-pieces";
 import { Badge } from "@/components/ui/badge";
 import {
+  clipCameraFrameUrl,
   clipFrameUrl,
   clipSourceVideoUrl,
   deleteClipSession,
   deletePhysicalEvalAnnotation,
   deletePhysicalTrainAnnotation,
+  detectPhysicalEvalCorners,
+  detectPhysicalTrainCorners,
   getClipInfo,
   getPhysicalEvalAnnotation,
   getPhysicalEvalMoveCorrections,
@@ -117,6 +120,7 @@ interface PhysicalAnnotationSplitConfig {
   rectifyFrame: typeof rectifyPhysicalEvalFrame;
   saveAnnotation: typeof savePhysicalEvalAnnotation;
   deleteAnnotation: typeof deletePhysicalEvalAnnotation;
+  detectCorners: typeof detectPhysicalEvalCorners;
 }
 
 const SPLIT_CONFIG: Record<PhysicalAnnotationSplit, PhysicalAnnotationSplitConfig> = {
@@ -129,6 +133,7 @@ const SPLIT_CONFIG: Record<PhysicalAnnotationSplit, PhysicalAnnotationSplitConfi
     rectifyFrame: rectifyPhysicalEvalFrame,
     saveAnnotation: savePhysicalEvalAnnotation,
     deleteAnnotation: deletePhysicalEvalAnnotation,
+    detectCorners: detectPhysicalEvalCorners,
   },
   train: {
     indexHref: "/annotate/physical?split=train",
@@ -139,8 +144,16 @@ const SPLIT_CONFIG: Record<PhysicalAnnotationSplit, PhysicalAnnotationSplitConfi
     rectifyFrame: rectifyPhysicalTrainFrame,
     saveAnnotation: savePhysicalTrainAnnotation,
     deleteAnnotation: deletePhysicalTrainAnnotation,
+    detectCorners: detectPhysicalTrainCorners,
   },
 };
+
+interface PendingCornerTranslation {
+  oldSize: { width: number; height: number };
+  oldPadding: number;
+  newPadding: number;
+  corners: Array<{ x: number; y: number }>;
+}
 
 interface Props {
   filename: string;
@@ -239,6 +252,14 @@ function AnnotationContent({
   const [deleting, setDeleting] = useState(false);
   const [existingAnnotation, setExistingAnnotation] = useState<PhysicalEvalAnnotation | null>(null);
   const [moveCorrections, setMoveCorrections] = useState<PhysicalEvalMoveCorrections | null>(null);
+
+  // Auto-detect corners
+  const [autoDetect, setAutoDetect] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+
+  // Camera padding
+  const [cameraPadding, setCameraPadding] = useState(0);
+  const pendingCornerTranslationRef = useRef<PendingCornerTranslation | null>(null);
 
   // Source video
   const [sourceVideoUrl, setSourceVideoUrl] = useState<string | null>(null);
@@ -375,6 +396,7 @@ function AnnotationContent({
           frame_index: selectedFrame,
           corners: nextCorners.map((p) => [p.x, p.y]),
           output_size: 512,
+          padding_px: cameraPadding,
         });
         if (latestRectifyRequestIdRef.current !== requestId) return;
         setRectifiedImageB64(result.image_b64);
@@ -388,7 +410,7 @@ function AnnotationContent({
         }
       }
     },
-    [selectedFrame, sessionId],
+    [cameraPadding, selectedFrame, sessionId],
   );
 
   const flushQueuedRectify = useCallback(async () => {
@@ -517,6 +539,70 @@ function AnnotationContent({
     }
   }, [displayedReplayFen]);
 
+  const handlePaddingChange = useCallback((newPadding: number) => {
+    if (newPadding === cameraPadding) return;
+    // Queue corner translation for when the new image loads
+    if (corners.length === 4 && sourceImageSize) {
+      pendingCornerTranslationRef.current = {
+        oldSize: sourceImageSize,
+        oldPadding: cameraPadding,
+        newPadding: newPadding,
+        corners: [...corners],
+      };
+    }
+    setCameraPadding(newPadding);
+  }, [cameraPadding, corners, sourceImageSize]);
+
+  const updateCameraBbox = useCallback(async () => {
+    const meta = clipInfo.metadata ?? {};
+    const videoId = typeof meta.source_video_id === "string" ? meta.source_video_id : undefined;
+    const clipId = typeof meta.source_db_clip_id === "number" ? meta.source_db_clip_id : undefined;
+    const bbox = Array.isArray(meta.camera_bbox) ? (meta.camera_bbox as number[]) : undefined;
+    if (!videoId || clipId == null || !bbox || cameraPadding <= 0) return;
+
+    const [x, y, w, h] = bbox;
+    const expanded = [
+      Math.max(0, x - cameraPadding),
+      Math.max(0, y - cameraPadding),
+      w + 2 * cameraPadding,
+      h + 2 * cameraPadding,
+    ];
+    try {
+      await fetch(`/api/crawl/videos/${videoId}/clips/${clipId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ camera_bbox: expanded }),
+      });
+      toast.success("Camera bbox updated in DB — resetting padding");
+      setCameraPadding(0);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update bbox");
+    }
+  }, [cameraPadding, clipInfo.metadata]);
+
+  const runDetectCorners = useCallback(async () => {
+    setDetecting(true);
+    try {
+      const result = await splitConfig.detectCorners({
+        session_id: sessionId,
+        frame_index: selectedFrame,
+        padding_px: cameraPadding,
+      });
+      if (result.detection) {
+        const detected = result.detection.corners.map(([x, y]) => ({ x, y }));
+        setCorners(detected);
+        cornersRef.current = detected;
+        if (detected.length === 4) await rectifyBoard(detected);
+      } else {
+        toast.error("No board detected in this frame");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Detection failed");
+    } finally {
+      setDetecting(false);
+    }
+  }, [cameraPadding, rectifyBoard, selectedFrame, sessionId, splitConfig]);
+
   const resetCorners = useCallback(() => {
     setCorners([]);
     setRectifiedImageB64(null);
@@ -553,6 +639,7 @@ function AnnotationContent({
         corners: corners.map((p) => [p.x, p.y]),
         labels: boardLabels,
         output_size: 512,
+        padding_px: cameraPadding,
       });
       setExistingAnnotation(result.annotation);
       await refreshMoveCorrections();
@@ -597,27 +684,45 @@ function AnnotationContent({
         setExistingAnnotation(ann);
         if (ann) {
           // Saved annotation for this frame — use its corners and labels
-          setCorners(ann.corners.map(([x, y]) => ({ x, y })));
-          setBoardLabels(normalizeAnnotationLabels(ann.labels));
-          await rectifyBoard(ann.corners.map(([x, y]) => ({ x, y })));
-        } else {
-          // No saved annotation — keep current corners, re-rectify, prefill FEN
-          prefillFromFen();
-          setCorners((prev) => {
-            if (prev.length === 4) {
-              void rectifyBoard(prev);
-            } else {
-              setRectifiedImageB64(null);
+          let loadedCorners = ann.corners.map(([x, y]) => ({ x, y }));
+          // Translate corners from stored-frame space (224x224) to padded image space
+          if (cameraPadding > 0 && sourceImageSize) {
+            const boardW = sourceImageSize.width - 2 * cameraPadding;
+            const boardH = sourceImageSize.height - 2 * cameraPadding;
+            if (boardW > 0 && boardH > 0) {
+              loadedCorners = loadedCorners.map((pt) => ({
+                x: (pt.x / 224) * boardW + cameraPadding,
+                y: (pt.y / 224) * boardH + cameraPadding,
+              }));
             }
-            return prev;
-          });
+          }
+          setCorners(loadedCorners);
+          setBoardLabels(normalizeAnnotationLabels(ann.labels));
+          await rectifyBoard(loadedCorners);
+        } else {
+          // No saved annotation — auto-detect or keep current corners
+          prefillFromFen();
+          if (autoDetect) {
+            void runDetectCorners();
+          } else {
+            setCorners((prev) => {
+              if (prev.length === 4) {
+                void rectifyBoard(prev);
+              } else {
+                setRectifiedImageB64(null);
+              }
+              return prev;
+            });
+          }
         }
       } catch { /* no annotation */ }
     })();
     return () => { cancelled = true; };
-  }, [clipPath, prefillFromFen, rectifyBoard, selectedFrame]);
+  }, [autoDetect, clipPath, prefillFromFen, rectifyBoard, runDetectCorners, selectedFrame]);
 
-  const frameUrl = clipFrameUrl(sessionId, selectedFrame);
+  const frameUrl = (cameraPadding > 0)
+    ? clipCameraFrameUrl(sessionId, selectedFrame, cameraPadding)
+    : clipFrameUrl(sessionId, selectedFrame);
 
   return (
     <div className="space-y-2">
@@ -656,8 +761,33 @@ function AnnotationContent({
       <div className="grid items-stretch gap-3 xl:grid-cols-[minmax(0,1fr)_220px_minmax(0,1fr)]">
         {/* Left: Camera crop with corners */}
         <div className="space-y-1">
-          <div className="text-[10px] text-muted-foreground">
-            {corners.length < 4 ? `Click corners: a8 \u2192 h8 \u2192 h1 \u2192 a1 (${corners.length}/4)` : "Corners set \u2014 drag handles to adjust this frame"}
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[10px] text-muted-foreground">
+              {corners.length < 4 ? `Click corners: a8 \u2192 h8 \u2192 h1 \u2192 a1 (${corners.length}/4)` : "Corners set \u2014 drag handles to adjust this frame"}
+            </div>
+            {clipInfo.metadata?.source_db_clip_id != null && <div className="flex items-center gap-1">
+              <label className="text-[9px] text-muted-foreground whitespace-nowrap" htmlFor="cam-pad">Pad</label>
+              <input
+                id="cam-pad"
+                type="range"
+                min={0}
+                max={200}
+                step={8}
+                value={cameraPadding}
+                onChange={(e) => handlePaddingChange(Number(e.target.value))}
+                className="h-3 w-16"
+              />
+              <span className="text-[9px] tabular-nums w-6 text-right text-muted-foreground">{cameraPadding}</span>
+              {cameraPadding > 0 && clipInfo.metadata?.source_db_clip_id != null && (
+                <button
+                  type="button"
+                  onClick={() => void updateCameraBbox()}
+                  className="rounded border border-blue-500/40 bg-blue-500/10 px-1.5 py-0.5 text-[9px] text-blue-700 hover:bg-blue-500/20 dark:text-blue-300"
+                >
+                  Save bbox
+                </button>
+              )}
+            </div>}
           </div>
           <div className="relative overflow-hidden rounded border">
             <img
@@ -665,7 +795,27 @@ function AnnotationContent({
               src={frameUrl}
               alt={`Frame ${selectedFrame}`}
               className={`block w-full ${corners.length < 4 ? "cursor-crosshair" : ""}`}
-              onLoad={(e) => setSourceImageSize({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
+              onLoad={(e) => {
+                const newSize = { width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight };
+                setSourceImageSize(newSize);
+                // Translate corners when padding changes and a new image loads
+                const pending = pendingCornerTranslationRef.current;
+                if (pending && pending.corners.length === 4) {
+                  const { oldSize, oldPadding, newPadding } = pending;
+                  const boardW = oldSize.width - 2 * oldPadding;
+                  const boardH = oldSize.height - 2 * oldPadding;
+                  if (boardW > 0 && boardH > 0) {
+                    const translated = pending.corners.map((pt) => ({
+                      x: ((pt.x - oldPadding) / boardW) * (newSize.width - 2 * newPadding) + newPadding,
+                      y: ((pt.y - oldPadding) / boardH) * (newSize.height - 2 * newPadding) + newPadding,
+                    }));
+                    setCorners(translated);
+                    cornersRef.current = translated;
+                    void rectifyBoard(translated);
+                  }
+                  pendingCornerTranslationRef.current = null;
+                }
+              }}
               onClick={(e) => void handleImageClick(e)}
             />
             {sourceImageSize && corners.map((pt, i) => (
@@ -680,9 +830,12 @@ function AnnotationContent({
                 onPointerCancel={finishCornerDrag}
                 title={`Drag ${cornerLabel(i)}`}
               >
-                <span className={`block rounded-full border border-white/80 bg-red-600 px-1.5 py-0.5 text-[9px] font-bold text-white shadow transition-transform ${draggedCornerIndex === i ? "scale-105" : ""}`}>
-                  {cornerLabel(i)}
-                </span>
+                <svg width="24" height="24" viewBox="0 0 24 24" className="drop-shadow" style={{ transform: "translate(-50%, -50%)" }}>
+                  <line x1="12" y1="2" x2="12" y2="22" stroke="#dc2626" strokeWidth="2" />
+                  <line x1="2" y1="12" x2="22" y2="12" stroke="#dc2626" strokeWidth="2" />
+                  <line x1="12" y1="2" x2="12" y2="22" stroke="white" strokeWidth="0.75" />
+                  <line x1="2" y1="12" x2="22" y2="12" stroke="white" strokeWidth="0.75" />
+                </svg>
               </button>
             ))}
           </div>
@@ -742,6 +895,13 @@ function AnnotationContent({
                 </button>
               )}
               <button type="button" onClick={resetCorners} className={PANEL_BUTTON_CLASS}>Reset</button>
+              <button type="button" onClick={() => void runDetectCorners()} disabled={detecting} className={PANEL_BUTTON_CLASS}>
+                {detecting ? "Detecting\u2026" : "Detect"}
+              </button>
+              <label className="inline-flex items-center gap-0.5 text-[9px]">
+                <input type="checkbox" checked={autoDetect} onChange={(e) => setAutoDetect(e.target.checked)} className="h-3 w-3" />
+                Auto
+              </label>
               <button
                 type="button"
                 onClick={copyFenFromPreviousFrame}

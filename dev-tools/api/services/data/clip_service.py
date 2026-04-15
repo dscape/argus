@@ -73,7 +73,7 @@ def _parse_real_clip_reference(filename: str | None) -> tuple[str, int] | None:
     return match.group("video_id"), int(match.group("clip_id"))
 
 
-def _load_db_clip_overlay_row(clip_id: int) -> dict[str, Any] | None:
+def _load_db_clip_row(clip_id: int) -> dict[str, Any] | None:
     try:
         from pipeline.db.connection import get_conn
 
@@ -81,7 +81,7 @@ def _load_db_clip_overlay_row(clip_id: int) -> dict[str, Any] | None:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, video_id, overlay_bbox, ref_resolution
+                    SELECT id, video_id, overlay_bbox, camera_bbox, ref_resolution
                     FROM video_clips
                     WHERE id = %s
                     """,
@@ -94,7 +94,8 @@ def _load_db_clip_overlay_row(clip_id: int) -> dict[str, Any] | None:
                     "id": int(row[0]),
                     "video_id": row[1],
                     "overlay_bbox": tuple(int(v) for v in row[2]),
-                    "ref_resolution": tuple(int(v) for v in row[3]),
+                    "camera_bbox": tuple(int(v) for v in row[3]),
+                    "ref_resolution": tuple(int(v) for v in row[4]),
                 }
     except Exception:
         return None
@@ -155,7 +156,7 @@ def _get_overlay_preview_context(session: dict[str, Any]) -> dict[str, Any] | No
     if not isinstance(frame_indices, torch.Tensor) or frame_indices.ndim != 1:
         return None
 
-    clip_row = _load_db_clip_overlay_row(clip_id)
+    clip_row = _load_db_clip_row(clip_id)
     if clip_row is None or clip_row["video_id"] != video_id:
         return None
 
@@ -169,6 +170,7 @@ def _get_overlay_preview_context(session: dict[str, Any]) -> dict[str, Any] | No
         "video_path": video_path,
         "frame_indices": frame_indices,
         "overlay_bbox": clip_row["overlay_bbox"],
+        "camera_bbox": clip_row["camera_bbox"],
         "ref_resolution": clip_row["ref_resolution"],
     }
 
@@ -482,6 +484,13 @@ def inspect(session_id: str) -> dict[str, Any]:
     if clip_reference is not None:
         _, clip_id = clip_reference
         metadata["source_db_clip_id"] = clip_id
+        clip_row = _load_db_clip_row(clip_id)
+        if clip_row is not None:
+            metadata["camera_bbox"] = list(clip_row["camera_bbox"])
+            metadata["ref_resolution"] = list(clip_row["ref_resolution"])
+            metadata["camera_bbox_usable"] = not _is_placeholder_bbox(
+                clip_row["camera_bbox"]
+            )
 
     return {
         "file_size_mb": round(os.path.getsize(path) / 1024 / 1024, 2),
@@ -577,3 +586,140 @@ def get_overlay_frame_png(session_id: str, frame_index: int) -> bytes:
         return buffer.tobytes()
     finally:
         cap.release()
+
+
+def _pad_bbox(
+    bbox: tuple[int, int, int, int],
+    padding_px: int,
+    frame_width: int,
+    frame_height: int,
+) -> tuple[int, int, int, int]:
+    """Expand a (x, y, w, h) bbox by padding_px on all sides, clamped to frame."""
+    x, y, w, h = bbox
+    x2, y2 = x + w, y + h
+    x = max(0, x - padding_px)
+    y = max(0, y - padding_px)
+    x2 = min(frame_width, x2 + padding_px)
+    y2 = min(frame_height, y2 + padding_px)
+    return x, y, x2 - x, y2 - y
+
+
+def _is_placeholder_bbox(bbox: tuple[int, int, int, int]) -> bool:
+    return bbox == (0, 0, 100, 100)
+
+
+def get_camera_frame_rgb(
+    session_id: str, frame_index: int, padding_px: int = 0
+) -> np.ndarray:
+    """Extract the camera crop from the source video as an RGB array with optional padding.
+
+    Falls back to the stored tensor frame when the source video is unavailable.
+    """
+    session = _sessions.get(session_id)
+    if session is None:
+        raise ValueError("Session not found")
+
+    context = _get_overlay_preview_context(session)
+    if context is None or "camera_bbox" not in context:
+        return _get_stored_frame_rgb(session, frame_index)
+
+    # When camera_bbox is a placeholder, auto-detect from the stored tensor frame
+    if _is_placeholder_bbox(context["camera_bbox"]):
+        stored_frame = _get_stored_frame_rgb(session, frame_index)
+        if padding_px == 0:
+            return stored_frame
+        # Detect the board bbox from the stored frame to bootstrap padding
+        try:
+            from pipeline.physical.board_localizer import localize_board
+
+            bgr = cv2.cvtColor(stored_frame, cv2.COLOR_RGB2BGR)
+            detection = localize_board(bgr)
+            if detection is not None:
+                corners = detection.corners
+                xs = [c[0] for c in corners]
+                ys = [c[1] for c in corners]
+                detected_bbox = (
+                    int(min(xs)), int(min(ys)),
+                    int(max(xs) - min(xs)), int(max(ys) - min(ys)),
+                )
+                # Apply padding to the detected bbox within the stored frame
+                h, w = stored_frame.shape[:2]
+                padded = _pad_bbox(detected_bbox, padding_px, w, h)
+                px, py, pw, ph = padded
+                crop = stored_frame[py : py + ph, px : px + pw]
+                if crop.size > 0:
+                    return crop
+        except Exception:
+            pass
+        return stored_frame
+
+    source_frame_indices: torch.Tensor = context["frame_indices"]
+    if frame_index < 0 or frame_index >= source_frame_indices.shape[0]:
+        raise ValueError(
+            f"Frame index {frame_index} out of range [0, {source_frame_indices.shape[0]})"
+        )
+
+    cap = cv2.VideoCapture(context["video_path"])
+    if not cap.isOpened():
+        return _get_stored_frame_rgb(session, frame_index)
+
+    try:
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        bbox = _scale_bbox(
+            context["camera_bbox"],
+            context["ref_resolution"],
+            width,
+            height,
+        )
+        if padding_px > 0:
+            bbox = _pad_bbox(bbox, padding_px, width, height)
+
+        source_frame_index = int(source_frame_indices[frame_index].item())
+        cap.set(cv2.CAP_PROP_POS_FRAMES, source_frame_index)
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            return _get_stored_frame_rgb(session, frame_index)
+
+        x, y, w, h = bbox
+        crop = frame[y : y + h, x : x + w]
+        if crop.size == 0:
+            return _get_stored_frame_rgb(session, frame_index)
+
+        return cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+    finally:
+        cap.release()
+
+
+def get_camera_frame_png(
+    session_id: str, frame_index: int, padding_px: int = 0
+) -> bytes:
+    """Extract the camera crop from the source video as PNG bytes with optional padding.
+
+    Falls back to the stored tensor frame when the source video is unavailable.
+    """
+    if padding_px == 0:
+        # Fast path: use stored tensor frame
+        return get_frame_png(session_id, frame_index)
+
+    rgb = get_camera_frame_rgb(session_id, frame_index, padding_px=padding_px)
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    ok, buffer = cv2.imencode(".png", bgr)
+    if not ok:
+        raise ValueError("Failed to encode camera frame")
+    return buffer.tobytes()
+
+
+def _get_stored_frame_rgb(session: dict[str, Any], frame_index: int) -> np.ndarray:
+    """Read a stored tensor frame as an RGB numpy array."""
+    clip = session["clip"]
+    frames = clip.get("frames")
+    if frames is None:
+        raise ValueError("No frames in clip")
+    if frame_index < 0 or frame_index >= frames.shape[0]:
+        raise ValueError(f"Frame index {frame_index} out of range [0, {frames.shape[0]})")
+
+    frame = frames[frame_index]
+    if frame.dtype == torch.uint8:
+        return frame.permute(1, 2, 0).numpy()
+    return (frame.permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)

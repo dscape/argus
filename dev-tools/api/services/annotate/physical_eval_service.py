@@ -64,8 +64,9 @@ def rectify_frame(
     corners: list[list[float]],
     *,
     output_size: int = eval_dataset.DEFAULT_BOARD_SIZE,
+    padding_px: int = 0,
 ) -> dict[str, Any]:
-    image_rgb = _get_clip_frame_rgb(session_id, frame_index)
+    image_rgb = _get_clip_frame_rgb(session_id, frame_index, padding_px=padding_px)
     rectified_rgb = eval_dataset.rectify_board_image(
         image_rgb,
         corners,
@@ -77,6 +78,26 @@ def rectify_frame(
     }
 
 
+def detect_corners(
+    session_id: str,
+    frame_index: int,
+    *,
+    padding_px: int = 0,
+) -> dict[str, Any] | None:
+    from pipeline.physical.board_localizer import localize_board
+
+    image_rgb = _get_clip_frame_rgb(session_id, frame_index, padding_px=padding_px)
+    image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+    result = localize_board(image_bgr)
+    if result is None:
+        return None
+    return {
+        "corners": [[x, y] for x, y in result.corners],
+        "confidence": result.confidence,
+        "method": result.method,
+    }
+
+
 def save_annotation(
     session_id: str,
     clip_path: str,
@@ -85,6 +106,7 @@ def save_annotation(
     labels: list[int | None],
     *,
     output_size: int = eval_dataset.DEFAULT_BOARD_SIZE,
+    padding_px: int = 0,
 ) -> dict[str, Any]:
     return _save_annotation(
         eval_dataset,
@@ -94,6 +116,7 @@ def save_annotation(
         corners,
         labels,
         output_size=output_size,
+        padding_px=padding_px,
     )
 
 
@@ -208,9 +231,10 @@ def _save_annotation(
     labels: list[int | None],
     *,
     output_size: int,
+    padding_px: int = 0,
 ) -> dict[str, Any]:
     resolved_clip_path = _resolve_within_project(clip_path)
-    image_rgb = _get_clip_frame_rgb(session_id, frame_index)
+    image_rgb = _get_clip_frame_rgb(session_id, frame_index, padding_px=padding_px)
     source_video_id = _source_video_id_from_path(resolved_clip_path)
     annotation = dataset_module.save_board_annotation(
         image_rgb,
@@ -393,7 +417,10 @@ def _get_clip_num_frames(path: Path) -> int | None:
     return int(frames.shape[0])
 
 
-def _get_clip_frame_rgb(session_id: str, frame_index: int) -> np.ndarray:
+def _get_clip_frame_rgb(session_id: str, frame_index: int, padding_px: int = 0) -> np.ndarray:
+    if padding_px > 0:
+        return clip_service.get_camera_frame_rgb(session_id, frame_index, padding_px=padding_px)
+
     session = clip_service.get_session(session_id)
     if session is None:
         raise ValueError("Clip session not found")

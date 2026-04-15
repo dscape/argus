@@ -14,6 +14,7 @@ class RectifyRequest(BaseModel):
     frame_index: int
     corners: list[list[float]] = Field(min_length=4, max_length=4)
     output_size: int = 512
+    padding_px: int = 0
 
 
 class SaveAnnotationRequest(BaseModel):
@@ -23,6 +24,7 @@ class SaveAnnotationRequest(BaseModel):
     corners: list[list[float]] = Field(min_length=4, max_length=4)
     labels: list[int | None] = Field(min_length=64, max_length=64)
     output_size: int = 512
+    padding_px: int = 0
 
 
 @router.get("/clips")
@@ -74,6 +76,25 @@ async def delete_annotation(clip_path: str, frame_index: int):
     return {"summary": summary}
 
 
+class DetectCornersRequest(BaseModel):
+    session_id: str
+    frame_index: int
+    padding_px: int = 0
+
+
+@router.post("/detect-corners")
+async def detect_corners(body: DetectCornersRequest):
+    from api.services.annotate import physical_eval_service
+
+    result = await run_in_threadpool(
+        physical_eval_service.detect_corners,
+        body.session_id,
+        body.frame_index,
+        padding_px=body.padding_px,
+    )
+    return {"detection": result}
+
+
 @router.post("/rectify")
 async def rectify_frame(body: RectifyRequest):
     return await run_in_threadpool(
@@ -82,6 +103,7 @@ async def rectify_frame(body: RectifyRequest):
         body.frame_index,
         body.corners,
         output_size=body.output_size,
+        padding_px=body.padding_px,
     )
 
 
@@ -95,4 +117,5 @@ async def save_annotation(body: SaveAnnotationRequest):
         body.corners,
         body.labels,
         output_size=body.output_size,
+        padding_px=body.padding_px,
     )
