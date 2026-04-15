@@ -42,12 +42,19 @@ async def get_annotation_summary():
 
 
 @router.get("/annotation")
-async def get_frame_annotation(clip_path: str, frame_index: int):
+async def get_frame_annotation(
+    clip_path: str,
+    frame_index: int,
+    session_id: str | None = None,
+    padding_px: int = 0,
+):
     return {
         "annotation": await run_in_threadpool(
             physical_train_service.get_frame_annotation,
             clip_path,
             frame_index,
+            session_id=session_id,
+            padding_px=padding_px,
         )
     }
 
@@ -86,13 +93,16 @@ class DetectCornersRequest(BaseModel):
 async def detect_corners(body: DetectCornersRequest):
     from api.services.annotate import physical_eval_service
 
-    result = await run_in_threadpool(
-        physical_eval_service.detect_corners,
-        body.session_id,
-        body.frame_index,
-        padding_px=body.padding_px,
-    )
-    return {"detection": result}
+    try:
+        result = await run_in_threadpool(
+            physical_eval_service.detect_corners,
+            body.session_id,
+            body.frame_index,
+            padding_px=body.padding_px,
+        )
+        return {"detection": result}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
 
 
 @router.post("/rectify")
