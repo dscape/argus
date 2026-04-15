@@ -786,7 +786,7 @@ function AnnotationContent({
                 type="range"
                 min={0}
                 max={200}
-                step={8}
+                step={1}
                 value={cameraPadding}
                 onChange={(e) => handlePaddingChange(Number(e.target.value))}
                 className="h-3 w-16"
