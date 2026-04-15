@@ -552,6 +552,7 @@ class SegmentalLegalSequenceDecoder:
         state_aware_proposal_passes: int = 0,
         anomaly_change_evidence_threshold: float = 0.25,
         anomaly_settled_gain_threshold: float = 0.0,
+        segment_board_drop_worst_frames: int = 0,
         event_window_radius: int = 1,
         max_event_proposals: int = 32,
         diagnostic_settled_horizon: int = 8,
@@ -593,6 +594,11 @@ class SegmentalLegalSequenceDecoder:
                 "anomaly_change_evidence_threshold must be >= 0, got "
                 f"{anomaly_change_evidence_threshold}"
             )
+        if segment_board_drop_worst_frames < 0:
+            raise ValueError(
+                "segment_board_drop_worst_frames must be >= 0, got "
+                f"{segment_board_drop_worst_frames}"
+            )
         if event_window_radius < 0:
             raise ValueError(f"event_window_radius must be >= 0, got {event_window_radius}")
         if max_event_proposals <= 0:
@@ -628,6 +634,7 @@ class SegmentalLegalSequenceDecoder:
         self.state_aware_proposal_passes = int(state_aware_proposal_passes)
         self.anomaly_change_evidence_threshold = float(anomaly_change_evidence_threshold)
         self.anomaly_settled_gain_threshold = float(anomaly_settled_gain_threshold)
+        self.segment_board_drop_worst_frames = int(segment_board_drop_worst_frames)
         self.event_window_radius = int(event_window_radius)
         self.max_event_proposals = int(max_event_proposals)
         self.diagnostic_settled_horizon = int(diagnostic_settled_horizon)
@@ -1081,6 +1088,9 @@ class SegmentalLegalSequenceDecoder:
                 "change_evidence_threshold": self.anomaly_change_evidence_threshold,
                 "settled_gain_threshold": self.anomaly_settled_gain_threshold,
             },
+            "segment_scoring_settings": {
+                "board_drop_worst_frames": self.segment_board_drop_worst_frames,
+            },
         }
 
     def _segments(
@@ -1280,7 +1290,11 @@ class SegmentalLegalSequenceDecoder:
     ) -> float:
         if end <= start:
             return 0.0
-        return float(sum(score_board_state(board_log_probs[index], board) for index in range(start, end)))
+        frame_scores = [score_board_state(board_log_probs[index], board) for index in range(start, end)]
+        if self.segment_board_drop_worst_frames > 0 and len(frame_scores) > 1:
+            kept_count = max(1, len(frame_scores) - self.segment_board_drop_worst_frames)
+            frame_scores = sorted(frame_scores, reverse=True)[:kept_count]
+        return float(sum(frame_scores))
 
     def _event_move_score(
         self,

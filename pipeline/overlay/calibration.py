@@ -23,6 +23,7 @@ BOARD_THEMES: dict[str, dict[str, str]] = {
 }
 
 _PLACEHOLDER_BBOX = (0, 0, 100, 100)
+_MIN_CAMERA_BBOX_AREA_RATIO = 0.02
 _MAX_CAMERA_BBOX_AREA_RATIO = 0.25
 
 
@@ -69,13 +70,15 @@ def is_camera_bbox_usable(
     bbox: tuple[int, int, int, int] | list[int],
     ref_resolution: tuple[int, int] | list[int],
     *,
+    min_area_ratio: float = _MIN_CAMERA_BBOX_AREA_RATIO,
     max_area_ratio: float = _MAX_CAMERA_BBOX_AREA_RATIO,
 ) -> bool:
     if is_placeholder_bbox(bbox):
         return False
     if not is_bbox_within_frame(bbox, ref_resolution):
         return False
-    return bbox_area_ratio(bbox, ref_resolution) <= max_area_ratio
+    area_ratio = bbox_area_ratio(bbox, ref_resolution)
+    return min_area_ratio <= area_ratio <= max_area_ratio
 
 
 def calibration_has_usable_camera_crop(calibration: "LayoutCalibration") -> bool:

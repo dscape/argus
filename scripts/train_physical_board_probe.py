@@ -53,7 +53,7 @@ from pipeline.physical.square_probe import ProbeMetrics
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 from argus.device import resolve_device
-from argus.model.vision_encoder import VisionEncoder
+from argus.model.vision_encoder import VisionEncoder, default_model_name_for_encoder_type
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
@@ -61,9 +61,6 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "physical_board_probe"
 _DEFAULT_WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
-_DEFAULT_DINO_MODEL = "facebook/dinov2-base"
-_DEFAULT_SIGLIP2_MODEL = "google/siglip2-base-patch16-224"
-_DEFAULT_YOLO_MODEL = "weights/yolo_base/yolo11n.pt"
 _MODEL_CODE_VERSION = "v7"
 _IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406), dtype=torch.float32).view(3, 1, 1)
 _IMAGENET_STD = torch.tensor((0.229, 0.224, 0.225), dtype=torch.float32).view(3, 1, 1)
@@ -619,7 +616,7 @@ def resolve_output_dir(output_dir: Path | None) -> Path:
 
 
 def build_encoder_kwargs(args: argparse.Namespace) -> dict[str, object]:
-    model_name = args.model_name or default_model_name(args.encoder_type)
+    model_name = args.model_name or default_model_name_for_encoder_type(args.encoder_type)
     encoder_kwargs: dict[str, object] = {
         "model_name": model_name,
         "frozen": True,
@@ -638,14 +635,6 @@ def build_encoder_kwargs(args: argparse.Namespace) -> dict[str, object]:
         )
         encoder_kwargs["output_grid_size"] = args.yolo_output_grid_size
     return encoder_kwargs
-
-
-def default_model_name(encoder_type: str) -> str:
-    if encoder_type == "yolo":
-        return _DEFAULT_YOLO_MODEL
-    if encoder_type in {"siglip", "siglip2"}:
-        return _DEFAULT_SIGLIP2_MODEL
-    return _DEFAULT_DINO_MODEL
 
 
 def parse_feature_layer_indices(raw_value: str) -> list[int]:

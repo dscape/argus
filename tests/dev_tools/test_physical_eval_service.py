@@ -158,3 +158,175 @@ def test_rectify_frame_reads_rgb_clip_tensor(monkeypatch) -> None:
     assert result["output_size"] == 32
     assert isinstance(result["image_b64"], str)
     assert len(result["image_b64"]) > 20
+
+
+def test_annotation_projection_context_returns_none_for_unusable_camera_bbox(monkeypatch) -> None:
+    frames = torch.zeros((1, 3, 16, 16), dtype=torch.uint8)
+    monkeypatch.setattr(
+        physical_eval_service.clip_service,
+        "_sessions",
+        {"session-1": {"clip": {"frames": frames}, "filename": "test.pt"}},
+    )
+    monkeypatch.setattr(
+        physical_eval_service.clip_service,
+        "_get_overlay_preview_context",
+        lambda _session: {
+            "camera_bbox": (0, 0, 8, 8),
+            "ref_resolution": (64, 64),
+            "frame_indices": torch.tensor([0], dtype=torch.long),
+            "video_path": "unused.mp4",
+        },
+    )
+
+    result = physical_eval_service._annotation_projection_context_from_session(
+        "session-1",
+        0,
+        padding_px=0,
+    )
+
+    assert result is None
+
+
+def test_get_frame_annotation_projects_clip_space_corners_to_current_camera_crop(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / "repo"
+    (project_root / "data" / "argus" / "train_real").mkdir(parents=True)
+    monkeypatch.setattr(physical_eval_service, "_PROJECT_ROOT", project_root)
+    monkeypatch.setattr(
+        physical_eval_service,
+        "_annotation_projection_context_from_session",
+        lambda _session_id, _frame_index, *, padding_px: (
+            physical_eval_service._AnnotationProjectionContext(
+                clip_frame_size=(224, 224),
+                zero_padding_bbox=(100, 200, 448, 224),
+                current_bbox=(90, 190, 468, 244) if padding_px == 10 else (100, 200, 448, 224),
+                source_frame_index=7,
+            )
+        ),
+    )
+
+    annotation = physical_eval_service._get_frame_annotation(
+        type(
+            "FakeDataset",
+            (),
+            {
+                "load_board_annotation": staticmethod(
+                    lambda _clip_path, _frame_index: {
+                        "annotation_id": "demo_frame0003",
+                        "clip_path": "data/argus/train_real/clip_overlay_demo_clip12_0.pt",
+                        "frame_index": 3,
+                        "corners": [[0.0, 0.0], [224.0, 0.0], [224.0, 224.0], [0.0, 224.0]],
+                        "labels": [None] * 64,
+                        "labeled_square_count": 0,
+                        "rectified_board_path": "data/physical/val/boards/demo_frame0003.jpg",
+                        "rectified_size": 512,
+                        "created_at": "2026-04-15T00:00:00+00:00",
+                    }
+                ),
+            },
+        ),
+        "data/argus/train_real/clip_overlay_demo_clip12_0.pt",
+        3,
+        session_id="session-1",
+        padding_px=10,
+    )
+
+    assert annotation is not None
+    assert annotation["corners"] == [[10.0, 10.0], [458.0, 10.0], [458.0, 234.0], [10.0, 234.0]]
+    assert annotation["clip_frame_size"] == [224, 224]
+    assert annotation["source_frame_index"] == 7
+
+
+def test_save_annotation_stores_clip_space_corners_but_returns_display_corners(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / "repo"
+    (project_root / "data" / "argus" / "train_real").mkdir(parents=True)
+    clip_path = project_root / "data" / "argus" / "train_real" / "clip_overlay_demo_clip12_0.pt"
+    clip_path.write_bytes(b"demo")
+    monkeypatch.setattr(physical_eval_service, "_PROJECT_ROOT", project_root)
+    monkeypatch.setattr(
+        physical_eval_service,
+        "_get_clip_frame_rgb",
+        lambda _session_id, _frame_index, padding_px=0: torch.zeros(
+            (244, 468, 3), dtype=torch.uint8
+        ).numpy(),
+    )
+    monkeypatch.setattr(
+        physical_eval_service,
+        "_annotation_projection_context_from_session",
+        lambda _session_id, _frame_index, *, padding_px: (
+            physical_eval_service._AnnotationProjectionContext(
+                clip_frame_size=(224, 224),
+                zero_padding_bbox=(100, 200, 448, 224),
+                current_bbox=(90, 190, 468, 244) if padding_px == 10 else (100, 200, 448, 224),
+                source_frame_index=7,
+            )
+        ),
+    )
+
+    captured: dict[str, object] = {}
+
+    class FakeDataset:
+        @staticmethod
+        def save_board_annotation(image_rgb, **kwargs):
+            captured["image_shape"] = image_rgb.shape
+            captured.update(kwargs)
+            return {
+                "annotation_id": "demo_frame0003",
+                "clip_path": kwargs["clip_path"],
+                "frame_index": kwargs["frame_index"],
+                "source_video_id": kwargs["source_video_id"],
+                "corners": kwargs["corners"],
+                "labels": kwargs["labels"],
+                "labeled_square_count": 0,
+                "rectified_board_path": "data/physical/val/boards/demo_frame0003.jpg",
+                "rectified_size": kwargs["output_size"],
+                "created_at": "2026-04-15T00:00:00+00:00",
+                "corner_space": kwargs["corner_space"],
+                "clip_frame_size": kwargs["clip_frame_size"],
+                "native_corners": kwargs["native_corners"],
+                "native_image_bbox": kwargs["native_image_bbox"],
+                "source_frame_index": kwargs["source_frame_index"],
+            }
+
+        @staticmethod
+        def get_annotation_summary():
+            return {"board_annotation_count": 1}
+
+    result = physical_eval_service._save_annotation(
+        FakeDataset,
+        "session-1",
+        "data/argus/train_real/clip_overlay_demo_clip12_0.pt",
+        3,
+        [[10.0, 10.0], [458.0, 10.0], [458.0, 234.0], [10.0, 234.0]],
+        [None] * 64,
+        output_size=512,
+        padding_px=10,
+    )
+
+    assert captured["clip_path"] == "data/argus/train_real/clip_overlay_demo_clip12_0.pt"
+    assert captured["corners"] == [[0.0, 0.0], [224.0, 0.0], [224.0, 224.0], [0.0, 224.0]]
+    assert captured["image_corners"] == [[10.0, 10.0], [458.0, 10.0], [458.0, 234.0], [10.0, 234.0]]
+    assert captured["clip_frame_size"] == [224, 224]
+    assert captured["native_corners"] == [
+        [10.0, 10.0],
+        [458.0, 10.0],
+        [458.0, 234.0],
+        [10.0, 234.0],
+    ]
+    assert captured["native_image_bbox"] == [90, 190, 468, 244]
+    assert captured["source_frame_index"] == 7
+    assert captured["corner_space"] == "clip_frame"
+    assert captured["image_shape"] == (244, 468, 3)
+
+    assert result["annotation"]["corners"] == [
+        [10.0, 10.0],
+        [458.0, 10.0],
+        [458.0, 234.0],
+        [10.0, 234.0],
+    ]
+    assert result["summary"] == {"board_annotation_count": 1}

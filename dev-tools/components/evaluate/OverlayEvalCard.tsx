@@ -23,6 +23,7 @@ interface OverlayEvalCardProps {
   result: OverlayEvalResult;
   pinned?: boolean;
   onPin?: () => void;
+  onToggleNoOverlay?: () => void;
   editedFen?: string;
   onEditFen?: (fen: string) => void;
   onSave?: () => void;
@@ -30,12 +31,14 @@ interface OverlayEvalCardProps {
   isSaved?: boolean;
   isRejected?: boolean;
   isSaving?: boolean;
+  isPersistingNoOverlay?: boolean;
 }
 
 export default function OverlayEvalCard({
   result,
   pinned,
   onPin,
+  onToggleNoOverlay,
   editedFen,
   onEditFen,
   onSave,
@@ -43,6 +46,7 @@ export default function OverlayEvalCard({
   isSaved,
   isRejected,
   isSaving,
+  isPersistingNoOverlay,
 }: OverlayEvalCardProps) {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -50,6 +54,7 @@ export default function OverlayEvalCard({
   const fenLoading = result.fen_loading ?? false;
   const isWarning = result.status === "warning";
   const isNoOverlay = result.status === "no_overlay";
+  const canRestoreNoOverlay = isNoOverlay && !!result.status_before_manual;
   const detectorFound = result.detector_found !== false;
   const isDetectorMiss = !detectorFound && !!result.image_b64;
   const savedState = result.already_saved || isSaved;
@@ -162,6 +167,10 @@ export default function OverlayEvalCard({
           </label>
           {fenLoading ? (
             <Skeleton className="w-[200px] h-[200px] rounded" />
+          ) : isNoOverlay ? (
+            <div className="w-[200px] h-[200px] rounded border border-dashed flex items-center justify-center text-xs text-muted-foreground">
+              Ignored as not overlay
+            </div>
           ) : currentFen ? (
             <ChessBoard fen={currentFen} size={200} />
           ) : (
@@ -174,11 +183,17 @@ export default function OverlayEvalCard({
 
       {/* Warning / FEN display */}
       {result.warning && (
-        <div className="text-xs px-2 py-1 rounded bg-yellow-50 text-yellow-800 border border-yellow-200">
+        <div
+          className={`text-xs px-2 py-1 rounded border ${
+            isNoOverlay
+              ? "bg-red-50 text-red-800 border-red-200"
+              : "bg-yellow-50 text-yellow-800 border-yellow-200"
+          }`}
+        >
           {result.warning}
         </div>
       )}
-      {currentFen && (
+      {currentFen && !isNoOverlay && (
         <div className="flex items-center gap-2 flex-wrap">
           <span
             className={`text-xs px-2 py-0.5 rounded ${
@@ -199,7 +214,7 @@ export default function OverlayEvalCard({
         {/* Copy FEN */}
         <button
           onClick={copyFen}
-          disabled={fenLoading || !currentFen}
+          disabled={fenLoading || !currentFen || isNoOverlay}
           className="flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted disabled:opacity-40 transition-colors"
           title="Copy FEN"
         >
@@ -216,7 +231,7 @@ export default function OverlayEvalCard({
           <Dialog>
             <DialogTrigger asChild>
               <button
-                disabled={locked || fenLoading}
+                disabled={locked || fenLoading || isNoOverlay}
                 className="p-1 rounded border hover:bg-muted disabled:opacity-40"
                 title="Edit FEN"
               >
@@ -245,11 +260,26 @@ export default function OverlayEvalCard({
 
         <div className="flex-1" />
 
+        {onToggleNoOverlay && (!isNoOverlay || canRestoreNoOverlay) && (
+          <button
+            onClick={onToggleNoOverlay}
+            disabled={isPersistingNoOverlay}
+            className={`text-xs px-2 py-1 rounded border disabled:opacity-40 ${
+              canRestoreNoOverlay
+                ? "border-blue-300 text-blue-700 hover:bg-blue-50"
+                : "border-red-300 text-red-700 hover:bg-red-50"
+            }`}
+            title={canRestoreNoOverlay ? "Restore previous status" : "Mark as not overlay"}
+          >
+            {isPersistingNoOverlay ? "Saving..." : canRestoreNoOverlay ? "Restore" : "No Overlay"}
+          </button>
+        )}
+
         {/* Save */}
         {onSave && (
           <button
             onClick={onSave}
-            disabled={locked || isSaving || fenLoading || !currentFen}
+            disabled={locked || isSaving || fenLoading || !currentFen || isNoOverlay}
             className="p-1 rounded border bg-green-600 text-white border-green-600 disabled:opacity-40"
             title="Save"
           >

@@ -21,6 +21,8 @@ export default function PhysicalRuntimeSessionPage() {
     exact_match_rate: number | null;
     pin_state: Record<string, boolean>;
     created_at: string;
+    model_label?: string | null;
+    model_path?: string | null;
   } | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -36,6 +38,8 @@ export default function PhysicalRuntimeSessionPage() {
           exact_match_rate: data.exact_match_rate,
           pin_state: data.pin_state ?? {},
           created_at: data.created_at,
+          model_label: data.model_label ?? null,
+          model_path: data.model_path ?? null,
         });
       } catch (error) {
         const raw = error instanceof Error ? error.message : "Failed to load session";

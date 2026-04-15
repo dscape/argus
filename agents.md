@@ -61,12 +61,6 @@ Always use `python -m pipeline <command>` for pipeline operations. Do not write 
 
 Docker: `docker exec argus-dev-api python3 -m pipeline.cli <command>` or use `make docker-*` targets.
 
-## Progress Tracking
-
-- Always read `progress.md` before continuing active branch work or resuming an interrupted task.
-- Keep `progress.md` updated as findings, decisions, architecture changes, and validation results land.
-- Before handing work back, review `progress.md` and make sure it reflects the current state of the branch.
-
 ## Conventions
 
 - Python 3.10+, Ruff (100 char lines), mypy strict mode
@@ -74,7 +68,5 @@ Docker: `docker exec argus-dev-api python3 -m pipeline.cli <command>` or use `ma
 - PostgreSQL for persistence, in-memory dicts for ephemeral job state
 - Background jobs: thread + job dict, poll-based status, cancel via `threading.Event`
 - Model versioning: `v{code}r{revision}` (e.g. `v2r3`). Bump code version on architecture changes
-- Default runtime overlay localization uses the committed YOLO detector in `weights/overlay_yolo/`
-- `data/videos/ground_truth.json`, `tests/fixtures/frames/ground_truth.json`, and `/annotate/bbox` are detector training/eval labels only — runtime does not read those bboxes directly
 - If you change the overlay detector, run `scripts/visualize_overlay_tests.py` on every iteration and treat that visual output as mandatory validation
 - Before completing tasks: run `make typecheck`, `make lint`, `make test` — all must pass

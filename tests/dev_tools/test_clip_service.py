@@ -138,6 +138,64 @@ def test_get_overlay_frame_png_uses_source_video_and_db_clip(monkeypatch, tmp_pa
     assert float(decoded[:, :, 2].mean()) < 40.0
 
 
+def test_tiny_camera_bbox_marks_metadata_unusable_and_falls_back_to_clip_frame(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    video_path = tmp_path / "demo123.avi"
+    writer = cv2.VideoWriter(
+        str(video_path),
+        cv2.VideoWriter_fourcc(*"MJPG"),
+        5.0,
+        (64, 64),
+    )
+    assert writer.isOpened()
+    writer.write(np.full((64, 64, 3), (0, 0, 255), dtype=np.uint8))
+    writer.release()
+
+    frames = torch.zeros((1, 3, 224, 224), dtype=torch.uint8)
+    frames[0, 1] = 255
+    clip = {
+        "frames": frames,
+        "frame_indices": torch.tensor([0], dtype=torch.long),
+        "source_video_id": "demo123",
+    }
+    buffer = io.BytesIO()
+    torch.save(clip, buffer)
+
+    monkeypatch.setattr(
+        clip_service,
+        "_load_db_clip_row",
+        lambda clip_id: {
+            "id": clip_id,
+            "video_id": "demo123",
+            "overlay_bbox": (10, 12, 16, 20),
+            "camera_bbox": (0, 0, 8, 8),
+            "ref_resolution": (64, 64),
+        },
+    )
+    monkeypatch.setattr(clip_service, "_get_video_path", lambda video_id: str(video_path))
+
+    session_id = clip_service.create_session(
+        buffer.getvalue(),
+        "clip_overlay_demo123_clip9_0.pt",
+        source_filepath=str(video_path),
+    )
+    try:
+        result = clip_service.inspect(session_id)
+        png_bytes = clip_service.get_camera_frame_png(session_id, 0, padding_px=20)
+    finally:
+        clip_service.delete_session(session_id)
+
+    assert result["metadata"]["camera_bbox_usable"] is False
+    decoded = cv2.imdecode(np.frombuffer(png_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert decoded is not None
+    assert decoded.shape[:2] == (224, 224)
+    assert float(decoded[:, :, 1].mean()) > 200.0
+    assert float(decoded[:, :, 0].mean()) < 40.0
+    assert float(decoded[:, :, 2].mean()) < 40.0
+
+
 def test_save_and_load_annotation_uses_clip_stem(monkeypatch, tmp_path) -> None:
     annotations_root = tmp_path / "clip_annotations"
     monkeypatch.setattr(clip_service, "_ANNOTATIONS_ROOT", annotations_root)

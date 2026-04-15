@@ -7,7 +7,6 @@ import {
   CartesianGrid,
   Line,
   LineChart,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -16,15 +15,16 @@ import {
 
 import PhysicalRuntimeCard from "@/components/evaluate/PhysicalRuntimeCard";
 import {
-  getModelVersions,
   createPhysicalRuntimeSession,
   inspectPhysicalRuntimeFrames,
+  listPhysicalRuntimeModels,
   listPhysicalRuntimeSessions,
   physicalRuntimeSessionImageUrl,
   samplePhysicalRuntimeFrames,
   savePhysicalRuntimeEval,
   updatePhysicalRuntimePins,
   type PhysicalRuntimeEvalResult,
+  type PhysicalRuntimeModelOption,
   type PhysicalRuntimeSession,
 } from "@/lib/api";
 
@@ -42,6 +42,8 @@ interface EvalPoint {
     stateless_square_accuracy?: number;
     stateless_non_empty_accuracy?: number;
     stateless_exact_match_rate?: number;
+    model_path?: string;
+    model_label?: string;
   } | null;
 }
 
@@ -54,6 +56,8 @@ interface PhysicalRuntimeInspectorProps {
     exact_match_rate: number | null;
     pin_state: Record<string, boolean>;
     created_at: string;
+    model_label?: string | null;
+    model_path?: string | null;
   };
 }
 
@@ -62,6 +66,8 @@ interface BatchSummary {
   totalSquares: number;
   temporalCorrectSquares: number;
   statelessCorrectSquares: number;
+  temporalErrorCount: number;
+  statelessErrorCount: number;
   nonEmptySquares: number;
   temporalNonEmptyCorrect: number;
   statelessNonEmptyCorrect: number;
@@ -92,6 +98,21 @@ function formatPercent(value: number | null | undefined) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function formatModelLabel(value: string | null | undefined) {
+  if (!value) return null;
+  if (!value.includes("/")) return value;
+
+  const parts = value.split("/");
+  const filename = parts.at(-1) ?? value;
+  if (filename === "best.pt" && parts.at(-2) === "physical") {
+    return "default";
+  }
+  if (filename === "board_probe.pt" || filename === "linear_probe.pt") {
+    return parts.at(-2) ?? value;
+  }
+  return filename;
+}
+
 function thumbnailSrc(
   result: PhysicalRuntimeEvalResult,
   sessionId: string | null,
@@ -114,6 +135,14 @@ function computeSummary(results: PhysicalRuntimeEvalResult[]): BatchSummary | nu
   );
   const statelessCorrectSquares = results.reduce(
     (sum, result) => sum + (64 - result.stateless_error_count),
+    0,
+  );
+  const temporalErrorCount = results.reduce(
+    (sum, result) => sum + result.temporal_error_count,
+    0,
+  );
+  const statelessErrorCount = results.reduce(
+    (sum, result) => sum + result.stateless_error_count,
     0,
   );
   const nonEmptySquares = results.reduce(
@@ -144,6 +173,8 @@ function computeSummary(results: PhysicalRuntimeEvalResult[]): BatchSummary | nu
     totalSquares,
     temporalCorrectSquares,
     statelessCorrectSquares,
+    temporalErrorCount,
+    statelessErrorCount,
     nonEmptySquares,
     temporalNonEmptyCorrect,
     statelessNonEmptyCorrect,
@@ -202,7 +233,8 @@ export default function PhysicalRuntimeInspector({
   const [recentSessions, setRecentSessions] = useState<PhysicalRuntimeSession[]>([]);
   const [showSessionList, setShowSessionList] = useState(false);
   const [emptyMessage, setEmptyMessage] = useState<string | null>(null);
-  const [modelVersion, setModelVersion] = useState<string | null>(null);
+  const [modelOptions, setModelOptions] = useState<PhysicalRuntimeModelOption[]>([]);
+  const [modelPath, setModelPath] = useState<string>(initialSession?.model_path ?? "");
 
   const inspectedIds = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
@@ -210,7 +242,17 @@ export default function PhysicalRuntimeInspector({
 
   useEffect(() => {
     fetchHistory();
-    getModelVersions().then((versions) => setModelVersion(versions.physical ?? null));
+    listPhysicalRuntimeModels()
+      .then(({ models }) => {
+        setModelOptions(models);
+        setModelPath((current) => {
+          if (current) return current;
+          return models.find((model) => model.is_default)?.path ?? models[0]?.path ?? "";
+        });
+      })
+      .catch((error) => {
+        console.warn("Failed to load physical runtime models:", error);
+      });
   }, []);
 
   useEffect(() => {
@@ -254,6 +296,13 @@ export default function PhysicalRuntimeInspector({
       console.warn("Failed to fetch sessions:", error);
     }
   }
+
+  const selectedModel = useMemo(
+    () => modelOptions.find((option) => option.path === modelPath) ?? null,
+    [modelOptions, modelPath],
+  );
+  const selectedModelLabel =
+    selectedModel?.label ?? formatModelLabel(initialSession?.model_label ?? modelPath) ?? "default";
 
   const togglePin = useCallback(
     (annotationId: string) => {
@@ -325,7 +374,10 @@ export default function PhysicalRuntimeInspector({
 
       const batchResults = await inspectPhysicalRuntimeFrames(
         frames.map((frame) => frame.annotation_id),
-        { signal: controller.signal },
+        {
+          model_path: modelPath || undefined,
+          signal: controller.signal,
+        },
       );
       collected.push(...batchResults);
       setResults(batchResults);
@@ -354,7 +406,8 @@ export default function PhysicalRuntimeInspector({
         stateless_square_accuracy: summary.statelessSquareAccuracy,
         stateless_non_empty_accuracy: summary.statelessNonEmptyAccuracy,
         stateless_exact_match_rate: summary.statelessExactFrames / summary.totalFrames,
-        notes: modelVersion ?? undefined,
+        notes: selectedModelLabel,
+        model_path: modelPath || undefined,
       });
       await fetchHistory();
 
@@ -401,24 +454,16 @@ export default function PhysicalRuntimeInspector({
       day: "numeric",
     }),
     accuracy: Math.round(evaluation.accuracy * 1000) / 10,
-    non_empty_accuracy:
-      evaluation.per_class?.non_empty_accuracy != null
-        ? Math.round(evaluation.per_class.non_empty_accuracy * 1000) / 10
-        : null,
     exact_match_rate:
       evaluation.per_class?.exact_match_rate != null
         ? Math.round(evaluation.per_class.exact_match_rate * 1000) / 10
         : null,
-    elapsed_ms_avg: evaluation.per_class?.elapsed_ms_avg ?? null,
-    images_per_minute: evaluation.per_class?.images_per_minute ?? null,
-    notes: evaluation.notes,
+    model_label:
+      formatModelLabel(
+        evaluation.per_class?.model_label ?? evaluation.per_class?.model_path ?? evaluation.notes,
+      ) ?? "default",
     sample_size: evaluation.sample_size,
   }));
-
-  const hasPerformanceData = chartData.some((datum) => datum.elapsed_ms_avg != null);
-  const versionLines = chartData
-    .map((datum, index) => ({ ...datum, idx: index }))
-    .filter((datum) => datum.notes && /^v\d/i.test(datum.notes));
 
   return (
     <div className="space-y-4">
@@ -437,6 +482,20 @@ export default function PhysicalRuntimeInspector({
           max={200}
           className="w-16 px-2 py-1.5 border rounded text-sm"
         />
+        <input
+          list="physical-runtime-models"
+          value={modelPath}
+          onChange={(event) => setModelPath(event.target.value)}
+          placeholder="weights/physical/best.pt"
+          className="min-w-72 flex-1 max-w-xl px-2 py-1.5 border rounded text-sm font-mono"
+        />
+        <datalist id="physical-runtime-models">
+          {modelOptions.map((option) => (
+            <option key={option.path} value={option.path}>
+              {option.label}
+            </option>
+          ))}
+        </datalist>
         <button
           onClick={runBatch}
           disabled={loading}
@@ -444,11 +503,9 @@ export default function PhysicalRuntimeInspector({
         >
           {loading ? "Inspecting..." : "Sample & Inspect"}
         </button>
-        {modelVersion && (
-          <span className="text-xs text-muted-foreground font-mono">
-            model: {modelVersion}
-          </span>
-        )}
+        <span className="text-xs text-muted-foreground font-mono">
+          model: {selectedModelLabel}
+        </span>
 
         <div className="flex-1" />
 
@@ -460,7 +517,7 @@ export default function PhysicalRuntimeInspector({
             {sessionId ? <span className="font-mono">{sessionId}</span> : "Sessions"}
           </button>
           {showSessionList && (
-            <div className="absolute right-0 top-full mt-1 z-50 w-72 bg-background border rounded-lg shadow-lg overflow-hidden">
+            <div className="absolute right-0 top-full mt-1 z-50 w-80 bg-background border rounded-lg shadow-lg overflow-hidden">
               {recentSessions.length > 0 ? (
                 <div className="max-h-64 overflow-y-auto">
                   {recentSessions.map((session) => (
@@ -474,10 +531,10 @@ export default function PhysicalRuntimeInspector({
                         session.id === sessionId ? "bg-muted/30" : ""
                       }`}
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="font-mono text-muted-foreground">{session.id}</span>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-muted-foreground truncate">{session.id}</span>
                         {session.square_accuracy != null && (
-                          <span className="font-medium">
+                          <span className="font-medium shrink-0">
                             {(session.square_accuracy * 100).toFixed(1)}%
                           </span>
                         )}
@@ -490,8 +547,8 @@ export default function PhysicalRuntimeInspector({
                           minute: "2-digit",
                         })}
                         {" · "}n={session.sample_size}
-                        {session.non_empty_accuracy != null
-                          ? ` · ${(session.non_empty_accuracy * 100).toFixed(1)}% non-empty`
+                        {session.model_label
+                          ? ` · ${formatModelLabel(session.model_label)}`
                           : ""}
                       </div>
                     </button>
@@ -549,122 +606,89 @@ export default function PhysicalRuntimeInspector({
       )}
 
       {chartData.length >= 2 && (
-        <div
-          className={`grid gap-4 ${hasPerformanceData ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}
-        >
-          <div className="border rounded-lg p-3">
-            <h3 className="text-sm font-medium mb-2">
-              Temporal square / non-empty accuracy over time
-            </h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
-                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} />
-                <YAxis
-                  domain={[0, 100]}
-                  tick={{ fontSize: 10 }}
-                  tickLine={false}
-                  tickFormatter={(value) => `${value}%`}
-                  width={40}
-                />
-                <Tooltip
-                  formatter={(value, name) => [
-                    `${value}%`,
-                    name === "accuracy" ? "Square accuracy" : "Non-empty accuracy",
-                  ]}
-                  labelFormatter={(label, payload) => {
-                    const datum = payload?.[0]?.payload;
-                    return `${label}${datum?.notes ? ` — ${datum.notes}` : ""} (n=${datum?.sample_size ?? "?"})`;
-                  }}
-                />
-                {versionLines.map((line) => (
-                  <ReferenceLine
-                    key={line.idx}
-                    x={line.date}
-                    stroke="currentColor"
-                    strokeDasharray="4 4"
-                    strokeOpacity={0.4}
-                    label={{
-                      value: line.notes!.split(":")[0].trim(),
-                      position: "top",
-                      fontSize: 10,
-                      fontWeight: "bold",
-                    }}
-                  />
-                ))}
-                <Line
-                  type="monotone"
-                  dataKey="accuracy"
-                  name="Square accuracy"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                  dot={{ r: 3 }}
-                  activeDot={{ r: 5 }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="non_empty_accuracy"
-                  name="Non-empty accuracy"
-                  stroke="#22c55e"
-                  strokeWidth={1.5}
-                  dot={{ r: 2 }}
-                  strokeDasharray="4 4"
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-          {hasPerformanceData && (
-            <div className="border rounded-lg p-3">
-              <h3 className="text-sm font-medium mb-2">Runtime latency over time</h3>
-              <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={chartData.filter((datum) => datum.elapsed_ms_avg != null)}>
-                  <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
-                  <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} />
-                  <YAxis tick={{ fontSize: 10 }} tickLine={false} width={50} />
-                  <Tooltip
-                    formatter={(value) => [`${value} ms`, "Avg inspect time"]}
-                    labelFormatter={(label, payload) => {
-                      const datum = payload?.[0]?.payload;
-                      return `${label} (n=${datum?.sample_size ?? "?"})`;
-                    }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="elapsed_ms_avg"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                    dot={{ r: 3 }}
-                    activeDot={{ r: 5 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
+        <div className="border rounded-lg p-3">
+          <h3 className="text-sm font-medium mb-2">Physical runtime history</h3>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
+              <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} />
+              <YAxis
+                domain={[0, 100]}
+                tick={{ fontSize: 10 }}
+                tickLine={false}
+                tickFormatter={(value) => `${value}%`}
+                width={40}
+              />
+              <Tooltip
+                formatter={(value, name) => [
+                  `${value}%`,
+                  name === "accuracy" ? "Square accuracy" : "Exact boards",
+                ]}
+                labelFormatter={(label, payload) => {
+                  const datum = payload?.[0]?.payload;
+                  return `${label} — ${datum?.model_label ?? "default"} (n=${datum?.sample_size ?? "?"})`;
+                }}
+              />
+              <Line
+                type="monotone"
+                dataKey="accuracy"
+                name="Square accuracy"
+                stroke="currentColor"
+                strokeWidth={2}
+                dot={{ r: 3 }}
+                activeDot={{ r: 5 }}
+              />
+              <Line
+                type="monotone"
+                dataKey="exact_match_rate"
+                name="Exact boards"
+                stroke="#22c55e"
+                strokeWidth={1.5}
+                dot={{ r: 2 }}
+                strokeDasharray="4 4"
+              />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
       )}
 
       {summary && (
-        <div className="border rounded-lg p-3 space-y-2 bg-background">
-          <div className="flex items-center gap-4">
-            <span className="text-sm font-medium">
-              Temporal square accuracy: {summary.temporalCorrectSquares}/{summary.totalSquares} (
-              {formatPercent(summary.temporalSquareAccuracy)})
-            </span>
-            <div className="flex-1 h-2 bg-muted rounded overflow-hidden max-w-xs">
-              <div
-                className="h-full bg-green-500 rounded"
-                style={{ width: `${summary.temporalSquareAccuracy * 100}%` }}
-              />
-            </div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="border rounded-lg p-3">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Temporal square</p>
+            <p className="mt-1 text-xl font-semibold">
+              {formatPercent(summary.temporalSquareAccuracy)}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {summary.temporalCorrectSquares}/{summary.totalSquares} correct squares
+            </p>
           </div>
-          <div className="text-xs text-muted-foreground">
-            Non-empty: {summary.temporalNonEmptyCorrect}/{summary.nonEmptySquares} (
-            {formatPercent(summary.temporalNonEmptyAccuracy)}) · Exact boards: {summary.temporalExactFrames}/
-            {summary.totalFrames} ({formatPercent(summary.temporalExactFrames / summary.totalFrames)})
+          <div className="border rounded-lg p-3">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Exact boards</p>
+            <p className="mt-1 text-xl font-semibold">
+              {summary.temporalExactFrames}/{summary.totalFrames}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {formatPercent(summary.temporalExactFrames / summary.totalFrames)} exact matches
+            </p>
           </div>
-          <div className="text-xs text-muted-foreground">
-            Stateless square: {formatPercent(summary.statelessSquareAccuracy)} · Temporal better / worse: 
-            {summary.temporalBetterFrames}/{summary.temporalWorseFrames} frames · Avg inspect {summary.avgElapsedMs.toFixed(1)}ms
+          <div className="border rounded-lg p-3">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Temporal vs single</p>
+            <p className="mt-1 text-xl font-semibold">
+              {summary.temporalSquareAccuracy >= summary.statelessSquareAccuracy ? "+" : ""}
+              {((summary.temporalSquareAccuracy - summary.statelessSquareAccuracy) * 100).toFixed(1)} pts
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              better on {summary.temporalBetterFrames} frames · worse on {summary.temporalWorseFrames}
+            </p>
+          </div>
+          <div className="border rounded-lg p-3">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Avg inspect time</p>
+            <p className="mt-1 text-xl font-semibold">{summary.avgElapsedMs.toFixed(1)}ms</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {summary.statelessErrorCount - summary.temporalErrorCount >= 0 ? "+" : ""}
+              {summary.statelessErrorCount - summary.temporalErrorCount} squares recovered vs single
+            </p>
           </div>
         </div>
       )}
@@ -704,7 +728,7 @@ export default function PhysicalRuntimeInspector({
                     const src = thumbnailSrc(result, sessionId);
                     const title = `${result.clip_filename} · frame ${result.frame_index}\n` +
                       `${result.temporal_exact_match ? "✓ exact" : `✗ ${result.temporal_error_count} wrong`}\n` +
-                      `single ${formatPercent(result.stateless_square_accuracy)} · temp ${formatPercent(result.temporal_square_accuracy)}`;
+                      `single ${result.stateless_error_count} wrong · temp ${result.temporal_error_count} wrong`;
 
                     return (
                       <button

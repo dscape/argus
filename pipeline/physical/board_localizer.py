@@ -24,6 +24,95 @@ class BoardLocalization:
     method: str
 
 
+_LK_PARAMS = dict(
+    winSize=(21, 21),
+    maxLevel=3,
+    criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01),
+)
+
+_FB_DIST_THRESHOLD = 3.0  # max forward-backward pixel distance per corner
+_MIN_GOOD_CORNERS = 3  # need at least this many to estimate the rest
+
+
+def track_corners(
+    prev_frame_bgr: np.ndarray,
+    curr_frame_bgr: np.ndarray,
+    prev_corners: tuple[tuple[float, float], ...],
+) -> BoardLocalization | None:
+    """Track 4 board corners from *prev_frame_bgr* into *curr_frame_bgr* via optical flow.
+
+    Uses forward-backward consistency: track A->B then B->A and keep only
+    corners that round-trip within ``_FB_DIST_THRESHOLD`` pixels.  When 1
+    corner fails the check the other 3 are used to estimate a partial affine
+    transform and predict the missing corner.
+    """
+    if len(prev_corners) != 4:
+        return None
+
+    prev_gray = cv2.cvtColor(prev_frame_bgr, cv2.COLOR_BGR2GRAY)
+    curr_gray = cv2.cvtColor(curr_frame_bgr, cv2.COLOR_BGR2GRAY)
+
+    prev_pts = np.array(prev_corners, dtype=np.float32).reshape(-1, 1, 2)
+
+    # Forward pass: prev -> curr
+    next_pts, fwd_status, _ = cv2.calcOpticalFlowPyrLK(
+        prev_gray, curr_gray, prev_pts, None, **_LK_PARAMS,
+    )
+    if next_pts is None or fwd_status is None:
+        return None
+
+    # Backward pass: curr -> prev (consistency check)
+    back_pts, bwd_status, _ = cv2.calcOpticalFlowPyrLK(
+        curr_gray, prev_gray, next_pts, None, **_LK_PARAMS,
+    )
+    if back_pts is None or bwd_status is None:
+        return None
+
+    # Forward-backward distance per corner
+    fb_dist = np.linalg.norm(
+        (prev_pts - back_pts).reshape(-1, 2), axis=1,
+    )
+    good = (
+        fwd_status.flatten().astype(bool)
+        & bwd_status.flatten().astype(bool)
+        & (fb_dist < _FB_DIST_THRESHOLD)
+    )
+    n_good = int(good.sum())
+
+    if n_good < _MIN_GOOD_CORNERS:
+        return None
+
+    tracked = next_pts.reshape(-1, 2).copy()
+    h, w = curr_frame_bgr.shape[:2]
+
+    if n_good < 4:
+        # Estimate partial affine from good corners and predict the bad ones
+        src = prev_pts.reshape(-1, 2)[good]
+        dst = tracked[good]
+        transform, _ = cv2.estimateAffinePartial2D(
+            src.reshape(-1, 1, 2), dst.reshape(-1, 1, 2),
+        )
+        if transform is None:
+            return None
+        for i in range(4):
+            if not good[i]:
+                pt = np.array([prev_corners[i][0], prev_corners[i][1], 1.0])
+                tracked[i] = transform @ pt
+
+    # Bounds check
+    if np.any(tracked < 0) or np.any(tracked[:, 0] >= w) or np.any(tracked[:, 1] >= h):
+        return None
+
+    corners = tuple((float(pt[0]), float(pt[1])) for pt in tracked)
+    median_fb = float(np.median(fb_dist[good]))
+    confidence = max(0.0, 1.0 - median_fb / _FB_DIST_THRESHOLD)
+    return BoardLocalization(
+        corners=corners,  # type: ignore[arg-type]
+        confidence=confidence,
+        method="optical_flow",
+    )
+
+
 def localize_board(frame: np.ndarray, *, device: str = "cpu") -> BoardLocalization | None:
     """Return best-effort board corners for one physical broadcast frame."""
     yolo_detection = detect_otb_yolo(frame, device=device)

@@ -18,7 +18,8 @@ import numpy as np
 
 from pipeline.analysis.board_reading import read_overlay_crop
 from pipeline.analysis.config import VideoAnalysisConfig
-from pipeline.overlay.grid_detector import detect_grid
+from pipeline.overlay.board_crop import find_board_grid_in_crop, find_stable_board_grid
+from pipeline.overlay.piece_classifier import read_board_with_grid
 from pipeline.overlay.sequence_reader import LockedOverlaySequenceReader
 
 _FRAME_CACHE_MAX = 64
@@ -106,6 +107,7 @@ def open_video(video_path: str, channel_handle: str | None = None) -> dict:
         "cap": cap,
         "lock": threading.Lock(),
         "frame_cache": collections.OrderedDict(),
+        "clip_grid_cache": {},
         "calibration": calibration,
         "video_path": video_path,
         "fps": fps,
@@ -190,6 +192,95 @@ def _get_clip_calibration(clip_id: int):
     )
 
 
+def _read_overlay_crop_frame(
+    session: dict[str, Any],
+    calibration,
+    frame_index: int,
+) -> np.ndarray | None:
+    total_frames = int(session["total_frames"])
+    frame_index = max(0, min(int(frame_index), total_frames - 1))
+
+    with session["lock"]:
+        cap = session["cap"]
+        for offset in [0, -1, -5, -10]:
+            current_index = max(0, frame_index + offset)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, current_index)
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+            ox, oy, ow, oh = calibration.overlay
+            return frame[oy : oy + oh, ox : ox + ow]
+    return None
+
+
+def _clip_grid_candidate_indices(
+    clip_data: dict[str, Any],
+    *,
+    fps: float,
+    total_frames: int,
+    preferred_frame_index: int | None = None,
+) -> list[int]:
+    start_frame = max(0, int(round(float(clip_data["start_time"]) * fps)))
+    raw_end_time = clip_data.get("end_time")
+    if raw_end_time is None:
+        end_frame = max(start_frame, total_frames - 1)
+    else:
+        end_frame = max(start_frame, min(total_frames - 1, int(round(float(raw_end_time) * fps))))
+
+    midpoint = start_frame + max(0, end_frame - start_frame) // 2
+    quarter = start_frame + max(0, end_frame - start_frame) // 4
+    three_quarter = start_frame + (3 * max(0, end_frame - start_frame)) // 4
+
+    candidates = [
+        preferred_frame_index,
+        midpoint,
+        quarter,
+        three_quarter,
+        start_frame,
+        end_frame,
+    ]
+
+    result: list[int] = []
+    seen: set[int] = set()
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        clamped = max(0, min(int(candidate), total_frames - 1))
+        if clamped in seen:
+            continue
+        seen.add(clamped)
+        result.append(clamped)
+    return result
+
+
+def _get_or_init_clip_grid(
+    session: dict[str, Any],
+    clip_data: dict[str, Any],
+    calibration,
+    *,
+    preferred_frame_index: int | None = None,
+):
+    cache = session.setdefault("clip_grid_cache", {})
+    clip_id = int(clip_data["id"])
+    cached = cache.get(clip_id)
+    if cached is not None:
+        return cached
+
+    candidate_indices = _clip_grid_candidate_indices(
+        clip_data,
+        fps=float(session["fps"]),
+        total_frames=int(session["total_frames"]),
+        preferred_frame_index=preferred_frame_index,
+    )
+    grid = find_stable_board_grid(
+        lambda index: _read_overlay_crop_frame(session, calibration, index),
+        candidate_indices,
+    )
+    if grid is not None:
+        cache[clip_id] = grid
+    return grid
+
+
 def read_overlay_at_frame(
     session_id: str,
     frame_index: int,
@@ -202,8 +293,9 @@ def read_overlay_at_frame(
     if session is None:
         raise ValueError("Session not found")
 
+    clip_data = None
     if clip_id is not None:
-        _, calibration = _get_clip_calibration(clip_id)
+        clip_data, calibration = _get_clip_calibration(clip_id)
     else:
         calibration = session.get("calibration")
     if calibration is None:
@@ -220,13 +312,33 @@ def read_overlay_at_frame(
     overlay_crop_b64 = _encode_crop_b64(frame, calibration.overlay)
     camera_crop_b64 = _encode_crop_b64(frame, calibration.camera)
 
-    # Read FEN using the tiny ONNX square classifier with auto grid detection
     ox, oy, ow, oh = calibration.overlay
     overlay_img = frame[oy : oy + oh, ox : ox + ow]
 
     config = VideoAnalysisConfig(reader_backend=reader_backend, scene_backend="none", device="cpu")
-    read_result = read_overlay_crop(overlay_img, config)
-    fen = read_result.fen
+    read_result = None
+    if reader_backend == "overlay" and clip_data is not None:
+        locked_grid = _get_or_init_clip_grid(
+            session,
+            clip_data,
+            calibration,
+            preferred_frame_index=frame_index,
+        )
+        if locked_grid is not None:
+            board_state = read_board_with_grid(overlay_img, locked_grid, device=config.device)
+            read_result = {
+                "fen": board_state.fen,
+                "method": "overlay_locked_grid",
+            }
+
+    if read_result is None:
+        crop_result = read_overlay_crop(overlay_img, config)
+        read_result = {
+            "fen": crop_result.fen,
+            "method": crop_result.method,
+        }
+
+    fen = read_result["fen"]
     board: chess.Board | None = None
     if fen is not None:
         board = chess.Board(fen=None)
@@ -237,7 +349,7 @@ def read_overlay_at_frame(
         "timestamp_seconds": round(frame_index / fps, 3) if fps > 0 else 0,
         "fen": fen,
         "board_ascii": str(board) if board else None,
-        "read_method": read_result.method,
+        "read_method": read_result["method"],
         "overlay_crop_b64": overlay_crop_b64,
         "camera_crop_b64": camera_crop_b64,
     }
@@ -267,6 +379,10 @@ def detect_moves(
     num_readable = 0
     config = VideoAnalysisConfig(reader_backend=reader_backend, scene_backend="none", device="cpu")
     sequence_reader: LockedOverlaySequenceReader | None = None
+    locked_grid = None
+    clip_data = context.get("clip_data")
+    if reader_backend == "overlay" and clip_data is not None:
+        locked_grid = _get_or_init_clip_grid(session, clip_data, calibration)
 
     lock = session["lock"]
     for completed_samples, idx in enumerate(sample_indices, start=1):
@@ -285,7 +401,7 @@ def detect_moves(
         if reader_backend == "overlay":
             fen: str | None = None
             if sequence_reader is None:
-                grid = detect_grid(overlay_img)
+                grid = locked_grid or find_board_grid_in_crop(overlay_img)
                 if grid is not None:
                     sequence_reader = LockedOverlaySequenceReader(grid, device=config.device)
                     fen = sequence_reader.read(overlay_img).fen
@@ -375,6 +491,7 @@ def _build_detect_moves_context(
 
     return {
         "session": session,
+        "clip_data": clip_data,
         "calibration": calibration,
         "fps": fps,
         "start_time": start_time,

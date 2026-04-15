@@ -9,8 +9,7 @@ from typing import Any, Protocol, cast
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import Dinov2Model, Siglip2VisionModel, SiglipModel, SiglipVisionModel
-from ultralytics import YOLO  # type: ignore[attr-defined]
+from transformers import AutoConfig, Dinov2Model, Siglip2VisionModel, SiglipModel, SiglipVisionModel
 
 _WEIGHTS_ROOT = Path(__file__).resolve().parent.parent.parent.parent / "weights"
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -18,12 +17,40 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 _SIGLIP_MEAN = (0.5, 0.5, 0.5)
 _SIGLIP_STD = (0.5, 0.5, 0.5)
 
+DEFAULT_DINOV2_MODEL = "facebook/dinov2-base"
+DEFAULT_SIGLIP_MODEL = "google/siglip-base-patch16-224"
+DEFAULT_SIGLIP2_MODEL = "google/siglip2-base-patch16-224"
+DEFAULT_YOLO_MODEL = "weights/yolo_base/yolo11n.pt"
+
+
+def default_model_name_for_encoder_type(encoder_type: str) -> str:
+    normalized = encoder_type.lower()
+    if normalized in {"dino", "dinov2"}:
+        return DEFAULT_DINOV2_MODEL
+    if normalized == "siglip":
+        return DEFAULT_SIGLIP_MODEL
+    if normalized == "siglip2":
+        return DEFAULT_SIGLIP2_MODEL
+    if normalized == "yolo":
+        return DEFAULT_YOLO_MODEL
+    raise ValueError(f"Unsupported encoder_type: {encoder_type}")
+
+
+def _has_transformers_weights(directory: Path) -> bool:
+    weight_filenames = (
+        "model.safetensors",
+        "pytorch_model.bin",
+        "model.safetensors.index.json",
+        "pytorch_model.bin.index.json",
+    )
+    return any((directory / filename).exists() for filename in weight_filenames)
+
 
 def _resolve_dino_model_path(model_name: str) -> str:
     """Return a local DINO weights path if available, otherwise the HF repo id."""
     short = model_name.split("/")[-1]
     local = _WEIGHTS_ROOT / short
-    if (local / "config.json").exists():
+    if (local / "config.json").exists() and _has_transformers_weights(local):
         return str(local)
     return model_name
 
@@ -32,7 +59,7 @@ def _resolve_siglip_model_path(model_name: str) -> str:
     """Return a local SigLIP weights path if available, otherwise the HF repo id."""
     short = model_name.split("/")[-1]
     local = _WEIGHTS_ROOT / short
-    if (local / "config.json").exists():
+    if (local / "config.json").exists() and _has_transformers_weights(local):
         return str(local)
     cache_path = _resolve_hf_cache_model_path(model_name)
     if cache_path is not None:
@@ -50,12 +77,16 @@ def _resolve_hf_cache_model_path(model_name: str) -> str | None:
     refs_main = model_root / "refs" / "main"
     if refs_main.exists():
         snapshot = model_root / "snapshots" / refs_main.read_text().strip()
-        if snapshot.exists():
+        if snapshot.exists() and _has_transformers_weights(snapshot):
             return str(snapshot)
     snapshots_dir = model_root / "snapshots"
     if not snapshots_dir.exists():
         return None
-    snapshots = sorted(path for path in snapshots_dir.iterdir() if path.is_dir())
+    snapshots = sorted(
+        path
+        for path in snapshots_dir.iterdir()
+        if path.is_dir() and _has_transformers_weights(path)
+    )
     if not snapshots:
         return None
     return str(snapshots[-1])
@@ -70,6 +101,50 @@ def _resolve_yolo_model_path(model_name: str) -> str:
     if local.exists():
         return str(local)
     return model_name
+
+
+def _load_transformers_config(model_name: str) -> Any:
+    try:
+        return AutoConfig.from_pretrained(model_name, local_files_only=True)
+    except OSError:
+        return AutoConfig.from_pretrained(model_name)
+
+
+def _load_siglip_vision_model(model_name: str) -> nn.Module:
+    config = _load_transformers_config(model_name)
+    model_type = getattr(config, "model_type", None)
+    try:
+        if model_type == "siglip":
+            return cast(
+                nn.Module,
+                SiglipModel.from_pretrained(model_name, local_files_only=True).vision_model,
+            )
+        if model_type == "siglip_vision_model":
+            return SiglipVisionModel.from_pretrained(model_name, local_files_only=True)
+    except OSError:
+        if model_type == "siglip":
+            return cast(nn.Module, SiglipModel.from_pretrained(model_name).vision_model)
+        if model_type == "siglip_vision_model":
+            return SiglipVisionModel.from_pretrained(model_name)
+    raise ValueError(
+        f"Requested a SigLIP encoder for {model_name!r}, but config model_type is {model_type!r}"
+    )
+
+
+def _load_siglip2_vision_model(model_name: str) -> nn.Module:
+    config = _load_transformers_config(model_name)
+    model_type = getattr(config, "model_type", None)
+    if model_type not in {"siglip2", "siglip2_vision_model"}:
+        raise ValueError(
+            "Requested encoder_type='siglip2' for"
+            f" {model_name!r}, but config model_type is {model_type!r}."
+            " Use encoder_type='siglip' for SigLIP checkpoints or pass a real SigLIP2"
+            " checkpoint."
+        )
+    try:
+        return Siglip2VisionModel.from_pretrained(model_name, local_files_only=True)
+    except OSError:
+        return Siglip2VisionModel.from_pretrained(model_name)
 
 
 def _forward_siglip_patch_tokens(
@@ -103,7 +178,7 @@ class Dinov2Backbone(nn.Module):
 
     def __init__(
         self,
-        model_name: str = "facebook/dinov2-base",
+        model_name: str = DEFAULT_DINOV2_MODEL,
         frozen: bool = True,
         embed_dim: int | None = None,
         feature_layer_indices: Sequence[int] | None = None,
@@ -224,25 +299,14 @@ class SiglipBackbone(nn.Module, _SiglipNormalizationMixin):
 
     def __init__(
         self,
-        model_name: str = "google/siglip-base-patch16-224",
+        model_name: str = DEFAULT_SIGLIP_MODEL,
         frozen: bool = True,
         embed_dim: int | None = None,
         feature_layer_indices: Sequence[int] | None = None,
     ) -> None:
         super().__init__()
         resolved = _resolve_siglip_model_path(model_name)
-        try:
-            loaded_model: nn.Module = SiglipVisionModel.from_pretrained(
-                resolved,
-                local_files_only=True,
-            )
-        except Exception:
-            try:
-                loaded_model = SiglipModel.from_pretrained(
-                    resolved, local_files_only=True
-                ).vision_model
-            except Exception:
-                loaded_model = SiglipModel.from_pretrained(model_name).vision_model
+        loaded_model = _load_siglip_vision_model(resolved)
         self.model = loaded_model
         self._vision_model = cast(
             Any,
@@ -303,36 +367,18 @@ class SiglipBackbone(nn.Module, _SiglipNormalizationMixin):
 
 
 class Siglip2Backbone(nn.Module, _SiglipNormalizationMixin):
-    """SigLIP2 vision wrapper exposing dense patch tokens.
-
-    Falls back to cached SigLIP checkpoints when the local "siglip2" artifact is
-    actually a combined SigLIP model snapshot.
-    """
+    """SigLIP2 vision wrapper exposing dense patch tokens."""
 
     def __init__(
         self,
-        model_name: str = "google/siglip2-base-patch16-224",
+        model_name: str = DEFAULT_SIGLIP2_MODEL,
         frozen: bool = True,
         embed_dim: int | None = None,
         feature_layer_indices: Sequence[int] | None = None,
     ) -> None:
         super().__init__()
         resolved = _resolve_siglip_model_path(model_name)
-        self._fallback_siglip = False
-        try:
-            loaded_model: nn.Module = Siglip2VisionModel.from_pretrained(
-                resolved,
-                local_files_only=True,
-            )
-        except Exception:
-            try:
-                loaded_model = SiglipModel.from_pretrained(
-                    resolved, local_files_only=True
-                ).vision_model
-                self._fallback_siglip = True
-            except Exception:
-                loaded_model = SiglipModel.from_pretrained(model_name).vision_model
-                self._fallback_siglip = True
+        loaded_model = _load_siglip2_vision_model(resolved)
         self.model = loaded_model
         self._vision_model = cast(
             Any,
@@ -418,13 +464,6 @@ class Siglip2Backbone(nn.Module, _SiglipNormalizationMixin):
 
     def forward_patches(self, x: torch.Tensor) -> torch.Tensor:
         prepared = self._prepare_inputs(x)
-        if self._fallback_siglip:
-            return _forward_siglip_patch_tokens(
-                self._vision_model,
-                prepared,
-                feature_layer_indices=self.feature_layer_indices,
-            )
-
         patch_values, pixel_attention_mask, spatial_shapes = self._patchify(prepared)
         if not self.feature_layer_indices:
             outputs = self.model(
@@ -471,13 +510,15 @@ class YoloBackbone(nn.Module):
 
     def __init__(
         self,
-        model_name: str = "weights/yolo_base/yolo11n.pt",
+        model_name: str = DEFAULT_YOLO_MODEL,
         frozen: bool = True,
         feature_layer_indices: Sequence[int] | None = None,
         output_grid_size: int = 14,
     ) -> None:
         super().__init__()
         resolved = _resolve_yolo_model_path(model_name)
+        from ultralytics import YOLO  # type: ignore[attr-defined]
+
         self.model: Any = YOLO(resolved).model
         raw_feature_layers = feature_layer_indices or (16, 19, 22)
         self.feature_layer_indices = tuple(int(idx) for idx in raw_feature_layers)

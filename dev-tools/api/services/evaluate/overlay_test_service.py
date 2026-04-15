@@ -848,18 +848,29 @@ def classify_overlay_fen(
 
 
 def save_confirmed_frame_extractions(confirmations: list[dict]) -> dict:
-    """Save user-confirmed frame overlay extractions to val_real/."""
+    """Save user-confirmed frame overlay extractions to val_real/.
+
+    Supports two payload shapes:
+    - screening-frame samples via ``video_id`` + ``frame_name``
+    - custom board crops via ``sample_id`` + ``image_b64``
+    """
     REAL_OVERLAY_TEST_DIR.mkdir(parents=True, exist_ok=True)
 
     saved = 0
     errors: list[str] = []
 
     for conf in confirmations:
+        sample_id_raw = str(conf.get("sample_id", "")).strip()
+        sample_id = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in sample_id_raw)
+        while "--" in sample_id:
+            sample_id = sample_id.replace("--", "-")
+        sample_id = sample_id.strip("-")
+
         video_id = conf.get("video_id", "")
         frame_name = conf.get("frame_name", "")
         fen = conf.get("fen", "")
         image_b64 = conf.get("image_b64")
-        label = f"{video_id}:{frame_name}"
+        label = sample_id or f"{video_id}:{frame_name}"
 
         if image_b64:
             try:
@@ -879,7 +890,10 @@ def save_confirmed_frame_extractions(confirmations: list[dict]) -> dict:
             continue
 
         fen_hyphenated = fen.replace("/", "-")
-        out_filename = f"f_{video_id}_{frame_name}_{fen_hyphenated}.jpg"
+        if sample_id:
+            out_filename = f"r{sample_id}_{fen_hyphenated}.jpg"
+        else:
+            out_filename = f"f_{video_id}_{frame_name}_{fen_hyphenated}.jpg"
         out_path = REAL_OVERLAY_TEST_DIR / out_filename
 
         _, buf = cv2.imencode(".jpg", board_crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
@@ -1258,6 +1272,17 @@ def create_overlay_eval_session(
     return {"session_id": session_id}
 
 
+def _overlay_eval_metrics_from_results(results: list[dict]) -> tuple[int, float | None, float | None]:
+    """Derive overlay-eval summary metrics from the stored per-sample results."""
+    sample_size = len(results)
+    if sample_size == 0:
+        return 0, None, None
+
+    detected = sum(1 for result in results if result.get("status") != "no_overlay")
+    fen_success = sum(1 for result in results if result.get("status") == "ok")
+    return sample_size, detected / sample_size, fen_success / sample_size
+
+
 def get_overlay_eval_session(session_id: str) -> dict | None:
     """Fetch an overlay detection evaluation session by ID."""
     with get_conn() as conn:
@@ -1303,6 +1328,42 @@ def list_overlay_eval_sessions(limit: int = 20) -> list[dict]:
                 }
                 for row in cur.fetchall()
             ]
+
+
+def update_overlay_eval_results(session_id: str, results: list[dict]) -> dict:
+    """Replace an overlay detection session's results and recompute its metrics."""
+    sample_size, detection_rate, fen_success_rate = _overlay_eval_metrics_from_results(results)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE overlay_eval_sessions
+                   SET results = %s,
+                       sample_size = %s,
+                       detection_rate = %s,
+                       fen_success_rate = %s
+                   WHERE id = %s
+                   RETURNING id""",
+                (
+                    json.dumps(results),
+                    sample_size,
+                    detection_rate,
+                    fen_success_rate,
+                    session_id,
+                ),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return {"error": f"Session {session_id} not found"}
+            conn.commit()
+
+    return {
+        "ok": True,
+        "sample_size": sample_size,
+        "detection_rate": detection_rate,
+        "fen_success_rate": fen_success_rate,
+        "results": results,
+    }
 
 
 def update_overlay_eval_pins(session_id: str, pin_state: dict) -> dict:

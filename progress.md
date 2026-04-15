@@ -1,5 +1,55 @@
 # Progress
 
+## 2026-04-15
+
+### Training warning cleanup
+- Fixed the non-YOLO training import path in `src/argus/model/vision_encoder.py`.
+  - `ultralytics` is now imported lazily inside `YoloBackbone` instead of at module import time.
+  - This stops pulling both `cv2` and `av` into every training process just by importing the shared vision encoder, which was the source of the recurring macOS `AVFFrameReceiver` / `AVFAudioReceiver` duplicate-class warnings during non-YOLO runs.
+- Removed the silent `siglip2 -> siglip` fallback in `src/argus/model/vision_encoder.py`.
+  - `Siglip2Backbone` now inspects the checkpoint config first and fails fast unless the checkpoint is actually a SigLIP2 config (`siglip2` / `siglip2_vision_model`).
+  - This makes the current Hugging Face `google/siglip2-base-patch16-224` mismatch explicit instead of letting experiments run under a misleading `siglip2` label while actually using SigLIP weights.
+- Normalized training-script encoder defaults so model names match the selected encoder type.
+  - Added shared defaults via `default_model_name_for_encoder_type(...)`.
+  - Updated:
+    - `scripts/train_physical_board_probe.py`
+    - `scripts/train_physical_joint_board_reader.py`
+    - `scripts/train_physical_joint_board_reader_end2end.py`
+    - `scripts/train_physical_move_model.py`
+  - End-to-end and move-model training now default to `siglip` instead of the currently misleading `siglip2` default, while explicit `--*-encoder-type siglip2` runs now fail clearly until a real SigLIP2 checkpoint is provided.
+- Added regression coverage in `tests/test_argus_model.py` for:
+  - encoder-type default model resolution, and
+  - rejecting SigLIP checkpoints when `encoder_type="siglip2"` is requested.
+
+### Manual physical-train clip prep
+- Audited the current ready local videos with an explicit source-diversity goal instead of just taking the newest ready clips.
+- Current manual-labeling bottleneck remains train coverage, not val coverage.
+  - manual train annotations: `208` boards from `3` source videos
+  - held-out val annotations: `847` boards from `5` source videos
+- Generated `12` new physical-train clips into `data/argus/train_real/` across three train-assigned source videos chosen for style diversity and actual clip yield:
+  - `@STLChessClub` / `hXgd42rAa-4`: `2` clips
+  - `@ChessBaseIndiaHindi` / `fGzLaA9uPEU`: `5` clips
+  - `@FIDEchess` / `RyXsGZckLHQ`: `5` clips
+- New clip files:
+  - `clip_overlay_hXgd42rAa-4_2.pt`
+  - `clip_overlay_hXgd42rAa-4_4.pt`
+  - `clip_overlay_fGzLaA9uPEU_clip65_3.pt`
+  - `clip_overlay_fGzLaA9uPEU_clip65_5.pt`
+  - `clip_overlay_fGzLaA9uPEU_clip65_9.pt`
+  - `clip_overlay_fGzLaA9uPEU_clip65_10.pt`
+  - `clip_overlay_fGzLaA9uPEU_clip65_20.pt`
+  - `clip_overlay_RyXsGZckLHQ_clip73_0.pt`
+  - `clip_overlay_RyXsGZckLHQ_clip73_2.pt`
+  - `clip_overlay_RyXsGZckLHQ_clip73_3.pt`
+  - `clip_overlay_RyXsGZckLHQ_clip73_4.pt`
+  - `clip_overlay_RyXsGZckLHQ_clip73_5.pt`
+- Saved dry-run audit artifacts for candidate selection under:
+  - `outputs/2026-04-15/physical_train_clip_audits/`
+- Rejected several seemingly ready candidates because they were bad annotation investments under the current pipeline:
+  - `ZP9AVIsWxnI`, `Ov8PXnJp1PU`: fragmented into tiny illegal-jump segments
+  - `ycitHs8_NY4`, `ji-ZR2Nr5gI`, `w-BBT27D_l8`: repeated hard cuts / montage-style edits
+  - `9IKtoJ914yU`, `O8ZwstOxG_A`, `GGzMsJZf0OM`: unusable camera calibration in the current auto/DB path
+
 ## 2026-04-13
 
 ### Physical v0 rebuild foundations
@@ -1469,3 +1519,226 @@
   - Passed: `make typecheck`
   - Passed: `make lint`
   - Passed: `make test`
+
+## 2026-04-15
+
+- Investigated a false positive in `/evaluate/overlay/b831c433e05f` for `qCzqMcn0Ox8:25pct`.
+- Confirmed the session persisted the sample as `status: "ok"` even though the crop is not an overlay.
+- Added a persisted overlay-eval session override path so individual samples can be toggled to `no_overlay` and session metrics are recomputed from the stored results.
+- Updated the overlay eval card UI with a `No Overlay` / `Restore` control and hid FEN actions while a sample is manually marked as not overlay.
+- Verified the current session `b831c433e05f` now stores `qCzqMcn0Ox8:25pct` as `no_overlay`.
+- Validation: `make typecheck`, `make lint`, and `make test` all pass on this branch.
+
+## 2026-04-15
+
+### Native-oblique move-model training recipe update
+- Kept the new `native_oblique` observation path for the physical move model, but changed the training recipe rather than spending more time on decoder-only tweaks.
+- Extended `scripts/train_physical_move_model.py` with three training-recipe improvements:
+  1. **Decoded checkpoint selection**
+     - new `--selection-mode {raw_val,decoded_segmental}`
+     - decoded selection runs held-out annotated sequence decoding during training and selects checkpoints by:
+       - board exact
+       - macro-F1
+       - move recall
+       - lower false-change
+     - selection reports are written per epoch (`selection_epochXXXX.json`)
+  2. **More flexible data mixture**
+     - new `--synthetic-train-repeat`
+     - new `--real-train-repeat`
+     - allows explicit weighting of synthetic vs real windows instead of a fixed naive concat
+  3. **More cautious square-reader adaptation**
+     - new `--initialized-square-reader-adaptation {full,head_only,frozen}`
+     - `head_only` freezes the imported square tokenizer while still letting the square head adapt
+- Kept backward compatibility with the old `--freeze-initialized-square-reader` flag by mapping it to the new adaptation resolution logic when no explicit adaptation mode is passed.
+
+### Native-oblique mixed-data smoke run
+- Ran a first mixed native-oblique smoke using:
+  - `--use-synthetic`
+  - `--use-real`
+  - `--synthetic-train-repeat 1`
+  - `--real-train-repeat 2`
+  - `--initialized-square-reader-adaptation head_only`
+  - `--selection-mode decoded_segmental`
+- Output:
+  - `outputs/2026-04-15/physical_move_model_native_oblique_mixed_headonly_selectdecode_smoke1/`
+- Effective train composition:
+  - synthetic clips: `32`
+  - real clips: `147`
+  - repeated train size: `326`
+- Best selected epoch: `2`
+- Best decoded held-out selection metrics:
+  - board exact `0.0308`
+  - non-empty `0.7098`
+  - macro-F1 `0.6612`
+  - move recall `0.2344`
+  - false-change `0.0401`
+- Comparison:
+  - better than the earlier native-oblique real-only training smokes on recall / macro / board exact
+  - still worse than the old clip-oblique checkpoint evaluated on native-oblique frames (`0.0604` board exact)
+- Artifact summary:
+  - `outputs/2026-04-15/physical_move_model_native_oblique_mixed_headonly_selectdecode_smoke1/summary.md`
+  - `outputs/2026-04-15/native_oblique_training_comparison.md`
+
+### Current conclusion
+- The new `native_oblique` path remains the right direction.
+- Decoder-only work is still not the main limiter.
+- The updated recipe helped relative to the earlier native-oblique training smokes.
+- But the training path still has not beaten the surprisingly strong baseline of simply taking the older checkpoint and feeding it better native-oblique inputs.
+- So the bottleneck is now clearly the **training recipe / adaptation strategy**, not missing native-oblique plumbing.
+
+### Warm-start move-model follow-up
+- Implemented full move-model warm start in `scripts/train_physical_move_model.py`:
+  - new flag: `--initialize-move-model-checkpoint`
+  - mutually exclusive with `--initialize-square-reader-checkpoint`
+  - loads the full prior move-model weights and reuses that checkpoint's model config
+- Added explicit legacy checkpoint normalization for the earlier mislabeled SigLIP checkpoints:
+  - helper: `normalized_checkpoint_model_config(...)`
+  - if a saved checkpoint requests `vision_encoder_type=siglip2` but the underlying HF config is actually `siglip`, the training script now remaps it to `siglip` explicitly while logging a warning
+  - this keeps the earlier move-model checkpoints usable after the encoder fail-fast cleanup, without reintroducing a silent model-construction fallback
+- Added regression coverage:
+  - `tests/pipeline/test_physical_move_model_train_script.py`
+
+### Warm-start native-oblique mixed-data smoke run
+- Ran the first full move-model warm-start experiment using:
+  - `--initialize-move-model-checkpoint outputs/2026-04-14/physical_move_model_oblique_initfreeze_smoke1/best.pt`
+  - `--observation-mode native_oblique`
+  - `--use-synthetic`
+  - `--use-real`
+  - `--synthetic-train-repeat 1`
+  - `--real-train-repeat 4`
+  - `--initialized-square-reader-adaptation head_only`
+  - `--selection-mode decoded_segmental`
+  - `--lr 5e-5`
+- Output:
+  - `outputs/2026-04-15/physical_move_model_native_oblique_warmstart_mixed_headonly_selectdecode_r4_smoke1/`
+- Effective train composition:
+  - synthetic clips: `32`
+  - real clips: `147`
+  - repeated train size: `620`
+- Best selected epoch: `1`
+- Best decoded held-out selection metrics:
+  - board exact `0.0402`
+  - non-empty `0.6944`
+  - macro-F1 `0.6317`
+  - move recall `0.1875`
+  - false-change `0.0388`
+- Comparison:
+  - better board exact than the prior mixed native-oblique square-reader-init run (`0.0308`)
+  - still worse than the untouched old checkpoint evaluated on native-oblique (`0.0604`)
+- Artifact summaries:
+  - `outputs/2026-04-15/physical_move_model_native_oblique_warmstart_mixed_headonly_selectdecode_r4_smoke1/summary.md`
+  - updated `outputs/2026-04-15/native_oblique_training_comparison.md`
+
+### Updated move-model conclusion
+- Warm start from the older move-model checkpoint is the right direction architecturally.
+- It is clearly better than restarting from square-reader initialization.
+- But the current fine-tuning recipe is still destructive enough to lose board quality almost immediately; the best checkpoint was the first epoch.
+- So the next low-hanging move is **not** more decoder work and probably not a larger model change.
+- It is a **more conservative warm-start adaptation recipe**:
+  - lower LR
+  - less aggressive real oversampling
+  - possibly freeze more of the square-reader / observation path during adaptation
+
+### Internal decoded-selection split + recall-biased real sampling
+- Started the next plan task on the model/data side instead of the decoder side.
+- Changed decoded checkpoint selection in `scripts/train_physical_move_model.py` so it can use an internal sequence-selection split from `train_real` instead of always reading the final held-out annotated eval set.
+  - new helper: `resolve_selection_sequence_source(...)`
+  - new CLI flag: `--selection-sequence-source {auto,heldout_eval,real_val}`
+  - `auto` now prefers the internal real-video split when `--use-real` and `--real-val-source-videos` are set
+- Added replay-derived full-clip selection loading in `pipeline/physical/move_data.py`:
+  - new function: `load_real_move_sequences(...)`
+  - this builds full decoded-selection sequences directly from `train_real` clip metadata / replay labels, preserving `native_oblique` support
+- Added a first explicit recall-bias knob for real training data:
+  - new `build_real_move_window_clips(...)` arg: `positive_window_repeat`
+  - new CLI flag: `--real-move-positive-window-repeat`
+  - positive move windows can now be oversampled without also repeating the easy no-move windows
+- Hardened native-oblique real replay loading for older generated `train_real` clips:
+  - `_load_real_native_context(...)` now accepts:
+    1. direct clip metadata when present,
+    2. DB clip ids / DB-style filenames when available,
+    3. channel-calibration fallback using `source_video_id + source_channel_handle` when the clip predates DB-style metadata
+  - this fixed native-oblique training crashes on clips like `clip_overlay_hXgd42rAa-4_2.pt`
+- Kept the existing negative-window controls in place:
+  - `--real-negative-window-stride`
+  - `--real-max-negative-windows-per-clip`
+- Added regression coverage:
+  - `tests/pipeline/test_physical_move_data.py`
+  - `tests/pipeline/test_physical_move_model_train_script.py`
+
+### Internal-selection rebaseline smoke
+- Ran a first honest warm-start rebaseline with decoded selection moved off the held-out annotated eval set and onto the internal real-video split.
+- Run:
+  - `outputs/2026-04-15/physical_move_model_native_oblique_warmstart_internalrealval_selectdecode_r4_smoke1/`
+- Recipe:
+  - warm start from `outputs/2026-04-14/physical_move_model_oblique_initfreeze_smoke1/best.pt`
+  - `native_oblique`
+  - synthetic repeat `1x`
+  - real repeat `4x`
+  - `initialized_square_reader_adaptation=head_only`
+  - `selection_mode=decoded_segmental`
+  - `selection_sequence_source=real_val`
+  - `real_move_positive_window_repeat=1`
+  - LR `5e-5`
+- Internal selection split size:
+  - only `2` real-val sequences
+  - `21` validation windows
+- Best selected epoch: `1`
+- Best internal decoded-selection metrics:
+  - board exact `0.1375`
+  - non-empty `0.8347`
+  - macro-F1 `0.8213`
+  - move recall `0.0769`
+  - false-change `0.0328`
+- Held-out annotated eval of that best checkpoint (`segmental`, `passes=0`, `drop=2`):
+  - artifact: `outputs/2026-04-15/physical_move_model_native_oblique_warmstart_internalrealval_selectdecode_r4_smoke1_eval_segmental_conservative.json`
+  - board exact `0.0142`
+  - non-empty `0.6511`
+  - macro-F1 `0.5632`
+  - move recall `0.2812`
+  - false-change `0.0699`
+- Artifact summary:
+  - `outputs/2026-04-15/physical_move_model_native_oblique_warmstart_internalrealval_selectdecode_r4_smoke1/summary.md`
+
+### Updated conclusion after the honest-selection rebaseline
+- The internal decoded-selection plumbing is correct and needed.
+- But the current default internal split is too small / too easy / too unrepresentative to replace the held-out annotated eval cleanly yet.
+- It still picked `epoch 1`, but that checkpoint generalized very poorly on the real held-out annotated eval.
+- So the next highest-value follow-up inside this same task is now:
+  - make the internal real-video selection split materially more representative (more than one source video), then
+  - re-run the conservative warm-start baseline before trusting recall-biased sampling sweeps.
+- Validation:
+  - `make typecheck` ✅
+  - `make lint` ✅
+  - `make test` ✅
+
+## 2026-04-15
+
+### Overlay geometry fix follow-up evaluation
+- Re-checked whether the new overlay board-localization / stable-clip-grid changes improved accuracy beyond the specific `RyXsGZckLHQ` failure.
+- Result is **mixed**, not a clean general win.
+
+#### Exact labeled clip frames (`RyXsGZckLHQ`, clip `73`)
+- Compared the old per-frame overlay read (`detect_grid(...)` on each frame independently) against the new clip-locked grid path in `read_overlay_at_frame(...)`.
+- On the 5 user-labeled exact frames:
+  - old per-frame read: `2/5` board exact, square accuracy `0.8688`
+  - new locked-grid read: `4/5` board exact, square accuracy `0.9969`
+- The geometry fix clearly solved the targeted early-opening failure mode.
+- Remaining miss is frame `625`, where both old and new still read one square wrong.
+
+#### Broad static board-crop eval (`data/overlay/val_real/`)
+- Compared the old single-image path (`detect_grid(...)` + square classifier) against the new single-image localization path (`find_board_grid_in_crop(...)` via `read_overlay_crop(...)`).
+- On the current `43` committed real overlay crops:
+  - old single-image path: `36/43` board exact, square accuracy `0.9597`
+  - new single-image path: `35/43` board exact, square accuracy `0.9717`
+- On the pre-existing non-`r73f*` subset (`36` samples):
+  - old single-image path: `33/36` board exact, square accuracy `0.9779`
+  - new single-image path: `32/36` board exact, square accuracy `0.9735`
+- Interpretation:
+  - the new localization logic helps the bordered-crop failure mode we were targeting,
+  - but it is not yet a general single-image accuracy improvement,
+  - and it appears to introduce at least one new regression on a clean full-board crop (`f_Ez4friJ-mjo_25pct_...`).
+
+### Current overlay conclusion
+- The stable clip-grid change is worth keeping for calibrated clip reads; it materially improves the actual `RyXsGZckLHQ` exact-frame task.
+- But the broader crop-only benchmark does **not** show a general accuracy improvement yet.
+- Next likely step, if we want both wins, is to make single-image localization fallback more conservative so clean full-board crops keep the old strict-grid behavior while bordered crops still get localized.

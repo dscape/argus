@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,8 +12,6 @@ from typing import Any
 import chess
 import cv2
 import torch
-
-logger = logging.getLogger(__name__)
 
 from argus.chess.constraint_mask import get_legal_mask
 from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
@@ -32,10 +31,13 @@ from pipeline.physical.real_board_data import (
     load_real_board_rows,
 )
 
+logger = logging.getLogger(__name__)
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_CLIPS_DIR = _PROJECT_ROOT / "data" / "argus" / "train_real"
 _DEFAULT_EVAL_ROOT = _PROJECT_ROOT / "data" / "physical" / "val"
 _DEFAULT_IMAGE_SIZE = 224
+_REAL_CLIP_RE = re.compile(r"^clip_overlay_(?P<video_id>.+?)_clip(?P<clip_id>\d+)_\d+\.pt$")
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,7 @@ def build_real_move_window_clips(
     clip_length: int = 16,
     negative_window_stride: int = 8,
     max_negative_windows_per_clip: int = 4,
+    positive_window_repeat: int = 1,
     selection_source_video_ids: set[str] | None = None,
     exclude_selection_source_video_ids: bool = False,
     observation_mode: str = "rectified",
@@ -83,8 +86,10 @@ def build_real_move_window_clips(
         raise ValueError(f"clip_length must be > 0, got {clip_length}")
     if negative_window_stride <= 0:
         raise ValueError(f"negative_window_stride must be > 0, got {negative_window_stride}")
-    if observation_mode not in {"rectified", "oblique"}:
+    if observation_mode not in {"rectified", "oblique", "native_oblique"}:
         raise ValueError(f"Unsupported observation_mode: {observation_mode}")
+    if positive_window_repeat <= 0:
+        raise ValueError(f"positive_window_repeat must be > 0, got {positive_window_repeat}")
     if move_target_pre_frames < 0:
         raise ValueError(f"move_target_pre_frames must be >= 0, got {move_target_pre_frames}")
     if detect_target_radius < 0:
@@ -137,6 +142,7 @@ def build_real_move_window_clips(
             clip_length=clip_length,
             negative_window_stride=negative_window_stride,
             max_negative_windows=max_negative_windows_per_clip,
+            positive_window_repeat=positive_window_repeat,
         )
         for window_payload, start_index, end_index, contains_move in clip_windows:
             clips.append(window_payload)
@@ -152,6 +158,104 @@ def build_real_move_window_clips(
     return clips, metadata
 
 
+def load_real_move_sequences(
+    *,
+    clips_dir: str | Path = _DEFAULT_CLIPS_DIR,
+    eval_root: str | Path = _DEFAULT_EVAL_ROOT,
+    image_size: int = _DEFAULT_IMAGE_SIZE,
+    selection_source_video_ids: set[str] | None = None,
+    exclude_selection_source_video_ids: bool = False,
+    observation_mode: str = "rectified",
+    oblique_crop_margin: float = 0.18,
+) -> list[PhysicalEvalMoveSequence]:
+    """Load full real replay clips as sequence-selection inputs."""
+    splits.ensure_annotation_layout_migrated()
+    if observation_mode not in {"rectified", "oblique", "native_oblique"}:
+        raise ValueError(f"Unsupported observation_mode: {observation_mode}")
+
+    rows = load_real_board_rows(
+        clips_dir=clips_dir,
+        eval_root=eval_root,
+        frame_stride=1,
+        max_frames=None,
+    )
+    rows_by_clip: dict[str, list[Any]] = defaultdict(list)
+    for row in rows:
+        rows_by_clip[row.clip_path].append(row)
+
+    sequences: list[PhysicalEvalMoveSequence] = []
+    for clip_path, clip_rows in rows_by_clip.items():
+        clip_rows.sort(key=lambda row: row.frame_index)
+        source_video_id = clip_rows[0].source_video_id
+        if selection_source_video_ids:
+            in_selection = source_video_id in selection_source_video_ids
+            if exclude_selection_source_video_ids and in_selection:
+                continue
+            if not exclude_selection_source_video_ids and not in_selection:
+                continue
+
+        clip_payload = torch.load(_PROJECT_ROOT / clip_path, map_location="cpu", weights_only=False)
+        if not isinstance(clip_payload, dict):
+            raise ValueError(f"Invalid clip payload: {clip_path}")
+
+        clip_data = _build_real_clip_sample(
+            clip_payload,
+            clip_path=clip_path,
+            clip_rows=clip_rows,
+            image_size=image_size,
+            observation_mode=observation_mode,
+            move_target_pre_frames=0,
+            detect_target_radius=0,
+            detect_target_decay=0.5,
+            oblique_crop_margin=oblique_crop_margin,
+        )
+        if clip_data is None:
+            continue
+
+        exact_replay_targets = _replay_targets_for_clip(clip_payload)
+        initial_board_fen = clip_payload.get("initial_board_fen")
+        if exact_replay_targets is None or not isinstance(initial_board_fen, str):
+            continue
+        exact_move_targets, exact_detect_targets, _legal_masks, _board_fens = exact_replay_targets
+
+        initial_side_to_move = clip_payload.get("initial_side_to_move")
+        if not isinstance(initial_side_to_move, str):
+            initial_side_to_move = None
+
+        labels = tuple(tuple(int(value) for value in row.labels) for row in clip_rows)
+        frame_indices = tuple(int(row.frame_index) for row in clip_rows)
+        board_corners = clip_data.get("board_corners")
+        sequence_frames = clip_data.get("frames")
+        if not isinstance(sequence_frames, torch.Tensor):
+            continue
+        if len(labels) != int(sequence_frames.shape[0]):
+            continue
+
+        sequences.append(
+            PhysicalEvalMoveSequence(
+                clip_path=clip_path,
+                source_video_id=source_video_id,
+                initial_board_fen=initial_board_fen,
+                initial_side_to_move=initial_side_to_move,
+                frames=sequence_frames.clone(),
+                board_corners=(
+                    None
+                    if not isinstance(board_corners, torch.Tensor)
+                    else board_corners.clone()
+                ),
+                frame_indices=frame_indices,
+                labels=labels,
+                inferred_move_targets=tuple(int(value) for value in exact_move_targets.tolist()),
+                inferred_detect_targets=tuple(
+                    float(value) for value in exact_detect_targets.tolist()
+                ),
+            )
+        )
+
+    sequences.sort(key=lambda sequence: sequence.clip_path)
+    return sequences
+
+
 def load_eval_move_sequences(
     *,
     annotation_root: str | Path = _DEFAULT_EVAL_ROOT,
@@ -160,7 +264,7 @@ def load_eval_move_sequences(
     oblique_crop_margin: float = 0.18,
 ) -> list[PhysicalEvalMoveSequence]:
     """Load held-out annotated sequences for move-model evaluation."""
-    if observation_mode not in {"rectified", "oblique"}:
+    if observation_mode not in {"rectified", "oblique", "native_oblique"}:
         raise ValueError(f"Unsupported observation_mode: {observation_mode}")
 
     rows = load_annotated_oblique_rows(annotation_root)
@@ -179,45 +283,77 @@ def load_eval_move_sequences(
             initial_side_to_move=initial_side_to_move,
         )
 
-        frames = []
-        labels = []
-        frame_indices = []
-        board_corners = []
-        for row in clip_rows:
-            image_bgr = _load_clip_frame_bgr(row, clip_cache=clip_cache)
-            if observation_mode == "rectified":
-                rectified = rectify_board_image(
-                    cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB),
-                    [list(point) for point in row.corners],
-                    output_size=image_size,
+        native_video_cap = None
+        if observation_mode == "native_oblique":
+            source_video_id = clip_rows[0].source_video_id
+            if not isinstance(source_video_id, str) or not source_video_id:
+                raise ValueError(f"Clip {clip_path} is missing source_video_id for native_oblique")
+            video_path = _get_video_path(source_video_id)
+            if video_path is None:
+                raise ValueError(
+                    f"Source video for {source_video_id} is not available for native_oblique eval"
                 )
-                frames.append(torch.from_numpy(rectified).permute(2, 0, 1).float() / 255.0)
-            else:
-                oblique_image, scaled_corners = _prepare_oblique_clip_frame(
-                    image_bgr,
-                    row.corners,
-                    image_size=image_size,
-                    crop_margin=oblique_crop_margin,
-                )
-                frames.append(oblique_image)
-                board_corners.append(scaled_corners)
-            labels.append(tuple(int(value) for value in row.labels))
-            frame_indices.append(int(row.frame_index))
+            native_video_cap = cv2.VideoCapture(video_path)
+            if not native_video_cap.isOpened():
+                raise ValueError(f"Failed to open source video for {source_video_id}: {video_path}")
 
-        sequences.append(
-            PhysicalEvalMoveSequence(
-                clip_path=clip_path,
-                source_video_id=clip_rows[0].source_video_id,
-                initial_board_fen=initial_board_fen,
-                initial_side_to_move=initial_side_to_move,
-                frames=torch.stack(frames, dim=0),
-                board_corners=(None if not board_corners else torch.stack(board_corners, dim=0)),
-                frame_indices=tuple(frame_indices),
-                labels=tuple(labels),
-                inferred_move_targets=tuple(inference[0]),
-                inferred_detect_targets=tuple(inference[1]),
+        try:
+            frames = []
+            labels = []
+            frame_indices = []
+            board_corners = []
+            for row in clip_rows:
+                if observation_mode == "native_oblique":
+                    oblique_image, scaled_corners = _prepare_native_annotation_oblique_frame(
+                        row,
+                        image_size=image_size,
+                        crop_margin=oblique_crop_margin,
+                        video_cap=native_video_cap,
+                    )
+                    frames.append(oblique_image)
+                    board_corners.append(scaled_corners)
+                else:
+                    image_bgr = _load_clip_frame_bgr(row, clip_cache=clip_cache)
+                    if observation_mode == "rectified":
+                        rectified = rectify_board_image(
+                            cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB),
+                            [list(point) for point in row.corners],
+                            output_size=image_size,
+                        )
+                        frames.append(
+                            torch.from_numpy(rectified).permute(2, 0, 1).float() / 255.0
+                        )
+                    else:
+                        oblique_image, scaled_corners = _prepare_oblique_clip_frame(
+                            image_bgr,
+                            row.corners,
+                            image_size=image_size,
+                            crop_margin=oblique_crop_margin,
+                        )
+                        frames.append(oblique_image)
+                        board_corners.append(scaled_corners)
+                labels.append(tuple(int(value) for value in row.labels))
+                frame_indices.append(int(row.frame_index))
+
+            sequences.append(
+                PhysicalEvalMoveSequence(
+                    clip_path=clip_path,
+                    source_video_id=clip_rows[0].source_video_id,
+                    initial_board_fen=initial_board_fen,
+                    initial_side_to_move=initial_side_to_move,
+                    frames=torch.stack(frames, dim=0),
+                    board_corners=(
+                        None if not board_corners else torch.stack(board_corners, dim=0)
+                    ),
+                    frame_indices=tuple(frame_indices),
+                    labels=tuple(labels),
+                    inferred_move_targets=tuple(inference[0]),
+                    inferred_detect_targets=tuple(inference[1]),
+                )
             )
-        )
+        finally:
+            if native_video_cap is not None:
+                native_video_cap.release()
     sequences.sort(key=lambda sequence: sequence.clip_path)
     return sequences
 
@@ -239,8 +375,12 @@ def _build_real_clip_sample(
     if not isinstance(frames, torch.Tensor) or not isinstance(initial_board_fen, str):
         return None
 
-    # Warn about legacy 224x224 downscaled clips
-    if frames.shape[-1] == 224 and frames.shape[-2] == 224:
+    # Warn about legacy 224x224 downscaled clips when we still consume clip-native frames.
+    if (
+        observation_mode != "native_oblique"
+        and frames.shape[-1] == 224
+        and frames.shape[-2] == 224
+    ):
         logger.warning(
             "Clip %s has degraded 224x224 frames — regenerate for native resolution",
             clip_path,
@@ -269,26 +409,61 @@ def _build_real_clip_sample(
     if int(frames.shape[0]) != len(move_targets):
         return None
 
+    native_video_cap = None
+    native_clip_frame_size = None
+    if observation_mode == "native_oblique":
+        native_context = _load_real_native_context(clip_path, clip=clip)
+        if native_context is None:
+            raise ValueError(f"Failed to resolve native source-video context for {clip_path}")
+        native_video_cap = cv2.VideoCapture(native_context["video_path"])
+        if not native_video_cap.isOpened():
+            raise ValueError(
+                f"Failed to open source video for {clip_path}: {native_context['video_path']}"
+            )
+        native_clip_frame_size = _clip_frame_size_from_clip(clip)
+        if native_clip_frame_size is None:
+            raise ValueError(f"Clip {clip_path} is missing a usable frame size")
+
     clip_frames: list[torch.Tensor] = []
     board_corners: list[torch.Tensor] = []
-    for frame_index in range(int(frames.shape[0])):
-        image_rgb = _frame_tensor_to_rgb(frames[frame_index])
-        if observation_mode == "rectified":
-            rectified = rectify_board_image(
-                image_rgb,
-                [list(point) for point in corners],
-                output_size=image_size,
-            )
-            clip_frames.append(torch.from_numpy(rectified).permute(2, 0, 1).float() / 255.0)
-        else:
-            oblique_image, scaled_corners = _prepare_oblique_clip_frame(
-                cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR),
-                corners,
-                image_size=image_size,
-                crop_margin=oblique_crop_margin,
-            )
-            clip_frames.append(oblique_image)
-            board_corners.append(scaled_corners)
+    try:
+        for frame_index in range(int(frames.shape[0])):
+            if observation_mode == "native_oblique":
+                oblique_image, scaled_corners = _prepare_native_real_oblique_frame(
+                    clip,
+                    frame_index=frame_index,
+                    clip_corners=corners,
+                    clip_frame_size=native_clip_frame_size,
+                    image_size=image_size,
+                    crop_margin=oblique_crop_margin,
+                    video_cap=native_video_cap,
+                    camera_bbox=native_context["camera_bbox"],
+                    ref_resolution=native_context["ref_resolution"],
+                )
+                clip_frames.append(oblique_image)
+                board_corners.append(scaled_corners)
+                continue
+
+            image_rgb = _frame_tensor_to_rgb(frames[frame_index])
+            if observation_mode == "rectified":
+                rectified = rectify_board_image(
+                    image_rgb,
+                    [list(point) for point in corners],
+                    output_size=image_size,
+                )
+                clip_frames.append(torch.from_numpy(rectified).permute(2, 0, 1).float() / 255.0)
+            else:
+                oblique_image, scaled_corners = _prepare_oblique_clip_frame(
+                    cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR),
+                    corners,
+                    image_size=image_size,
+                    crop_margin=oblique_crop_margin,
+                )
+                clip_frames.append(oblique_image)
+                board_corners.append(scaled_corners)
+    finally:
+        if native_video_cap is not None:
+            native_video_cap.release()
 
     payload: dict[str, Any] = {
         "clip_path": clip_path,
@@ -313,6 +488,7 @@ def _slice_move_windows(
     clip_length: int,
     negative_window_stride: int,
     max_negative_windows: int,
+    positive_window_repeat: int,
 ) -> list[tuple[dict[str, Any], int, int, bool]]:
     frames = clip_data["frames"]
     move_targets = clip_data["move_targets"]
@@ -370,7 +546,9 @@ def _slice_move_windows(
             payload["move_loss_weights"] = move_loss_weights[window_start:window_end].clone()
         if isinstance(exact_move_mask, torch.Tensor):
             payload["exact_move_mask"] = exact_move_mask[window_start:window_end].clone()
-        windows.append((payload, window_start, window_end, contains_move))
+        repeat_count = positive_window_repeat if contains_move else 1
+        for _ in range(repeat_count):
+            windows.append((payload, window_start, window_end, contains_move))
     return windows
 
 
@@ -614,6 +792,259 @@ def _prepare_oblique_clip_frame(
     scaled_corners[:, 0] *= float(image_size) / max(float(width), 1.0)
     scaled_corners[:, 1] *= float(image_size) / max(float(height), 1.0)
     return image_tensor, torch.from_numpy(scaled_corners.astype("float32"))
+
+
+def _prepare_native_annotation_oblique_frame(
+    row: Any,
+    *,
+    image_size: int,
+    crop_margin: float,
+    video_cap: cv2.VideoCapture,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    native_corners = getattr(row, "native_corners", None)
+    native_image_bbox = getattr(row, "native_image_bbox", None)
+    source_frame_index = getattr(row, "source_frame_index", None)
+    if native_corners is None or native_image_bbox is None or source_frame_index is None:
+        row_id = getattr(row, "annotation_id", getattr(row, "clip_path", "?"))
+        raise ValueError(
+            "native_oblique eval requires native_corners, native_image_bbox, and "
+            f"source_frame_index for {row_id}"
+        )
+    image_bgr = _read_frame_crop(video_cap, int(source_frame_index), native_image_bbox)
+    return _prepare_oblique_clip_frame(
+        image_bgr,
+        native_corners,
+        image_size=image_size,
+        crop_margin=crop_margin,
+    )
+
+
+def _prepare_native_real_oblique_frame(
+    clip: dict[str, Any],
+    *,
+    frame_index: int,
+    clip_corners: tuple[tuple[float, float], ...] | list[list[float]],
+    clip_frame_size: tuple[int, int],
+    image_size: int,
+    crop_margin: float,
+    video_cap: cv2.VideoCapture,
+    camera_bbox: tuple[int, int, int, int],
+    ref_resolution: tuple[int, int],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    frame_height = int(video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    frame_width = int(video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    native_image_bbox = _scale_bbox_to_frame(camera_bbox, ref_resolution, frame_width, frame_height)
+    source_frame_index = _source_frame_index_for_clip(clip, frame_index)
+    image_bgr = _read_frame_crop(video_cap, source_frame_index, native_image_bbox)
+    native_corners = _scale_corners_to_native_crop(
+        clip_corners,
+        clip_frame_size=clip_frame_size,
+        native_crop_size=(image_bgr.shape[1], image_bgr.shape[0]),
+    )
+    return _prepare_oblique_clip_frame(
+        image_bgr,
+        native_corners,
+        image_size=image_size,
+        crop_margin=crop_margin,
+    )
+
+
+def _load_real_native_context(
+    clip_path: str,
+    *,
+    clip: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    source_video_id = None
+    if clip is not None:
+        raw_source_video_id = clip.get("source_video_id")
+        if isinstance(raw_source_video_id, str) and raw_source_video_id:
+            source_video_id = raw_source_video_id
+
+        raw_camera_bbox = clip.get("camera_bbox")
+        raw_ref_resolution = clip.get("ref_resolution")
+        if (
+            source_video_id is not None
+            and isinstance(raw_camera_bbox, (list, tuple))
+            and len(raw_camera_bbox) == 4
+            and isinstance(raw_ref_resolution, (list, tuple))
+            and len(raw_ref_resolution) == 2
+        ):
+            video_path = _get_video_path(source_video_id)
+            if video_path is None:
+                raise ValueError(f"Source video for {source_video_id} is not available")
+            return {
+                "video_path": video_path,
+                "camera_bbox": tuple(int(value) for value in raw_camera_bbox),
+                "ref_resolution": tuple(int(value) for value in raw_ref_resolution),
+            }
+
+        raw_source_db_clip_id = clip.get("source_db_clip_id")
+        if source_video_id is not None and isinstance(raw_source_db_clip_id, int):
+            db_info = _get_clip_db_info(raw_source_db_clip_id)
+            if db_info is not None:
+                if db_info["video_id"] != source_video_id:
+                    raise ValueError(
+                        "Clip/video mismatch for "
+                        f"{clip_path}: {db_info['video_id']} != {source_video_id}"
+                    )
+                video_path = _get_video_path(source_video_id)
+                if video_path is None:
+                    raise ValueError(f"Source video for {source_video_id} is not available")
+                return {
+                    "video_path": video_path,
+                    "camera_bbox": db_info["camera_bbox"],
+                    "ref_resolution": db_info["ref_resolution"],
+                }
+
+    match = _REAL_CLIP_RE.match(Path(clip_path).name)
+    if match is not None:
+        source_video_id = match.group("video_id")
+        clip_id = int(match.group("clip_id"))
+        db_info = _get_clip_db_info(clip_id)
+        if db_info is None:
+            return None
+        if db_info["video_id"] != source_video_id:
+            raise ValueError(
+                f"Clip/video mismatch for {clip_path}: {db_info['video_id']} != {source_video_id}"
+            )
+        video_path = _get_video_path(source_video_id)
+        if video_path is None:
+            raise ValueError(f"Source video for {source_video_id} is not available")
+        return {
+            "video_path": video_path,
+            "camera_bbox": db_info["camera_bbox"],
+            "ref_resolution": db_info["ref_resolution"],
+        }
+
+    if clip is None or source_video_id is None:
+        return None
+
+    source_channel_handle = clip.get("source_channel_handle")
+    if not isinstance(source_channel_handle, str) or not source_channel_handle:
+        return None
+
+    from pipeline.overlay.calibration import (
+        get_calibration,
+        is_bbox_within_frame,
+        is_placeholder_bbox,
+    )
+
+    channel_calibration = get_calibration(source_channel_handle)
+    if channel_calibration is None:
+        return None
+    if is_placeholder_bbox(channel_calibration.camera) or not is_bbox_within_frame(
+        channel_calibration.camera,
+        channel_calibration.ref_resolution,
+    ):
+        return None
+
+    video_path = _get_video_path(source_video_id)
+    if video_path is None:
+        raise ValueError(f"Source video for {source_video_id} is not available")
+    return {
+        "video_path": video_path,
+        "camera_bbox": channel_calibration.camera,
+        "ref_resolution": channel_calibration.ref_resolution,
+    }
+
+
+def _get_clip_db_info(clip_id: int) -> dict[str, Any] | None:
+    try:
+        from pipeline.db.connection import get_conn
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT video_id, camera_bbox, ref_resolution
+                       FROM video_clips WHERE id = %s""",
+                    (clip_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                return {
+                    "video_id": row[0],
+                    "camera_bbox": tuple(int(value) for value in row[1]),
+                    "ref_resolution": tuple(int(value) for value in row[2]),
+                }
+    except Exception as exc:  # pragma: no cover - exercised in integration use
+        logger.warning("DB lookup failed for clip %s: %s", clip_id, exc)
+        return None
+
+
+def _get_video_path(video_id: str) -> str | None:
+    try:
+        from pipeline.download.video_downloader import get_video_path
+
+        return get_video_path(video_id)
+    except Exception:  # pragma: no cover - exercised in integration use
+        return None
+
+
+def _source_frame_index_for_clip(clip: dict[str, Any], frame_index: int) -> int:
+    frame_indices = clip.get("frame_indices")
+    if isinstance(frame_indices, torch.Tensor) and 0 <= frame_index < frame_indices.shape[0]:
+        return int(frame_indices[frame_index].item())
+    return int(frame_index)
+
+
+def _clip_frame_size_from_clip(clip: dict[str, Any]) -> tuple[int, int] | None:
+    frames = clip.get("frames")
+    if not isinstance(frames, torch.Tensor) or frames.ndim < 3:
+        return None
+    sample = frames[0]
+    if sample.ndim == 3:
+        if sample.shape[0] == 3:
+            return int(sample.shape[2]), int(sample.shape[1])
+        if sample.shape[-1] == 3:
+            return int(sample.shape[1]), int(sample.shape[0])
+    return int(frames.shape[-1]), int(frames.shape[-2])
+
+
+def _read_frame_crop(
+    video_cap: cv2.VideoCapture,
+    source_frame_index: int,
+    bbox: tuple[int, int, int, int],
+) -> Any:
+    video_cap.set(cv2.CAP_PROP_POS_FRAMES, int(source_frame_index))
+    ok, frame = video_cap.read()
+    if not ok or frame is None:
+        raise ValueError(f"Failed to read source frame {source_frame_index}")
+    x, y, width, height = bbox
+    crop = frame[y : y + height, x : x + width]
+    if crop.size == 0:
+        raise ValueError(f"Source frame crop was empty for frame {source_frame_index}")
+    return crop
+
+
+def _scale_bbox_to_frame(
+    bbox: tuple[int, int, int, int],
+    ref_resolution: tuple[int, int],
+    frame_width: int,
+    frame_height: int,
+) -> tuple[int, int, int, int]:
+    ref_width, ref_height = ref_resolution
+    scale_x = frame_width / ref_width if ref_width > 0 else 1.0
+    scale_y = frame_height / ref_height if ref_height > 0 else 1.0
+    x, y, width, height = bbox
+    bbox_x = max(0, min(int(round(x * scale_x)), frame_width - 1))
+    bbox_y = max(0, min(int(round(y * scale_y)), frame_height - 1))
+    bbox_w = max(1, min(int(round(width * scale_x)), frame_width - bbox_x))
+    bbox_h = max(1, min(int(round(height * scale_y)), frame_height - bbox_y))
+    return bbox_x, bbox_y, bbox_w, bbox_h
+
+
+def _scale_corners_to_native_crop(
+    corners: tuple[tuple[float, float], ...] | list[list[float]],
+    *,
+    clip_frame_size: tuple[int, int],
+    native_crop_size: tuple[int, int],
+) -> list[list[float]]:
+    clip_width, clip_height = clip_frame_size
+    native_width, native_height = native_crop_size
+    scale_x = float(native_width) / max(float(clip_width), 1.0)
+    scale_y = float(native_height) / max(float(clip_height), 1.0)
+    return [[float(x) * scale_x, float(y) * scale_y] for x, y in corners]
 
 
 def _initial_board_state_for_clip(clip_path: str) -> tuple[str, str | None]:

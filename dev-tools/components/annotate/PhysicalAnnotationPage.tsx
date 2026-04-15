@@ -15,6 +15,8 @@ import {
   deletePhysicalTrainAnnotation,
   detectPhysicalEvalCorners,
   detectPhysicalTrainCorners,
+  trackPhysicalEvalCorners,
+  trackPhysicalTrainCorners,
   getClipInfo,
   getPhysicalEvalAnnotation,
   getPhysicalEvalMoveCorrections,
@@ -25,6 +27,7 @@ import {
   rectifyPhysicalTrainFrame,
   savePhysicalEvalAnnotation,
   savePhysicalTrainAnnotation,
+  updateVideoClip,
   type PhysicalEvalAnnotation,
   type PhysicalEvalMoveCorrections,
 } from "@/lib/api";
@@ -40,6 +43,8 @@ const PANEL_BUTTON_CLASS = "inline-flex h-5 items-center justify-center rounded 
 const PANEL_STATUS_CLASS = "inline-flex h-5 min-w-[5rem] items-center justify-center rounded border px-1.5 text-[9px] leading-none whitespace-nowrap";
 const PRIMARY_SAVE_BUTTON_CLASS = "inline-flex h-6 min-w-[8.75rem] items-center justify-center rounded border bg-primary px-2.5 text-[9px] font-medium text-primary-foreground whitespace-nowrap transition-colors hover:bg-primary/90 disabled:opacity-40";
 const LIVE_RECTIFY_DELAY_MS = 75;
+const MIN_CAMERA_BBOX_AREA_RATIO = 0.02;
+const MAX_CAMERA_BBOX_AREA_RATIO = 0.25;
 
 function fenToLabels(fen: string): Array<number | null> {
   const placement = fen.split(" ", 1)[0];
@@ -77,6 +82,33 @@ function emptyLabels(): Array<number | null> {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function asNumberList(value: unknown, expectedLength: number): number[] | null {
+  if (!Array.isArray(value) || value.length !== expectedLength) return null;
+  const numbers = value.map((item) => Number(item));
+  return numbers.every(Number.isFinite) ? numbers : null;
+}
+
+function isUsableCameraBbox(bbox: number[] | null, refResolution: number[] | null): boolean {
+  if (!bbox || !refResolution) return false;
+  const [x, y, w, h] = bbox;
+  const [refW, refH] = refResolution;
+  if (w <= 0 || h <= 0 || refW <= 0 || refH <= 0) return false;
+  if (x === 0 && y === 0 && w === 100 && h === 100) return false;
+  if (x < 0 || y < 0 || x + w > refW || y + h > refH) return false;
+  const areaRatio = (w * h) / (refW * refH);
+  return areaRatio >= MIN_CAMERA_BBOX_AREA_RATIO && areaRatio <= MAX_CAMERA_BBOX_AREA_RATIO;
+}
+
+function expandCameraBbox(bbox: number[], padding: number, refResolution: number[]): [number, number, number, number] {
+  const [x, y, w, h] = bbox;
+  const [refW, refH] = refResolution;
+  const x1 = Math.max(0, x - padding);
+  const y1 = Math.max(0, y - padding);
+  const x2 = Math.min(refW, x + w + padding);
+  const y2 = Math.min(refH, y + h + padding);
+  return [x1, y1, x2 - x1, y2 - y1];
 }
 
 function cycleLabel(current: number | null): number | null {
@@ -121,6 +153,7 @@ interface PhysicalAnnotationSplitConfig {
   saveAnnotation: typeof savePhysicalEvalAnnotation;
   deleteAnnotation: typeof deletePhysicalEvalAnnotation;
   detectCorners: typeof detectPhysicalEvalCorners;
+  trackCorners: typeof trackPhysicalEvalCorners;
 }
 
 const SPLIT_CONFIG: Record<PhysicalAnnotationSplit, PhysicalAnnotationSplitConfig> = {
@@ -134,6 +167,7 @@ const SPLIT_CONFIG: Record<PhysicalAnnotationSplit, PhysicalAnnotationSplitConfi
     saveAnnotation: savePhysicalEvalAnnotation,
     deleteAnnotation: deletePhysicalEvalAnnotation,
     detectCorners: detectPhysicalEvalCorners,
+    trackCorners: trackPhysicalEvalCorners,
   },
   train: {
     indexHref: "/annotate/physical?split=train",
@@ -145,6 +179,7 @@ const SPLIT_CONFIG: Record<PhysicalAnnotationSplit, PhysicalAnnotationSplitConfi
     saveAnnotation: savePhysicalTrainAnnotation,
     deleteAnnotation: deletePhysicalTrainAnnotation,
     detectCorners: detectPhysicalTrainCorners,
+    trackCorners: trackPhysicalTrainCorners,
   },
 };
 
@@ -260,6 +295,7 @@ function AnnotationContent({
 
   // Camera padding
   const [cameraPadding, setCameraPadding] = useState(0);
+  const [savingCameraBbox, setSavingCameraBbox] = useState(false);
   const pendingCornerTranslationRef = useRef<PendingCornerTranslation | null>(null);
 
   // Source video
@@ -269,6 +305,7 @@ function AnnotationContent({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const cornersRef = useRef<Array<{ x: number; y: number }>>([]);
+  const cornersFrameIndexRef = useRef<number>(0);
   const prevFrameCornersRef = useRef<Array<{ x: number; y: number }>>([]);
   const draggedCornerIndexRef = useRef<number | null>(null);
   const latestRectifyRequestIdRef = useRef(0);
@@ -350,12 +387,21 @@ function AnnotationContent({
     return null;
   }, [effectiveMoves, selectedFrame]);
 
+  const rawMetadata = clipInfo.metadata as Record<string, unknown> | undefined;
+  const metadataCameraBbox = asNumberList(rawMetadata?.camera_bbox, 4);
+  const metadataRefResolution = asNumberList(rawMetadata?.ref_resolution, 2);
   const boardLabeledCount = boardLabels.filter((l) => l !== null).length;
   const canSave = corners.length === 4 && boardLabeledCount > 0;
+  const hasDbClip = typeof rawMetadata?.source_db_clip_id === "number";
+  const hasUsableCameraBbox = isUsableCameraBbox(metadataCameraBbox, metadataRefResolution);
+  const calibrateHref = typeof rawMetadata?.source_video_id === "string"
+    ? `/videos/${rawMetadata.source_video_id}/calibrate`
+    : null;
 
   useEffect(() => {
     cornersRef.current = corners;
-  }, [corners]);
+    if (corners.length > 0) cornersFrameIndexRef.current = selectedFrame;
+  }, [corners, selectedFrame]);
 
   useEffect(() => {
     autoDetectRef.current = autoDetect;
@@ -546,7 +592,7 @@ function AnnotationContent({
   }, [displayedReplayFen]);
 
   const handlePaddingChange = useCallback((newPadding: number) => {
-    if (newPadding === cameraPadding) return;
+    if (!hasUsableCameraBbox || newPadding === cameraPadding) return;
     // Queue corner translation for when the new image loads
     if (corners.length === 4 && sourceImageSize) {
       pendingCornerTranslationRef.current = {
@@ -557,41 +603,101 @@ function AnnotationContent({
       };
     }
     setCameraPadding(newPadding);
-  }, [cameraPadding, corners, sourceImageSize]);
+  }, [cameraPadding, corners, hasUsableCameraBbox, sourceImageSize]);
 
   const updateCameraBbox = useCallback(async () => {
-    const meta = clipInfo.metadata ?? {};
-    const videoId = typeof meta.source_video_id === "string" ? meta.source_video_id : undefined;
-    const clipId = typeof meta.source_db_clip_id === "number" ? meta.source_db_clip_id : undefined;
-    const bbox = Array.isArray(meta.camera_bbox) ? (meta.camera_bbox as number[]) : undefined;
-    if (!videoId || clipId == null || !bbox || cameraPadding <= 0) return;
+    const videoId = typeof rawMetadata?.source_video_id === "string" ? rawMetadata.source_video_id : undefined;
+    const clipId = typeof rawMetadata?.source_db_clip_id === "number" ? rawMetadata.source_db_clip_id : undefined;
+    if (
+      !hasUsableCameraBbox
+      || !videoId
+      || clipId == null
+      || !metadataCameraBbox
+      || !metadataRefResolution
+      || cameraPadding <= 0
+      || savingCameraBbox
+    ) {
+      return;
+    }
 
-    const [x, y, w, h] = bbox;
-    const expanded = [
-      Math.max(0, x - cameraPadding),
-      Math.max(0, y - cameraPadding),
-      w + 2 * cameraPadding,
-      h + 2 * cameraPadding,
-    ];
+    const expanded = expandCameraBbox(metadataCameraBbox, cameraPadding, metadataRefResolution);
+    if (!isUsableCameraBbox(expanded, metadataRefResolution)) {
+      toast.error("Expanded camera bbox is invalid; reduce padding or recalibrate the clip");
+      return;
+    }
+
+    setSavingCameraBbox(true);
     try {
-      await fetch(`/api/crawl/videos/${videoId}/clips/${clipId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ camera_bbox: expanded }),
-      });
-      // Update the local metadata so the next save uses the new bbox
+      const updated = await updateVideoClip(videoId, clipId, { camera_bbox: expanded });
       if (clipInfo.metadata) {
-        (clipInfo.metadata as Record<string, unknown>).camera_bbox = expanded;
+        const metadata = clipInfo.metadata as Record<string, unknown>;
+        metadata.camera_bbox = updated.camera_bbox;
+        metadata.ref_resolution = updated.ref_resolution;
+        metadata.camera_bbox_usable = true;
       }
+      pendingCornerTranslationRef.current = null;
+      setCameraPadding(0);
       toast.success("Camera bbox updated in DB");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update bbox");
+    } finally {
+      setSavingCameraBbox(false);
     }
-  }, [cameraPadding, clipInfo.metadata]);
+  }, [
+    cameraPadding,
+    clipInfo.metadata,
+    hasUsableCameraBbox,
+    metadataCameraBbox,
+    metadataRefResolution,
+    rawMetadata,
+    savingCameraBbox,
+  ]);
+
+  const runTrackCorners = useCallback(async (
+    sourceFrameIndex: number,
+    targetFrameIndex: number,
+    sourceCorners: Array<{ x: number; y: number }>,
+  ): Promise<boolean> => {
+    if (sourceCorners.length !== 4) return false;
+    try {
+      const result = await splitConfig.trackCorners({
+        session_id: sessionId,
+        source_frame_index: sourceFrameIndex,
+        target_frame_index: targetFrameIndex,
+        corners: sourceCorners.map((p) => [p.x, p.y]),
+        padding_px: cameraPadding,
+      });
+      if (result.tracking) {
+        const tracked = result.tracking.corners.map(([x, y]) => ({ x, y }));
+        setCorners(tracked);
+        cornersRef.current = tracked;
+        cornersFrameIndexRef.current = targetFrameIndex;
+        if (tracked.length === 4) await rectifyBoard(tracked);
+        return true;
+      }
+    } catch { /* tracking failed, caller should fall back */ }
+    return false;
+  }, [cameraPadding, rectifyBoard, sessionId, splitConfig]);
 
   const runDetectCorners = useCallback(async () => {
     setDetecting(true);
     try {
+      // When corners already exist, track them to the current frame instead
+      // of running cold detection (which returns axis-aligned bboxes and
+      // destroys perspective-correct corners).
+      const existing = cornersRef.current;
+      if (existing.length === 4) {
+        const sourceFrame = cornersFrameIndexRef.current;
+        if (sourceFrame !== selectedFrame) {
+          const tracked = await runTrackCorners(sourceFrame, selectedFrame, existing);
+          if (tracked) return;
+        } else {
+          // Corners are already for this frame — nothing to do
+          return;
+        }
+      }
+
+      // No existing corners or tracking failed — cold detection
       const result = await splitConfig.detectCorners({
         session_id: sessionId,
         frame_index: selectedFrame,
@@ -601,6 +707,7 @@ function AnnotationContent({
         const detected = result.detection.corners.map(([x, y]) => ({ x, y }));
         setCorners(detected);
         cornersRef.current = detected;
+        cornersFrameIndexRef.current = selectedFrame;
         if (detected.length === 4) await rectifyBoard(detected);
       } else {
         toast.error("No board detected in this frame");
@@ -610,7 +717,7 @@ function AnnotationContent({
     } finally {
       setDetecting(false);
     }
-  }, [cameraPadding, rectifyBoard, selectedFrame, sessionId, splitConfig]);
+  }, [cameraPadding, rectifyBoard, runTrackCorners, selectedFrame, sessionId, splitConfig]);
 
   const resetCorners = useCallback(() => {
     setCorners([]);
@@ -622,10 +729,15 @@ function AnnotationContent({
   const usePrevCorners = useCallback(async () => {
     const prev = prevFrameCornersRef.current;
     if (prev.length !== 4) return;
-    setCorners(prev);
-    cornersRef.current = prev;
-    await rectifyBoard(prev);
-  }, [rectifyBoard]);
+    const sourceFrame = cornersFrameIndexRef.current;
+    const tracked = await runTrackCorners(sourceFrame, selectedFrame, prev);
+    if (!tracked) {
+      setCorners(prev);
+      cornersRef.current = prev;
+      cornersFrameIndexRef.current = selectedFrame;
+      await rectifyBoard(prev);
+    }
+  }, [rectifyBoard, runTrackCorners, selectedFrame]);
 
   const copyFenFromPreviousFrame = useCallback(() => {
     if (!previousFrameDisplayedFen) return;
@@ -667,7 +779,7 @@ function AnnotationContent({
     } finally {
       setSaving(false);
     }
-  }, [boardLabels, canSave, clipPath, corners, refreshMoveCorrections, selectedFrame, sessionId]);
+  }, [boardLabels, cameraPadding, canSave, clipPath, corners, refreshMoveCorrections, selectedFrame, sessionId, splitConfig]);
 
   const handleSaveAndStepForward = useCallback(async () => {
     const annotation = await saveAnnotation();
@@ -693,12 +805,17 @@ function AnnotationContent({
   // ── Load existing annotation on frame change, keeping corners if set ──
 
   useEffect(() => {
-    // Snapshot current corners before loading the new frame's data
-    prevFrameCornersRef.current = [...cornersRef.current];
+    // Snapshot current corners and their frame index before loading the new frame's data
+    const prevCorners = [...cornersRef.current];
+    const prevFrame = cornersFrameIndexRef.current;
+    prevFrameCornersRef.current = prevCorners;
     let cancelled = false;
     void (async () => {
       try {
-        const ann = await splitConfig.getAnnotation(clipPath, selectedFrame);
+        const ann = await splitConfig.getAnnotation(clipPath, selectedFrame, {
+          sessionId,
+          paddingPx: cameraPadding,
+        });
         if (cancelled) return;
         setExistingAnnotation(ann);
         if (ann) {
@@ -717,30 +834,42 @@ function AnnotationContent({
             }
           }
           setCorners(loadedCorners);
+          cornersRef.current = loadedCorners;
+          cornersFrameIndexRef.current = selectedFrame;
           setBoardLabels(normalizeAnnotationLabels(ann.labels));
           await rectifyBoard(loadedCorners);
         } else {
-          // No saved annotation — auto-detect or keep current corners
+          // No saved annotation — track from previous corners, detect, or keep
           prefillFromFen();
-          if (autoDetectRef.current) {
+          if (prevCorners.length === 4) {
+            // Try optical flow tracking from the previous frame's corners
+            const tracked = await runTrackCorners(prevFrame, selectedFrame, prevCorners);
+            if (cancelled) return;
+            if (!tracked) {
+              // Tracking failed — fall back to detect (if auto) or copy prev corners
+              if (autoDetectRef.current) {
+                void runDetectCorners();
+              } else {
+                setCorners(prevCorners);
+                cornersRef.current = prevCorners;
+                cornersFrameIndexRef.current = selectedFrame;
+                await rectifyBoard(prevCorners);
+              }
+            }
+          } else if (autoDetectRef.current) {
             void runDetectCorners();
           } else {
-            setCorners((prev) => {
-              if (prev.length === 4) {
-                void rectifyBoard(prev);
-              } else {
-                setRectifiedImageB64(null);
-              }
-              return prev;
-            });
+            setRectifiedImageB64(null);
           }
         }
       } catch { /* no annotation */ }
     })();
     return () => { cancelled = true; };
-  }, [clipPath, prefillFromFen, rectifyBoard, runDetectCorners, selectedFrame]);
+  }, [clipPath, prefillFromFen, rectifyBoard, runDetectCorners, runTrackCorners, selectedFrame]);
 
-  const frameUrl = clipCameraFrameUrl(sessionId, selectedFrame, cameraPadding);
+  const frameUrl = hasUsableCameraBbox
+    ? clipCameraFrameUrl(sessionId, selectedFrame, cameraPadding)
+    : clipFrameUrl(sessionId, selectedFrame);
 
   return (
     <div className="space-y-2">
@@ -783,30 +912,39 @@ function AnnotationContent({
             <div className="text-[10px] text-muted-foreground">
               {corners.length < 4 ? `Click corners: a8 \u2192 h8 \u2192 h1 \u2192 a1 (${corners.length}/4)` : "Corners set \u2014 drag handles to adjust this frame"}
             </div>
-            {clipInfo.metadata?.source_db_clip_id != null && <div className="flex items-center gap-1">
-              <label className="text-[9px] text-muted-foreground whitespace-nowrap" htmlFor="cam-pad">Pad</label>
-              <input
-                id="cam-pad"
-                type="range"
-                min={0}
-                max={200}
-                step={1}
-                value={cameraPadding}
-                onChange={(e) => handlePaddingChange(Number(e.target.value))}
-                className="h-3 w-16"
-              />
-              <span className="text-[9px] tabular-nums w-6 text-right text-muted-foreground">{cameraPadding}</span>
-              {clipInfo.metadata?.source_db_clip_id != null && (
-                <button
-                  type="button"
-                  onClick={() => void updateCameraBbox()}
-                  disabled={cameraPadding <= 0}
-                  className="rounded border border-blue-500/40 bg-blue-500/10 px-1.5 py-0.5 text-[9px] text-blue-700 hover:bg-blue-500/20 dark:text-blue-300 disabled:opacity-40"
-                >
-                  Save bbox
-                </button>
-              )}
-            </div>}
+            {hasDbClip && (
+              <div className="flex items-center gap-1">
+                {hasUsableCameraBbox ? (
+                  <>
+                    <label className="text-[9px] text-muted-foreground whitespace-nowrap" htmlFor="cam-pad">Pad</label>
+                    <input
+                      id="cam-pad"
+                      type="range"
+                      min={0}
+                      max={200}
+                      step={1}
+                      value={cameraPadding}
+                      onChange={(e) => handlePaddingChange(Number(e.target.value))}
+                      disabled={savingCameraBbox}
+                      className="h-3 w-16"
+                    />
+                    <span className="text-[9px] tabular-nums w-6 text-right text-muted-foreground">{cameraPadding}</span>
+                    <button
+                      type="button"
+                      onClick={() => void updateCameraBbox()}
+                      disabled={cameraPadding <= 0 || savingCameraBbox}
+                      className="rounded border border-blue-500/40 bg-blue-500/10 px-1.5 py-0.5 text-[9px] text-blue-700 hover:bg-blue-500/20 dark:text-blue-300 disabled:opacity-40"
+                    >
+                      {savingCameraBbox ? "Saving..." : "Save bbox"}
+                    </button>
+                  </>
+                ) : (
+                  <span className="text-[9px] text-muted-foreground whitespace-nowrap">
+                    Padding unavailable — {calibrateHref ? <Link href={calibrateHref} className="text-blue-500 hover:underline">set camera bbox</Link> : "camera bbox missing"}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div className="relative overflow-hidden rounded border">
             <img

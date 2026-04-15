@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import torch
 from pipeline.physical.joint_board_reader import (
     JointBoardReaderConfig,
@@ -8,10 +9,16 @@ from pipeline.physical.joint_board_reader import (
     argus_square_reader_state_dict_from_joint_board_reader_checkpoint,
 )
 
+import argus.model.vision_encoder as vision_encoder_module
 from argus.model.argus_model import ArgusModel
 from argus.model.oblique_square_decoder import ObliqueSquareQueryDecoder
 from argus.model.patch_pooling import PatchPoolingHead
-from argus.model.vision_encoder import VisionEncoder
+from argus.model.vision_encoder import (
+    DEFAULT_SIGLIP2_MODEL,
+    DEFAULT_SIGLIP_MODEL,
+    VisionEncoder,
+    default_model_name_for_encoder_type,
+)
 
 
 def test_argus_model_config_round_trip_small() -> None:
@@ -91,6 +98,27 @@ def test_dino_vision_encoder_supports_feature_layer_averaging() -> None:
     tokens = encoder.forward_patches(frames)
 
     assert tokens.shape == (1, 257, 384)
+
+
+def test_default_model_name_for_encoder_type_matches_expected_checkpoints() -> None:
+    assert default_model_name_for_encoder_type("dinov2") == "facebook/dinov2-base"
+    assert default_model_name_for_encoder_type("siglip") == DEFAULT_SIGLIP_MODEL
+    assert default_model_name_for_encoder_type("siglip2") == DEFAULT_SIGLIP2_MODEL
+    assert default_model_name_for_encoder_type("yolo") == "weights/yolo_base/yolo11n.pt"
+
+
+def test_siglip2_backbone_rejects_siglip_checkpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyConfig:
+        model_type = "siglip"
+
+    monkeypatch.setattr(
+        vision_encoder_module,
+        "_load_transformers_config",
+        lambda _path: DummyConfig(),
+    )
+
+    with pytest.raises(ValueError, match="encoder_type='siglip2'"):
+        vision_encoder_module.Siglip2Backbone(model_name="broken-siglip2")
 
 
 def test_patch_pooling_head_mean_matches_manual_mean() -> None:

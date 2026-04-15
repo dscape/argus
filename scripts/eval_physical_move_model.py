@@ -118,6 +118,7 @@ def main() -> None:
                         anomaly_settled_gain_threshold=(
                             args.segmental_anomaly_settled_gain_threshold
                         ),
+                        segment_board_drop_worst_frames=(args.segmental_board_drop_worst_frames),
                         event_window_radius=args.segmental_event_window_radius,
                         max_event_proposals=args.segmental_max_event_proposals,
                         diagnostic_settled_horizon=args.segmental_diagnostic_settled_horizon,
@@ -216,6 +217,7 @@ def main() -> None:
             args.segmental_anomaly_change_evidence_threshold
         ),
         "segmental_anomaly_settled_gain_threshold": (args.segmental_anomaly_settled_gain_threshold),
+        "segmental_board_drop_worst_frames": args.segmental_board_drop_worst_frames,
         "segmental_event_window_radius": args.segmental_event_window_radius,
         "segmental_max_event_proposals": args.segmental_max_event_proposals,
         "segmental_diagnostic_settled_horizon": args.segmental_diagnostic_settled_horizon,
@@ -384,6 +386,7 @@ def decode_sequence_with_segmental_decoder(
     state_aware_proposal_passes: int,
     anomaly_change_evidence_threshold: float,
     anomaly_settled_gain_threshold: float,
+    segment_board_drop_worst_frames: int,
     event_window_radius: int,
     max_event_proposals: int,
     diagnostic_settled_horizon: int,
@@ -416,6 +419,7 @@ def decode_sequence_with_segmental_decoder(
         state_aware_proposal_passes=state_aware_proposal_passes,
         anomaly_change_evidence_threshold=anomaly_change_evidence_threshold,
         anomaly_settled_gain_threshold=anomaly_settled_gain_threshold,
+        segment_board_drop_worst_frames=segment_board_drop_worst_frames,
         event_window_radius=event_window_radius,
         max_event_proposals=max_event_proposals,
         diagnostic_settled_horizon=diagnostic_settled_horizon,
@@ -482,7 +486,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clip-length", type=int, default=16)
     parser.add_argument(
         "--observation-mode",
-        choices=("rectified", "oblique"),
+        choices=("rectified", "oblique", "native_oblique"),
         default="oblique",
     )
     parser.add_argument("--oblique-crop-margin", type=float, default=0.18)
@@ -512,6 +516,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--segmental-state-aware-proposal-passes", type=int, default=0)
     parser.add_argument("--segmental-anomaly-change-evidence-threshold", type=float, default=0.25)
     parser.add_argument("--segmental-anomaly-settled-gain-threshold", type=float, default=0.0)
+    parser.add_argument("--segmental-board-drop-worst-frames", type=int, default=0)
     parser.add_argument("--segmental-event-window-radius", type=int, default=1)
     parser.add_argument("--segmental-max-event-proposals", type=int, default=32)
     parser.add_argument("--segmental-diagnostic-settled-horizon", type=int, default=8)

@@ -29,6 +29,11 @@ class SavedBoardAnnotation:
     rectified_board_path: str
     rectified_size: int
     created_at: str
+    corner_space: str = "clip_frame"
+    clip_frame_size: list[int] | None = None
+    native_corners: list[list[float]] | None = None
+    native_image_bbox: list[int] | None = None
+    source_frame_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +166,12 @@ def save_board_annotation(
     corners: list[list[float]],
     labels: list[int | None],
     output_size: int = DEFAULT_BOARD_SIZE,
+    image_corners: list[list[float]] | tuple[tuple[float, float], ...] | None = None,
+    corner_space: str = "clip_frame",
+    clip_frame_size: list[int] | tuple[int, int] | None = None,
+    native_corners: list[list[float]] | tuple[tuple[float, float], ...] | None = None,
+    native_image_bbox: list[int] | tuple[int, int, int, int] | None = None,
+    source_frame_index: int | None = None,
 ) -> dict[str, Any]:
     """Persist one manually labeled physical-board frame and its labeled square crops."""
     if len(labels) != 64:
@@ -171,7 +182,11 @@ def save_board_annotation(
     squares_dir.mkdir(parents=True, exist_ok=True)
 
     annotation_id = f"{Path(clip_path).stem}_frame{frame_index:04d}"
-    rectified_board = rectify_board_image(image_rgb, corners, output_size=output_size)
+    rectified_board = rectify_board_image(
+        image_rgb,
+        corners if image_corners is None else image_corners,
+        output_size=output_size,
+    )
     rectified_board_path = boards_dir / f"{annotation_id}.jpg"
     _write_rgb_jpeg(rectified_board_path, rectified_board)
 
@@ -221,6 +236,21 @@ def save_board_annotation(
             rectified_board_path=str(rectified_board_path.relative_to(project_root)),
             rectified_size=output_size,
             created_at=datetime.now(timezone.utc).isoformat(),
+            corner_space=str(corner_space),
+            clip_frame_size=(
+                None
+                if clip_frame_size is None
+                else [int(clip_frame_size[0]), int(clip_frame_size[1])]
+            ),
+            native_corners=(
+                None
+                if native_corners is None
+                else [[float(x), float(y)] for x, y in native_corners]
+            ),
+            native_image_bbox=(
+                None if native_image_bbox is None else [int(value) for value in native_image_bbox]
+            ),
+            source_frame_index=(None if source_frame_index is None else int(source_frame_index)),
         )
     )
 
@@ -257,8 +287,7 @@ def get_saved_frame_counts_by_clip(board_annotations_path: Path) -> dict[str, in
         frame_indices_by_clip.setdefault(clip_path, set()).add(frame_index)
 
     return {
-        clip_path: len(frame_indices)
-        for clip_path, frame_indices in frame_indices_by_clip.items()
+        clip_path: len(frame_indices) for clip_path, frame_indices in frame_indices_by_clip.items()
     }
 
 

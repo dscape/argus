@@ -14,6 +14,12 @@ def test_placeholder_bbox_is_not_usable_camera_crop():
     assert is_camera_bbox_usable((0, 0, 100, 100), (1920, 1080)) is False
 
 
+def test_tiny_bbox_is_not_usable_camera_crop():
+    bbox = (0, 0, 132, 132)
+    assert bbox_area_ratio(bbox, (1920, 1080)) < 0.02
+    assert is_camera_bbox_usable(bbox, (1920, 1080)) is False
+
+
 def test_large_panel_bbox_is_not_usable_camera_crop():
     bbox = (1079, 0, 841, 1080)
     assert bbox_area_ratio(bbox, (1920, 1080)) > 0.25

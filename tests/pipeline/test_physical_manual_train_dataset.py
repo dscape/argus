@@ -52,13 +52,24 @@ def test_save_board_annotation_writes_manual_train_manifest_and_crops(
         clip_path="data/argus/train_real/clip_overlay_demo_clip1_0.pt",
         frame_index=3,
         source_video_id="demo",
-        corners=[[0, 0], [127, 0], [127, 127], [0, 127]],
+        corners=[[0, 0], [63, 0], [63, 63], [0, 63]],
         labels=labels,
         output_size=64,
+        image_corners=[[0, 0], [127, 0], [127, 127], [0, 127]],
+        clip_frame_size=[64, 64],
+        native_corners=[[0, 0], [127, 0], [127, 127], [0, 127]],
+        native_image_bbox=[10, 20, 128, 128],
+        source_frame_index=11,
     )
 
     assert record["annotation_id"] == "clip_overlay_demo_clip1_0_frame0003"
     assert record["labeled_square_count"] == 2
+    assert record["corner_space"] == "clip_frame"
+    assert record["corners"] == [[0.0, 0.0], [63.0, 0.0], [63.0, 63.0], [0.0, 63.0]]
+    assert record["clip_frame_size"] == [64, 64]
+    assert record["native_corners"] == [[0.0, 0.0], [127.0, 0.0], [127.0, 127.0], [0.0, 127.0]]
+    assert record["native_image_bbox"] == [10, 20, 128, 128]
+    assert record["source_frame_index"] == 11
     assert (dataset_root / "boards" / "clip_overlay_demo_clip1_0_frame0003.jpg").exists()
     assert (dataset_root / "squares" / "clip_overlay_demo_clip1_0_frame0003_a8.jpg").exists()
     assert (dataset_root / "squares" / "clip_overlay_demo_clip1_0_frame0003_h1.jpg").exists()

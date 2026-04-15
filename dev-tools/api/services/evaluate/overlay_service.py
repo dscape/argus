@@ -22,10 +22,10 @@ def encode_image_b64(img: np.ndarray, fmt: str = ".png") -> str:
 
 def _read_board(overlay_crop: np.ndarray) -> chess.Board | None:
     """Read board using the tiny ONNX square classifier with auto grid detection."""
-    from pipeline.overlay.grid_detector import detect_grid
+    from pipeline.overlay.board_crop import find_board_grid_in_crop
     from pipeline.overlay.piece_classifier import read_fen_with_grid
 
-    grid = detect_grid(overlay_crop)
+    grid = find_board_grid_in_crop(overlay_crop)
     if grid is None:
         return None
     fen = read_fen_with_grid(overlay_crop, grid)

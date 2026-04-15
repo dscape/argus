@@ -1,5 +1,7 @@
-import { redirect } from "next/navigation";
+"use client";
 
-export default function AnnotateOverlayRedirect() {
-  redirect("/evaluate/overlay");
+import OverlayFenAnnotationPage from "@/components/annotate/OverlayFenAnnotationPage";
+
+export default function AnnotateOverlayPage() {
+  return <OverlayFenAnnotationPage />;
 }

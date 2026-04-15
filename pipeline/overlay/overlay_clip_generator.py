@@ -24,7 +24,7 @@ from pipeline.overlay.calibration import (
     get_calibration,
     is_overlay_bbox_usable,
 )
-from pipeline.overlay.grid_detector import detect_grid
+from pipeline.overlay.board_crop import find_board_grid_in_crop, find_stable_board_grid
 from pipeline.overlay.overlay_move_detector import (
     GameSegment,
     MoveDetectionDiagnostics,
@@ -47,6 +47,19 @@ except ImportError:
 
 OUTPUT_DIR = os.path.join("data", "argus", "train_real")
 FRAME_SIZE = 224  # Legacy: no longer used for new clips (stored at native resolution)
+
+
+def _read_overlay_crop_at_frame(
+    cap: cv2.VideoCapture,
+    calibration: LayoutCalibration,
+    frame_index: int,
+) -> np.ndarray | None:
+    cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
+    ret, frame = cap.read()
+    if not ret or frame is None:
+        return None
+    ox, oy, ow, oh = calibration.overlay
+    return frame[oy : oy + oh, ox : ox + ow]
 
 
 @dataclass
@@ -155,6 +168,14 @@ class OverlayClipGenerator:
         sequence_reader: LockedOverlaySequenceReader | None = None
         started_at = time.perf_counter()
 
+        midpoint_frame = first_frame + max(0, last_frame - first_frame) // 2
+        quarter_frame = first_frame + max(0, last_frame - first_frame) // 4
+        three_quarter_frame = first_frame + (3 * max(0, last_frame - first_frame)) // 4
+        stable_grid = find_stable_board_grid(
+            lambda frame_index: _read_overlay_crop_at_frame(cap, cal, frame_index),
+            [midpoint_frame, quarter_frame, three_quarter_frame, first_frame, max(first_frame, last_frame - 1)],
+        )
+
         current_frame = first_frame
         while current_frame < last_frame:
             cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
@@ -173,7 +194,7 @@ class OverlayClipGenerator:
             # Lock grid once, then use cheap per-square gating plus partial reads.
             fen: str | None = None
             if sequence_reader is None:
-                grid = detect_grid(overlay_crop)
+                grid = stable_grid or find_board_grid_in_crop(overlay_crop)
                 if grid is not None:
                     sequence_reader = LockedOverlaySequenceReader(grid, device=self.device)
                     fen = sequence_reader.read(overlay_crop).fen

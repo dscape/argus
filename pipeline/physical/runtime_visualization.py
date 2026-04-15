@@ -78,6 +78,7 @@ def visualize_runtime_sequence(
     device: str,
     output_dir: str | Path,
     panel_size: int = 240,
+    weights_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Render a frame-by-frame runtime visualization for one held-out validation clip."""
     if frame_count <= 0:
@@ -94,6 +95,7 @@ def visualize_runtime_sequence(
         frame_start=frame_start,
         frame_count=frame_count,
         device=device,
+        weights_path=weights_path,
     )
 
     output_path = Path(output_dir)
@@ -252,6 +254,7 @@ def _collect_visualized_frames(
     frame_start: int,
     frame_count: int,
     device: str,
+    weights_path: str | Path | None = None,
 ) -> list[VisualizedRuntimeFrame]:
     selected_rows = [
         row
@@ -263,14 +266,19 @@ def _collect_visualized_frames(
         end_frame = frame_start + frame_count - 1
         raise ValueError(f"No annotated eval rows found for frames {frame_start}..{end_frame}")
 
-    return _collect_visualized_frames_for_indices(
-        rows,
-        selected_frame_indices={
+    collect_kwargs: dict[str, Any] = {
+        "selected_frame_indices": {
             int(row.frame_index)
             for row in selected_rows
             if row.frame_index is not None
         },
-        device=device,
+        "device": device,
+    }
+    if weights_path is not None:
+        collect_kwargs["weights_path"] = weights_path
+    return _collect_visualized_frames_for_indices(
+        rows,
+        **collect_kwargs,
     )
 
 
@@ -279,6 +287,7 @@ def _collect_visualized_frames_for_indices(
     *,
     selected_frame_indices: set[int],
     device: str,
+    weights_path: str | Path | None = None,
 ) -> list[VisualizedRuntimeFrame]:
     if not selected_frame_indices:
         return []
@@ -293,7 +302,13 @@ def _collect_visualized_frames_for_indices(
         missing = ", ".join(str(index) for index in missing_frame_indices)
         raise ValueError(f"No annotated eval rows found for frames {missing}")
 
-    sequence_reader = PhysicalBoardLogitsSequenceReader(device=device)
+    if weights_path is None:
+        sequence_reader = PhysicalBoardLogitsSequenceReader(device=device)
+    else:
+        sequence_reader = PhysicalBoardLogitsSequenceReader(
+            device=device,
+            weights_path=weights_path,
+        )
     visualized_frames: list[VisualizedRuntimeFrame] = []
     previous_gt: tuple[int, ...] | None = None
     previous_stateless: tuple[int, ...] | None = None
@@ -308,10 +323,15 @@ def _collect_visualized_frames_for_indices(
     for start in range(0, len(relevant_rows), _INFERENCE_BATCH_SIZE):
         chunk_rows = relevant_rows[start : start + _INFERENCE_BATCH_SIZE]
         chunk_images = [_load_board_image(row) for row in chunk_rows]
+        logits_kwargs: dict[str, Any] = {
+            "device": device,
+            "batch_size": _INFERENCE_BATCH_SIZE,
+        }
+        if weights_path is not None:
+            logits_kwargs["weights_path"] = weights_path
         stateless_logits_list = read_board_logits_batch_from_frames(
             chunk_images,
-            device=device,
-            batch_size=_INFERENCE_BATCH_SIZE,
+            **logits_kwargs,
         )
         if stateless_logits_list is None:
             raise ValueError("Runtime reader failed to load physical board logits")

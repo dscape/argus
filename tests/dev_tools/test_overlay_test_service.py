@@ -1,6 +1,7 @@
 """Tests for overlay_test_service sampling and candidate selection."""
 
 import base64
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
@@ -368,6 +369,100 @@ class TestBoardCropReuse:
 
         assert result == {"saved": 1, "errors": []}
         saved_path = tmp_path / "f_video-1_25pct_rnbqkbnr-pppppppp-8-8-8-8-PPPPPPPP-RNBQKBNR.jpg"
+        saved = cv2.imread(str(saved_path), cv2.IMREAD_COLOR)
+        assert saved is not None
+        assert saved.shape[:2] == board.shape[:2]
+
+
+class TestOverlayEvalSessions:
+    """Verify overlay-eval sessions can persist corrected sample statuses."""
+
+    @patch.object(overlay_test_service, "get_conn")
+    def test_update_overlay_eval_results_recomputes_metrics(
+        self,
+        mock_get_conn,
+    ) -> None:
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = ("sess-1",)
+        mock_cursor.__enter__.return_value = mock_cursor
+        mock_cursor.__exit__.return_value = False
+
+        mock_conn_ctx = MagicMock()
+        mock_conn_ctx.cursor.return_value = mock_cursor
+        mock_conn_ctx.__enter__.return_value = mock_conn_ctx
+        mock_conn_ctx.__exit__.return_value = False
+        mock_get_conn.return_value = mock_conn_ctx
+
+        results = [
+            {"frame_key": "a:25pct", "status": "ok"},
+            {"frame_key": "b:25pct", "status": "no_overlay"},
+            {"frame_key": "c:25pct", "status": "warning"},
+        ]
+
+        updated = overlay_test_service.update_overlay_eval_results("sess-1", results)
+
+        assert updated["ok"] is True
+        assert updated["sample_size"] == 3
+        assert updated["detection_rate"] == 2 / 3
+        assert updated["fen_success_rate"] == 1 / 3
+        assert updated["results"] == results
+
+        query, params = mock_cursor.execute.call_args[0]
+        assert "UPDATE overlay_eval_sessions" in query
+        assert json.loads(params[0]) == results
+        assert params[1:] == (3, 2 / 3, 1 / 3, "sess-1")
+        mock_conn_ctx.commit.assert_called_once()
+
+    @patch.object(overlay_test_service, "get_conn")
+    def test_update_overlay_eval_results_returns_error_for_missing_session(
+        self,
+        mock_get_conn,
+    ) -> None:
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = None
+        mock_cursor.__enter__.return_value = mock_cursor
+        mock_cursor.__exit__.return_value = False
+
+        mock_conn_ctx = MagicMock()
+        mock_conn_ctx.cursor.return_value = mock_cursor
+        mock_conn_ctx.__enter__.return_value = mock_conn_ctx
+        mock_conn_ctx.__exit__.return_value = False
+        mock_get_conn.return_value = mock_conn_ctx
+
+        updated = overlay_test_service.update_overlay_eval_results(
+            "missing",
+            [{"frame_key": "a:25pct", "status": "no_overlay"}],
+        )
+
+        assert updated == {"error": "Session missing not found"}
+
+    def test_save_confirmed_frame_extractions_supports_custom_sample_ids(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
+        board = np.full((280, 280, 3), 90, dtype=np.uint8)
+        image_b64 = _encode_image_b64(board)
+
+        monkeypatch.setattr(overlay_test_service, "REAL_OVERLAY_TEST_DIR", tmp_path)
+        monkeypatch.setattr(
+            overlay_test_service,
+            "_load_board_crop_for_video_frame",
+            _fail_if_called,
+        )
+
+        result = overlay_test_service.save_confirmed_frame_extractions(
+            [
+                {
+                    "sample_id": "73f00128",
+                    "fen": chess.STARTING_BOARD_FEN,
+                    "image_b64": image_b64,
+                }
+            ]
+        )
+
+        assert result == {"saved": 1, "errors": []}
+        saved_path = tmp_path / "r73f00128_rnbqkbnr-pppppppp-8-8-8-8-PPPPPPPP-RNBQKBNR.jpg"
         saved = cv2.imread(str(saved_path), cv2.IMREAD_COLOR)
         assert saved is not None
         assert saved.shape[:2] == board.shape[:2]

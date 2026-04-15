@@ -30,18 +30,18 @@ from pipeline.physical.oblique_square_context import PhysicalRealObliqueBoardRow
 from pipeline.physical.real_board_data import PhysicalRealBoardRow, load_real_board_rows
 
 from argus.device import resolve_device
-from argus.model.vision_encoder import VisionEncoder
+from argus.model.vision_encoder import VisionEncoder, default_model_name_for_encoder_type
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "physical_joint_board_reader_end2end"
-_DEFAULT_SIGLIP2_MODEL = "google/siglip2-base-patch16-224"
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    args.model_name = args.model_name or default_model_name_for_encoder_type(args.encoder_type)
     torch.manual_seed(args.seed)
     device = torch.device(resolve_device(args.device))
     output_dir = resolve_output_dir(args.output_dir)
@@ -198,9 +198,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--encoder-type",
         choices=("siglip2", "siglip", "dinov2"),
-        default="siglip2",
+        default="siglip",
     )
-    parser.add_argument("--model-name", type=str, default=_DEFAULT_SIGLIP2_MODEL)
+    parser.add_argument("--model-name", type=str, default=None)
     parser.add_argument("--feature-layer-indices", type=str, default="")
     parser.add_argument("--unfreeze-last-n-layers", type=int, default=2)
     parser.add_argument("--square-query-num-heads", type=int, default=8)

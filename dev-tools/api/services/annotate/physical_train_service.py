@@ -22,19 +22,24 @@ def list_clip_files(
     )
 
 
-
 def get_annotation_summary() -> dict[str, Any]:
     return physical_eval_service._get_annotation_summary(manual_train_dataset)
 
 
-
-def get_frame_annotation(clip_path: str, frame_index: int) -> dict[str, Any] | None:
+def get_frame_annotation(
+    clip_path: str,
+    frame_index: int,
+    *,
+    session_id: str | None = None,
+    padding_px: int = 0,
+) -> dict[str, Any] | None:
     return physical_eval_service._get_frame_annotation(
         manual_train_dataset,
         clip_path,
         frame_index,
+        session_id=session_id,
+        padding_px=padding_px,
     )
-
 
 
 def get_move_corrections(session_id: str, clip_path: str) -> dict[str, Any]:
@@ -43,7 +48,6 @@ def get_move_corrections(session_id: str, clip_path: str) -> dict[str, Any]:
         session_id,
         clip_path,
     )
-
 
 
 def delete_annotation(clip_path: str, frame_index: int) -> dict[str, Any] | None:
@@ -55,7 +59,8 @@ def delete_annotation(clip_path: str, frame_index: int) -> dict[str, Any] | None
 
 
 rectify_frame = physical_eval_service.rectify_frame
-
+detect_corners = physical_eval_service.detect_corners
+track_corners = physical_eval_service.track_corners
 
 
 def save_annotation(

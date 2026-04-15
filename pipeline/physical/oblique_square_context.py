@@ -31,6 +31,11 @@ class PhysicalObliqueBoardRow:
     source_video_id: str | None
     corners: tuple[tuple[float, float], ...]
     labels: tuple[int, ...]
+    corner_space: str = "clip_frame"
+    clip_frame_size: tuple[int, int] | None = None
+    native_corners: tuple[tuple[float, float], ...] | None = None
+    native_image_bbox: tuple[int, int, int, int] | None = None
+    source_frame_index: int | None = None
 
 
 class PhysicalAnnotatedObliqueSquareContextDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
@@ -124,6 +129,9 @@ def load_annotated_oblique_rows(annotation_root: str | Path) -> list[PhysicalObl
         payload = json.loads(line)
         raw_labels = payload.get("labels")
         raw_corners = payload.get("corners")
+        raw_clip_frame_size = payload.get("clip_frame_size")
+        raw_native_corners = payload.get("native_corners")
+        raw_native_image_bbox = payload.get("native_image_bbox")
         if (
             not isinstance(raw_labels, list)
             or len(raw_labels) != 64
@@ -132,6 +140,15 @@ def load_annotated_oblique_rows(annotation_root: str | Path) -> list[PhysicalObl
             or len(raw_corners) != 4
         ):
             continue
+        clip_frame_size = None
+        if isinstance(raw_clip_frame_size, list) and len(raw_clip_frame_size) == 2:
+            clip_frame_size = (int(raw_clip_frame_size[0]), int(raw_clip_frame_size[1]))
+        native_corners = None
+        if isinstance(raw_native_corners, list) and len(raw_native_corners) == 4:
+            native_corners = tuple((float(x), float(y)) for x, y in raw_native_corners)
+        native_image_bbox = None
+        if isinstance(raw_native_image_bbox, list) and len(raw_native_image_bbox) == 4:
+            native_image_bbox = tuple(int(value) for value in raw_native_image_bbox)
         rows.append(
             PhysicalObliqueBoardRow(
                 annotation_id=str(payload["annotation_id"]),
@@ -144,6 +161,15 @@ def load_annotated_oblique_rows(annotation_root: str | Path) -> list[PhysicalObl
                 ),
                 corners=tuple((float(x), float(y)) for x, y in raw_corners),
                 labels=tuple(int(label) for label in raw_labels),
+                corner_space=str(payload.get("corner_space", "clip_frame")),
+                clip_frame_size=clip_frame_size,
+                native_corners=native_corners,
+                native_image_bbox=native_image_bbox,
+                source_frame_index=(
+                    int(payload["source_frame_index"])
+                    if payload.get("source_frame_index") is not None
+                    else None
+                ),
             )
         )
     rows.sort(key=lambda row: (row.clip_path, row.frame_index, row.annotation_id))

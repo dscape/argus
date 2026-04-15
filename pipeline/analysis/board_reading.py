@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from pipeline.analysis.config import VideoAnalysisConfig
-from pipeline.overlay.grid_detector import detect_grid
+from pipeline.overlay.board_crop import find_board_grid_in_crop
 from pipeline.overlay.piece_classifier import BoardRead, read_board_with_grid, read_fen_with_grid
 from pipeline.overlay.scanner import detect_overlay_runtime
 from pipeline.overlay.sequence_reader import LockedOverlaySequenceReader
@@ -221,7 +221,7 @@ def _crop_bbox(
 
 def find_board_in_crop(overlay_crop: np.ndarray):
     """Detect the board grid inside an already-cropped overlay region."""
-    return detect_grid(overlay_crop)
+    return find_board_grid_in_crop(overlay_crop)
 
 
 def _fen_looks_plausible(fen: str | None) -> bool:

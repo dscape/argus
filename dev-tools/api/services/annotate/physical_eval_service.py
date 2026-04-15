@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ import chess
 import cv2
 import numpy as np
 import torch
+from pipeline.overlay.calibration import is_camera_bbox_usable
 from pipeline.overlay.overlay_move_detector import find_move_between_positions
 from pipeline.overlay.replay import build_replay_board
 from pipeline.physical import eval_dataset, splits
@@ -23,6 +25,14 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 _DEFAULT_CLIPS_DIR = _PROJECT_ROOT / "data" / "argus" / "train_real"
 _REAL_CLIP_RE = re.compile(r"^clip_overlay_(?P<video_id>.+?)_clip(?P<clip_id>\d+)_\d+\.pt$")
 _LABEL_INDEX_BY_NAME = {name: index for index, name in enumerate(SQUARE_CLASS_NAMES)}
+
+
+@dataclass(frozen=True)
+class _AnnotationProjectionContext:
+    clip_frame_size: tuple[int, int]
+    zero_padding_bbox: tuple[int, int, int, int]
+    current_bbox: tuple[int, int, int, int]
+    source_frame_index: int | None
 
 
 def list_clip_files(
@@ -38,20 +48,28 @@ def list_clip_files(
     )
 
 
-
 def get_annotation_summary() -> dict[str, Any]:
     return _get_annotation_summary(eval_dataset)
 
 
-
-def get_frame_annotation(clip_path: str, frame_index: int) -> dict[str, Any] | None:
-    return _get_frame_annotation(eval_dataset, clip_path, frame_index)
-
+def get_frame_annotation(
+    clip_path: str,
+    frame_index: int,
+    *,
+    session_id: str | None = None,
+    padding_px: int = 0,
+) -> dict[str, Any] | None:
+    return _get_frame_annotation(
+        eval_dataset,
+        clip_path,
+        frame_index,
+        session_id=session_id,
+        padding_px=padding_px,
+    )
 
 
 def get_move_corrections(session_id: str, clip_path: str) -> dict[str, Any]:
     return _get_move_corrections(eval_dataset, session_id, clip_path)
-
 
 
 def delete_annotation(clip_path: str, frame_index: int) -> dict[str, Any] | None:
@@ -89,6 +107,32 @@ def detect_corners(
     image_rgb = _get_clip_frame_rgb(session_id, frame_index, padding_px=padding_px)
     image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
     result = localize_board(image_bgr)
+    if result is None:
+        return None
+    return {
+        "corners": [[x, y] for x, y in result.corners],
+        "confidence": result.confidence,
+        "method": result.method,
+    }
+
+
+def track_corners(
+    session_id: str,
+    source_frame_index: int,
+    target_frame_index: int,
+    corners: list[list[float]],
+    *,
+    padding_px: int = 0,
+) -> dict[str, Any] | None:
+    from pipeline.physical.board_localizer import track_corners as _track
+
+    source_rgb = _get_clip_frame_rgb(session_id, source_frame_index, padding_px=padding_px)
+    target_rgb = _get_clip_frame_rgb(session_id, target_frame_index, padding_px=padding_px)
+    source_bgr = cv2.cvtColor(source_rgb, cv2.COLOR_RGB2BGR)
+    target_bgr = cv2.cvtColor(target_rgb, cv2.COLOR_RGB2BGR)
+
+    prev_corners = tuple((float(pt[0]), float(pt[1])) for pt in corners)
+    result = _track(source_bgr, target_bgr, prev_corners)
     if result is None:
         return None
     return {
@@ -136,9 +180,7 @@ def _list_clip_files(
     clip_paths = sorted(directory.glob("clip_*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
     clip_matches = {path: _REAL_CLIP_RE.match(path.name) for path in clip_paths}
     source_video_assignments = splits.ensure_source_video_splits_assigned(
-        match.group("video_id")
-        for match in clip_matches.values()
-        if match is not None
+        match.group("video_id") for match in clip_matches.values() if match is not None
     )
 
     clips: list[dict[str, Any]] = []
@@ -177,21 +219,31 @@ def _list_clip_files(
     }
 
 
-
 def _get_annotation_summary(dataset_module: Any) -> dict[str, Any]:
     return dataset_module.get_annotation_summary()
-
 
 
 def _get_frame_annotation(
     dataset_module: Any,
     clip_path: str,
     frame_index: int,
+    *,
+    session_id: str | None = None,
+    padding_px: int = 0,
 ) -> dict[str, Any] | None:
     resolved = _resolve_within_project(clip_path)
     relative_clip_path = str(resolved.relative_to(_PROJECT_ROOT))
-    return dataset_module.load_board_annotation(relative_clip_path, frame_index)
-
+    annotation = dataset_module.load_board_annotation(relative_clip_path, frame_index)
+    if annotation is None:
+        return None
+    projection_context = None
+    if session_id is not None:
+        projection_context = _annotation_projection_context_from_session(
+            session_id,
+            frame_index,
+            padding_px=padding_px,
+        )
+    return _serialize_annotation_for_display(annotation, projection_context)
 
 
 def _get_move_corrections(
@@ -204,7 +256,6 @@ def _get_move_corrections(
     clip_info = clip_service.inspect(session_id)
     annotations = dataset_module.list_board_annotations(relative_clip_path)
     return _build_move_corrections(clip_info, annotations)
-
 
 
 def _delete_annotation(
@@ -221,6 +272,208 @@ def _delete_annotation(
     return dataset_module.get_annotation_summary()
 
 
+def _annotation_projection_context_from_session(
+    session_id: str,
+    frame_index: int,
+    *,
+    padding_px: int,
+) -> _AnnotationProjectionContext | None:
+    session = clip_service._sessions.get(session_id)
+    if session is None:
+        raise ValueError("Session not found")
+
+    clip_frame_size = _clip_frame_size_from_clip_payload(session.get("clip"))
+    if clip_frame_size is None:
+        return None
+
+    preview_context = clip_service._get_overlay_preview_context(session)
+    if preview_context is None or "camera_bbox" not in preview_context:
+        return None
+    if not is_camera_bbox_usable(
+        preview_context["camera_bbox"],
+        preview_context["ref_resolution"],
+    ):
+        return None
+
+    source_frame_indices = preview_context["frame_indices"]
+    if frame_index < 0 or frame_index >= source_frame_indices.shape[0]:
+        raise ValueError(
+            f"Frame index {frame_index} out of range [0, {source_frame_indices.shape[0]})"
+        )
+
+    cap = cv2.VideoCapture(preview_context["video_path"])
+    if not cap.isOpened():
+        return None
+    try:
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    finally:
+        cap.release()
+
+    zero_padding_bbox = clip_service._scale_bbox(
+        preview_context["camera_bbox"],
+        preview_context["ref_resolution"],
+        width,
+        height,
+    )
+    current_bbox = zero_padding_bbox
+    if padding_px > 0:
+        current_bbox = clip_service._pad_bbox(zero_padding_bbox, padding_px, width, height)
+
+    return _AnnotationProjectionContext(
+        clip_frame_size=clip_frame_size,
+        zero_padding_bbox=zero_padding_bbox,
+        current_bbox=current_bbox,
+        source_frame_index=int(source_frame_indices[frame_index].item()),
+    )
+
+
+def _clip_frame_size_from_clip_payload(clip: Any) -> tuple[int, int] | None:
+    if not isinstance(clip, dict):
+        return None
+    frames = clip.get("frames")
+    if not isinstance(frames, torch.Tensor) or frames.ndim < 3:
+        return None
+    sample = frames[0]
+    if sample.ndim == 3:
+        if sample.shape[0] == 3:
+            return int(sample.shape[2]), int(sample.shape[1])
+        if sample.shape[-1] == 3:
+            return int(sample.shape[1]), int(sample.shape[0])
+    return int(frames.shape[-1]), int(frames.shape[-2])
+
+
+def _load_clip_frame_size(clip_path: Path) -> tuple[int, int] | None:
+    try:
+        clip = torch.load(clip_path, map_location="cpu", weights_only=False)
+    except Exception:
+        return None
+    return _clip_frame_size_from_clip_payload(clip)
+
+
+def _coerce_corner_list(value: Any) -> list[list[float]] | None:
+    if not isinstance(value, list) or len(value) != 4:
+        return None
+    corners: list[list[float]] = []
+    for point in value:
+        if not isinstance(point, (list, tuple)) or len(point) != 2:
+            return None
+        try:
+            corners.append([float(point[0]), float(point[1])])
+        except (TypeError, ValueError):
+            return None
+    return corners
+
+
+def _coerce_bbox(value: Any) -> tuple[int, int, int, int] | None:
+    if not isinstance(value, list) or len(value) != 4:
+        return None
+    try:
+        x, y, w, h = (int(value[0]), int(value[1]), int(value[2]), int(value[3]))
+    except (TypeError, ValueError):
+        return None
+    return x, y, w, h
+
+
+def _coerce_size(value: Any) -> tuple[int, int] | None:
+    if not isinstance(value, list) or len(value) != 2:
+        return None
+    try:
+        width, height = int(value[0]), int(value[1])
+    except (TypeError, ValueError):
+        return None
+    return width, height
+
+
+def _display_corners_to_absolute_source_corners(
+    corners: list[list[float]],
+    bbox: tuple[int, int, int, int],
+) -> list[list[float]]:
+    x, y, _w, _h = bbox
+    return [[float(point[0]) + x, float(point[1]) + y] for point in corners]
+
+
+def _absolute_source_corners_to_display(
+    corners: list[list[float]],
+    bbox: tuple[int, int, int, int],
+) -> list[list[float]]:
+    x, y, _w, _h = bbox
+    return [[float(point[0]) - x, float(point[1]) - y] for point in corners]
+
+
+def _clip_corners_to_absolute_source_corners(
+    corners: list[list[float]],
+    clip_frame_size: tuple[int, int],
+    bbox: tuple[int, int, int, int],
+) -> list[list[float]]:
+    clip_width, clip_height = clip_frame_size
+    x, y, width, height = bbox
+    scale_x = float(width) / max(float(clip_width), 1.0)
+    scale_y = float(height) / max(float(clip_height), 1.0)
+    return [[x + float(point[0]) * scale_x, y + float(point[1]) * scale_y] for point in corners]
+
+
+def _absolute_source_corners_to_clip_corners(
+    corners: list[list[float]],
+    clip_frame_size: tuple[int, int],
+    bbox: tuple[int, int, int, int],
+) -> list[list[float]]:
+    clip_width, clip_height = clip_frame_size
+    x, y, width, height = bbox
+    scale_x = max(float(clip_width), 1.0) / max(float(width), 1.0)
+    scale_y = max(float(clip_height), 1.0) / max(float(height), 1.0)
+    return [[(float(point[0]) - x) * scale_x, (float(point[1]) - y) * scale_y] for point in corners]
+
+
+def _annotation_absolute_source_corners(
+    annotation: dict[str, Any],
+    projection_context: _AnnotationProjectionContext,
+) -> list[list[float]] | None:
+    native_corners = _coerce_corner_list(annotation.get("native_corners"))
+    native_image_bbox = _coerce_bbox(annotation.get("native_image_bbox"))
+    if native_corners is not None and native_image_bbox is not None:
+        return _display_corners_to_absolute_source_corners(native_corners, native_image_bbox)
+
+    raw_corners = _coerce_corner_list(annotation.get("corners"))
+    if raw_corners is None:
+        return None
+    clip_frame_size = (
+        _coerce_size(annotation.get("clip_frame_size")) or projection_context.clip_frame_size
+    )
+    return _clip_corners_to_absolute_source_corners(
+        raw_corners,
+        clip_frame_size,
+        projection_context.zero_padding_bbox,
+    )
+
+
+def _serialize_annotation_for_display(
+    annotation: dict[str, Any],
+    projection_context: _AnnotationProjectionContext | None,
+) -> dict[str, Any]:
+    serialized = dict(annotation)
+    if projection_context is None:
+        return serialized
+
+    serialized.setdefault(
+        "clip_frame_size",
+        [projection_context.clip_frame_size[0], projection_context.clip_frame_size[1]],
+    )
+    if (
+        serialized.get("source_frame_index") is None
+        and projection_context.source_frame_index is not None
+    ):
+        serialized["source_frame_index"] = projection_context.source_frame_index
+
+    absolute_corners = _annotation_absolute_source_corners(serialized, projection_context)
+    if absolute_corners is None:
+        return serialized
+    serialized["corners"] = _absolute_source_corners_to_display(
+        absolute_corners,
+        projection_context.current_bbox,
+    )
+    return serialized
+
 
 def _save_annotation(
     dataset_module: Any,
@@ -234,22 +487,61 @@ def _save_annotation(
     padding_px: int = 0,
 ) -> dict[str, Any]:
     resolved_clip_path = _resolve_within_project(clip_path)
+    relative_clip_path = str(resolved_clip_path.relative_to(_PROJECT_ROOT))
     image_rgb = _get_clip_frame_rgb(session_id, frame_index, padding_px=padding_px)
     source_video_id = _source_video_id_from_path(resolved_clip_path)
+
+    projection_context = _annotation_projection_context_from_session(
+        session_id,
+        frame_index,
+        padding_px=padding_px,
+    )
+    stored_corners = corners
+    clip_frame_size: list[int] | None = None
+    native_corners: list[list[float]] | None = None
+    native_image_bbox: list[int] | None = None
+    source_frame_index: int | None = None
+    if projection_context is not None:
+        absolute_corners = _display_corners_to_absolute_source_corners(
+            corners,
+            projection_context.current_bbox,
+        )
+        stored_corners = _absolute_source_corners_to_clip_corners(
+            absolute_corners,
+            projection_context.clip_frame_size,
+            projection_context.zero_padding_bbox,
+        )
+        clip_frame_size = [
+            projection_context.clip_frame_size[0],
+            projection_context.clip_frame_size[1],
+        ]
+        native_corners = [[float(point[0]), float(point[1])] for point in corners]
+        native_image_bbox = list(projection_context.current_bbox)
+        source_frame_index = projection_context.source_frame_index
+    else:
+        loaded_clip_frame_size = _load_clip_frame_size(resolved_clip_path)
+        if loaded_clip_frame_size is not None:
+            clip_frame_size = [loaded_clip_frame_size[0], loaded_clip_frame_size[1]]
+
     annotation = dataset_module.save_board_annotation(
         image_rgb,
-        clip_path=str(resolved_clip_path.relative_to(_PROJECT_ROOT)),
+        clip_path=relative_clip_path,
         frame_index=frame_index,
         source_video_id=source_video_id,
-        corners=corners,
+        corners=stored_corners,
         labels=labels,
         output_size=output_size,
+        image_corners=corners,
+        corner_space="clip_frame",
+        clip_frame_size=clip_frame_size,
+        native_corners=native_corners,
+        native_image_bbox=native_image_bbox,
+        source_frame_index=source_frame_index,
     )
     return {
-        "annotation": annotation,
+        "annotation": _serialize_annotation_for_display(annotation, projection_context),
         "summary": dataset_module.get_annotation_summary(),
     }
-
 
 
 def _build_move_corrections(
@@ -335,9 +627,7 @@ def _build_move_corrections(
             )
         if move is None:
             replay_valid = False
-            replay_errors.append(
-                f"Could not infer a legal move for frame {frame_index + 1}"
-            )
+            replay_errors.append(f"Could not infer a legal move for frame {frame_index + 1}")
             board = _resync_board(board, target_board_fen, target_full_fen)
             continue
 
@@ -378,9 +668,7 @@ def _build_move_corrections(
         )
 
     manual_move_frames = [
-        int(move["frame_index"])
-        for move in corrected_moves
-        if bool(move.get("is_manual"))
+        int(move["frame_index"]) for move in corrected_moves if bool(move.get("is_manual"))
     ]
 
     return {

@@ -39,7 +39,6 @@ def test_image(
         output_path: Where to save the annotated image. Defaults to
                      {input_stem}_annotated.png next to the input.
     """
-    from pipeline.overlay.grid_detector import detect_grid
     from pipeline.overlay.piece_classifier import read_fen_with_grid
     from pipeline.overlay.scanner import detect_overlay_runtime
 
@@ -72,7 +71,9 @@ def test_image(
 
     # ── Step 2: Read board from overlay region ──
     overlay_crop = frame[y : y + bh, x : x + bw]
-    grid = detect_grid(overlay_crop)
+    from pipeline.overlay.board_crop import find_board_grid_in_crop
+
+    grid = find_board_grid_in_crop(overlay_crop)
     board = None
     if grid is None:
         print("GRID DETECTION FAILED: Could not find 8x8 grid in the overlay region.")
@@ -324,7 +325,6 @@ def test_reader(
         flipped: Board from Black's perspective.
         theme: Board theme for piece recognition.
     """
-    from pipeline.overlay.grid_detector import detect_grid
     from pipeline.overlay.piece_classifier import (
         CLASS_TO_PIECE,
         classify_squares,
@@ -348,7 +348,9 @@ def test_reader(
         print("ERROR: Crop region is empty. Check coordinates.")
         return
 
-    grid = detect_grid(overlay_crop)
+    from pipeline.overlay.board_crop import find_board_grid_in_crop
+
+    grid = find_board_grid_in_crop(overlay_crop)
     if grid is None:
         print("GRID DETECTION FAILED: Could not find 8x8 grid.")
         return

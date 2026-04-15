@@ -796,11 +796,20 @@ def inspect_auto_calibration(video_id: str) -> dict | None:
 # ── Hard Cut Detection Inspection ────────────────────────────
 
 
+def _read_overlay_crop_for_eval(cap: cv2.VideoCapture, calibration, frame_index: int) -> np.ndarray | None:
+    cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
+    ret, frame = cap.read()
+    if not ret or frame is None:
+        return None
+    ox, oy, ow, oh = calibration.overlay
+    return frame[oy : oy + oh, ox : ox + ow]
+
+
 def inspect_hard_cuts(video_id: str, sample_fps: float = 2.0) -> dict | None:
     """Inspect hard cut detection on a video with calibration."""
     from pipeline.overlay.auto_calibration import _get_video_path
+    from pipeline.overlay.board_crop import find_board_grid_in_crop, find_stable_board_grid
     from pipeline.overlay.calibration import get_calibration
-    from pipeline.overlay.grid_detector import detect_grid
     from pipeline.overlay.overlay_move_detector import (
         count_fen_differences,
         detect_moves,
@@ -843,6 +852,13 @@ def inspect_hard_cuts(video_id: str, sample_fps: float = 2.0) -> dict | None:
     fens = []
     frame_indices = []
     sequence_reader: LockedOverlaySequenceReader | None = None
+    midpoint_frame = total_frames // 2
+    quarter_frame = total_frames // 4
+    three_quarter_frame = (3 * total_frames) // 4
+    stable_grid = find_stable_board_grid(
+        lambda frame_index: _read_overlay_crop_for_eval(cap, scaled_cal, frame_index),
+        [midpoint_frame, quarter_frame, three_quarter_frame, 0, max(0, total_frames - 1)],
+    )
 
     current_frame = 0
     while current_frame < total_frames:
@@ -855,7 +871,7 @@ def inspect_hard_cuts(video_id: str, sample_fps: float = 2.0) -> dict | None:
         overlay_crop = frame[oy : oy + oh, ox : ox + ow]
         fen: str | None = None
         if sequence_reader is None:
-            grid = detect_grid(overlay_crop)
+            grid = stable_grid or find_board_grid_in_crop(overlay_crop)
             if grid is not None:
                 sequence_reader = LockedOverlaySequenceReader(grid)
                 fen = sequence_reader.read(overlay_crop).fen

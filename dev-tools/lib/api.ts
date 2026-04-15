@@ -377,6 +377,7 @@ export async function listCrawlVideos(params: {
   limit?: number;
   offset?: number;
   video_ids?: string[];
+  downloaded_only?: boolean;
 }): Promise<CrawlVideosResponse> {
   const qs = new URLSearchParams();
   if (params.channel_id) qs.set("channel_id", params.channel_id);
@@ -386,6 +387,7 @@ export async function listCrawlVideos(params: {
   if (params.limit !== undefined) qs.set("limit", String(params.limit));
   if (params.offset !== undefined) qs.set("offset", String(params.offset));
   if (params.video_ids && params.video_ids.length > 0) qs.set("video_ids", params.video_ids.join(","));
+  if (params.downloaded_only) qs.set("downloaded_only", "true");
   const res = await fetch(`/api/crawl/videos?${qs}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -926,6 +928,8 @@ export interface OverlayEvalResult {
   piece_classify_ms?: number;
   detector_found?: boolean;
   already_saved?: boolean;
+  status_before_manual?: "ok" | "warning" | "no_overlay" | "detected";
+  warning_before_manual?: string;
 }
 
 export interface OverlayEvalSession {
@@ -986,6 +990,24 @@ export async function updateOverlayEvalPins(
       body: JSON.stringify({ pin_state: pinState }),
     }
   );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateOverlayEvalSessionResults(
+  sessionId: string,
+  results: OverlayEvalResult[],
+): Promise<{
+  results: OverlayEvalResult[];
+  sample_size: number;
+  detection_rate: number | null;
+  fen_success_rate: number | null;
+}> {
+  const res = await fetch(`/api/models/overlay-eval/sessions/${sessionId}/results`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ results }),
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -1503,9 +1525,19 @@ export interface PhysicalRuntimeEvalResult {
   frame_index: number;
   board_path: string;
   source_video_id: string | null;
+  gt_fen?: string;
+  stateless_fen?: string;
+  temporal_fen?: string;
   gt_change_count: number | null;
   stateless_change_count: number | null;
   temporal_change_count: number | null;
+  gt_changed_squares?: string[];
+  stateless_changed_squares?: string[];
+  temporal_changed_squares?: string[];
+  stateless_error_squares?: string[];
+  temporal_error_squares?: string[];
+  stateless_square_confidences?: number[];
+  temporal_square_confidences?: number[];
   stateless_error_count: number;
   temporal_error_count: number;
   stateless_square_accuracy: number;
@@ -1533,9 +1565,19 @@ export interface PhysicalRuntimeSession {
   square_accuracy: number | null;
   non_empty_accuracy: number | null;
   exact_match_rate: number | null;
+  model_label?: string | null;
+  model_path?: string | null;
   results?: PhysicalRuntimeEvalResult[];
   pin_state?: Record<string, boolean>;
   evaluation_id?: number | null;
+}
+
+export interface PhysicalRuntimeModelOption {
+  path: string;
+  label: string;
+  source: "weights" | "outputs";
+  is_default: boolean;
+  modified_at: string | null;
 }
 
 export async function renderPhysicalRuntimeVisualization(body: {
@@ -1544,6 +1586,7 @@ export async function renderPhysicalRuntimeVisualization(body: {
   frame_count: number;
   panel_size?: number;
   device?: string;
+  model_path?: string | null;
 }): Promise<PhysicalRuntimeVisualizationResponse> {
   const res = await fetch("/api/evaluate/physical-runtime/render", {
     method: "POST",
@@ -1568,9 +1611,22 @@ export async function samplePhysicalRuntimeFrames(
   return res.json();
 }
 
+export async function listPhysicalRuntimeModels(): Promise<{
+  models: PhysicalRuntimeModelOption[];
+}> {
+  const res = await fetch("/api/evaluate/physical-runtime/models");
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function inspectPhysicalRuntimeFrame(
   annotationId: string,
-  options?: { panel_size?: number; device?: string; signal?: AbortSignal },
+  options?: {
+    panel_size?: number;
+    device?: string;
+    model_path?: string | null;
+    signal?: AbortSignal;
+  },
 ): Promise<PhysicalRuntimeEvalResult> {
   const res = await fetch("/api/evaluate/physical-runtime/inspect", {
     method: "POST",
@@ -1579,6 +1635,7 @@ export async function inspectPhysicalRuntimeFrame(
       annotation_id: annotationId,
       panel_size: options?.panel_size,
       device: options?.device,
+      model_path: options?.model_path,
     }),
     signal: options?.signal,
   });
@@ -1588,7 +1645,12 @@ export async function inspectPhysicalRuntimeFrame(
 
 export async function inspectPhysicalRuntimeFrames(
   annotationIds: string[],
-  options?: { panel_size?: number; device?: string; signal?: AbortSignal },
+  options?: {
+    panel_size?: number;
+    device?: string;
+    model_path?: string | null;
+    signal?: AbortSignal;
+  },
 ): Promise<PhysicalRuntimeEvalResult[]> {
   const res = await fetch("/api/evaluate/physical-runtime/inspect-batch", {
     method: "POST",
@@ -1597,6 +1659,7 @@ export async function inspectPhysicalRuntimeFrames(
       annotation_ids: annotationIds,
       panel_size: options?.panel_size,
       device: options?.device,
+      model_path: options?.model_path,
     }),
     signal: options?.signal,
   });
@@ -1616,6 +1679,7 @@ export async function savePhysicalRuntimeEval(body: {
   stateless_non_empty_accuracy?: number | null;
   stateless_exact_match_rate?: number | null;
   notes?: string | null;
+  model_path?: string | null;
 }): Promise<{ id: number; evaluated_at: string }> {
   const res = await fetch("/api/evaluate/physical-runtime/save-eval", {
     method: "POST",
@@ -1703,6 +1767,11 @@ export interface PhysicalEvalAnnotation {
   rectified_board_path: string;
   rectified_size: number;
   created_at: string;
+  corner_space?: string;
+  clip_frame_size?: number[] | null;
+  native_corners?: number[][] | null;
+  native_image_bbox?: number[] | null;
+  source_frame_index?: number | null;
 }
 
 export interface PhysicalEvalSummary {
@@ -1742,8 +1811,11 @@ export async function getPhysicalEvalSummary(): Promise<PhysicalEvalSummary> {
 export async function getPhysicalEvalAnnotation(
   clipPath: string,
   frameIndex: number,
+  options?: { sessionId?: string; paddingPx?: number },
 ): Promise<PhysicalEvalAnnotation | null> {
   const params = new URLSearchParams({ clip_path: clipPath, frame_index: String(frameIndex) });
+  if (options?.sessionId) params.set("session_id", options.sessionId);
+  if (options?.paddingPx !== undefined) params.set("padding_px", String(options.paddingPx));
   const res = await fetch(`/api/physical-eval/annotation?${params}`);
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
@@ -1800,6 +1872,22 @@ export async function detectPhysicalEvalCorners(body: {
   return res.json();
 }
 
+export async function trackPhysicalEvalCorners(body: {
+  session_id: string;
+  source_frame_index: number;
+  target_frame_index: number;
+  corners: number[][];
+  padding_px?: number;
+}): Promise<{ tracking: { corners: number[][]; confidence: number; method: string } | null }> {
+  const res = await fetch("/api/physical-eval/track-corners", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function savePhysicalEvalAnnotation(body: {
   session_id: string;
   clip_path: string;
@@ -1837,8 +1925,11 @@ export async function getPhysicalTrainSummary(): Promise<PhysicalEvalSummary> {
 export async function getPhysicalTrainAnnotation(
   clipPath: string,
   frameIndex: number,
+  options?: { sessionId?: string; paddingPx?: number },
 ): Promise<PhysicalEvalAnnotation | null> {
   const params = new URLSearchParams({ clip_path: clipPath, frame_index: String(frameIndex) });
+  if (options?.sessionId) params.set("session_id", options.sessionId);
+  if (options?.paddingPx !== undefined) params.set("padding_px", String(options.paddingPx));
   const res = await fetch(`/api/physical-train/annotation?${params}`);
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
@@ -1887,6 +1978,22 @@ export async function detectPhysicalTrainCorners(body: {
   padding_px?: number;
 }): Promise<{ detection: { corners: number[][]; confidence: number; method: string } | null }> {
   const res = await fetch("/api/physical-train/detect-corners", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function trackPhysicalTrainCorners(body: {
+  session_id: string;
+  source_frame_index: number;
+  target_frame_index: number;
+  corners: number[][];
+  padding_px?: number;
+}): Promise<{ tracking: { corners: number[][]; confidence: number; method: string } | null }> {
+  const res = await fetch("/api/physical-train/track-corners", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

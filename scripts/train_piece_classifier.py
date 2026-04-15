@@ -308,8 +308,8 @@ def _log_per_class_accuracy(
         )
 
 
-def _next_version() -> tuple[int, str]:
-    meta_path = WEIGHTS_DIR / "metadata.json"
+def _next_version(weights_dir: Path) -> tuple[int, str]:
+    meta_path = weights_dir / "metadata.json"
     revision = 1
     if meta_path.exists():
         with meta_path.open() as handle:
@@ -337,6 +337,12 @@ def main() -> None:
     parser.add_argument("--chess-positions-empty-multiplier", type=int, default=6)
     parser.add_argument("--real-board-train-dir", type=Path, default=None)
     parser.add_argument("--real-board-augment-copies", type=int, default=0)
+    parser.add_argument(
+        "--weights-dir",
+        type=Path,
+        default=WEIGHTS_DIR,
+        help="Directory for exported ONNX weights + metadata (default: weights/overlay)",
+    )
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -394,9 +400,11 @@ def main() -> None:
     )
     _log_per_class_accuracy(model, val_loader, device=device)
 
-    revision, version_str = _next_version()
-    best_path = WEIGHTS_DIR / "best.onnx"
-    versioned_path = WEIGHTS_DIR / f"{version_str}.onnx"
+    weights_dir = args.weights_dir.resolve()
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    revision, version_str = _next_version(weights_dir)
+    best_path = weights_dir / "best.onnx"
+    versioned_path = weights_dir / f"{version_str}.onnx"
 
     _export_onnx(model, best_path)
     _export_onnx(model, versioned_path)
@@ -427,7 +435,7 @@ def main() -> None:
             "label_smoothing": args.label_smoothing,
         },
     }
-    with (WEIGHTS_DIR / "metadata.json").open("w") as handle:
+    with (weights_dir / "metadata.json").open("w") as handle:
         json.dump(metadata, handle, indent=2)
 
     logger.info("Training complete. Best val accuracy: %.4f", best_val_acc)

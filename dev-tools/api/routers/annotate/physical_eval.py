@@ -103,6 +103,30 @@ async def detect_corners(body: DetectCornersRequest):
         raise HTTPException(404, str(e))
 
 
+class TrackCornersRequest(BaseModel):
+    session_id: str
+    source_frame_index: int
+    target_frame_index: int
+    corners: list[list[float]] = Field(min_length=4, max_length=4)
+    padding_px: int = 0
+
+
+@router.post("/track-corners")
+async def track_corners(body: TrackCornersRequest):
+    try:
+        result = await run_in_threadpool(
+            physical_eval_service.track_corners,
+            body.session_id,
+            body.source_frame_index,
+            body.target_frame_index,
+            body.corners,
+            padding_px=body.padding_px,
+        )
+        return {"tracking": result}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 @router.post("/rectify")
 async def rectify_frame(body: RectifyRequest):
     return await run_in_threadpool(

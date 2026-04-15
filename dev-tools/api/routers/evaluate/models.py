@@ -482,6 +482,10 @@ class UpdateOverlayEvalPinsRequest(BaseModel):
     pin_state: dict
 
 
+class UpdateOverlayEvalResultsRequest(BaseModel):
+    results: list[dict]
+
+
 @router.post("/overlay-eval/save-eval")
 async def save_overlay_detection_eval(body: SaveOverlayDetectionEvalRequest):
     """Save an overlay detection evaluation result."""
@@ -529,6 +533,22 @@ async def get_overlay_eval_session(session_id: str):
     if session is None:
         raise HTTPException(404, f"Session {session_id} not found")
     return session
+
+
+@router.put("/overlay-eval/sessions/{session_id}/results")
+async def update_overlay_eval_results(
+    session_id: str,
+    body: UpdateOverlayEvalResultsRequest,
+):
+    """Replace persisted overlay evaluation results for a session."""
+    result = await run_in_threadpool(
+        overlay_test_service.update_overlay_eval_results,
+        session_id,
+        body.results,
+    )
+    if "error" in result:
+        raise HTTPException(404, result["error"])
+    return result
 
 
 @router.patch("/overlay-eval/sessions/{session_id}/pins")

@@ -127,10 +127,11 @@ async def list_videos(
     limit: int = Query(50, ge=1, le=5000),
     offset: int = Query(0, ge=0),
     video_ids: str | None = Query(None),
+    downloaded_only: bool = Query(False),
 ):
     parsed_ids = video_ids.split(",") if video_ids else None
     return await run_in_threadpool(
-        crawl_service.list_videos, channel_id, status, limit, offset, order_by, layout_type, parsed_ids
+        crawl_service.list_videos, channel_id, status, limit, offset, order_by, layout_type, parsed_ids, downloaded_only
     )
 
 

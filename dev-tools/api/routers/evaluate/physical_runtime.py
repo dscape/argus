@@ -18,18 +18,21 @@ class RenderRuntimeRequest(BaseModel):
     frame_count: int = 8
     panel_size: int = 240
     device: str = "cpu"
+    model_path: str | None = None
 
 
 class InspectRuntimeFrameRequest(BaseModel):
     annotation_id: str
     panel_size: int = 240
     device: str = "cpu"
+    model_path: str | None = None
 
 
 class InspectRuntimeFramesRequest(BaseModel):
     annotation_ids: list[str]
     panel_size: int = 240
     device: str = "cpu"
+    model_path: str | None = None
 
 
 class SavePhysicalRuntimeEvalRequest(BaseModel):
@@ -43,6 +46,7 @@ class SavePhysicalRuntimeEvalRequest(BaseModel):
     stateless_non_empty_accuracy: float | None = None
     stateless_exact_match_rate: float | None = None
     notes: str | None = None
+    model_path: str | None = None
 
 
 class CreatePhysicalRuntimeSessionRequest(BaseModel):
@@ -69,6 +73,7 @@ async def render_runtime_visualization(body: RenderRuntimeRequest):
             frame_count=body.frame_count,
             panel_size=body.panel_size,
             device=body.device,
+            model_path=body.model_path,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
@@ -90,6 +95,12 @@ async def sample_runtime_frames(limit: int = 20, exclude: str | None = None):
     return {"frames": frames}
 
 
+@router.get("/models")
+async def list_runtime_models():
+    models = await run_in_threadpool(physical_runtime_service.list_runtime_models)
+    return {"models": models}
+
+
 @router.post("/inspect")
 async def inspect_runtime_frame(body: InspectRuntimeFrameRequest):
     try:
@@ -98,6 +109,7 @@ async def inspect_runtime_frame(body: InspectRuntimeFrameRequest):
             annotation_id=body.annotation_id,
             panel_size=body.panel_size,
             device=body.device,
+            model_path=body.model_path,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
@@ -113,6 +125,7 @@ async def inspect_runtime_frames(body: InspectRuntimeFramesRequest):
             annotation_ids=body.annotation_ids,
             panel_size=body.panel_size,
             device=body.device,
+            model_path=body.model_path,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
@@ -135,6 +148,7 @@ async def save_physical_runtime_eval(body: SavePhysicalRuntimeEvalRequest):
         body.stateless_non_empty_accuracy,
         body.stateless_exact_match_rate,
         body.notes,
+        body.model_path,
     )
 
 

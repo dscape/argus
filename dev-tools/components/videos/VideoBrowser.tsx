@@ -60,23 +60,24 @@ function ChevronRightIcon({ className }: { className?: string }) {
 
 const SESSION_KEY = "videoBrowserState";
 
-function getSavedState(): { status: string; sort: string; channel: string | null; page: number } {
+function getSavedState(): BrowseState {
   if (typeof window === "undefined") {
-    return { status: DEFAULT_STATUS, sort: DEFAULT_SORT, channel: null, page: 0 };
+    return { status: DEFAULT_STATUS, sort: DEFAULT_SORT, channel: null, page: 0, downloadedOnly: false };
   }
   try {
     const saved = sessionStorage.getItem(SESSION_KEY);
-    if (saved) return JSON.parse(saved);
+    if (saved) return { downloadedOnly: false, ...JSON.parse(saved) };
   } catch { /* ignore */ }
-  return { status: DEFAULT_STATUS, sort: DEFAULT_SORT, channel: null, page: 0 };
+  return { status: DEFAULT_STATUS, sort: DEFAULT_SORT, channel: null, page: 0, downloadedOnly: false };
 }
 
-function buildQs(statusFilter: string, orderBy: string, channelId: string | null, page: number) {
+function buildQs(statusFilter: string, orderBy: string, channelId: string | null, page: number, downloadedOnly: boolean) {
   const params = new URLSearchParams();
   if (statusFilter !== DEFAULT_STATUS) params.set("status", statusFilter);
   if (orderBy !== DEFAULT_SORT) params.set("sort", orderBy);
   if (channelId) params.set("channel", channelId);
   if (page > 0) params.set("page", String(page));
+  if (downloadedOnly) params.set("downloaded", "1");
   const qs = params.toString();
   return qs ? `?${qs}` : "";
 }
@@ -86,6 +87,7 @@ interface BrowseState {
   sort: string;
   channel: string | null;
   page: number;
+  downloadedOnly: boolean;
 }
 
 export default function VideoBrowser({
@@ -101,12 +103,13 @@ export default function VideoBrowser({
   const { toasts, addToast, removeToast } = useToasts();
 
   // Convenience aliases
-  const { status: statusFilter, sort: orderBy, channel: channelId, page } = browse;
+  const { status: statusFilter, sort: orderBy, channel: channelId, page, downloadedOnly } = browse;
 
   // Setters that reset page when filters change
   const setStatusFilter = (v: string) => setBrowse((s) => ({ ...s, status: v, page: 0 }));
   const setOrderBy = (v: string) => setBrowse((s) => ({ ...s, sort: v, page: 0 }));
   const setChannelId = (v: string | null) => setBrowse((s) => ({ ...s, channel: v, page: 0 }));
+  const setDownloadedOnly = (v: boolean) => setBrowse((s) => ({ ...s, downloadedOnly: v, page: 0 }));
   const setPage = (v: number | ((p: number) => number)) =>
     setBrowse((s) => ({ ...s, page: typeof v === "function" ? v(s.page) : v }));
 
@@ -121,10 +124,10 @@ export default function VideoBrowser({
 
   // Sync state to URL (display) and sessionStorage (for back navigation)
   useEffect(() => {
-    const qs = buildQs(statusFilter, orderBy, channelId, page);
+    const qs = buildQs(statusFilter, orderBy, channelId, page, downloadedOnly);
     window.history.replaceState(window.history.state, "", `/videos/browse${qs}`);
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(browse));
-  }, [browse, statusFilter, orderBy, channelId, page]);
+  }, [browse, statusFilter, orderBy, channelId, page, downloadedOnly]);
 
   const loadCounts = useCallback(async () => {
     try {
@@ -157,6 +160,7 @@ export default function VideoBrowser({
         order_by: orderBy === "title_score_desc" ? undefined : orderBy,
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
+        downloaded_only: downloadedOnly || undefined,
       });
       setVideos(data.videos);
       setTotal(data.total);
@@ -168,7 +172,7 @@ export default function VideoBrowser({
     } finally {
       setLoading(false);
     }
-  }, [channelId, statusFilter, orderBy, page, addToast]);
+  }, [channelId, statusFilter, orderBy, page, downloadedOnly, addToast]);
 
   useEffect(() => {
     loadVideos();
@@ -262,7 +266,7 @@ export default function VideoBrowser({
   }, [videos, orderBy]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const hasActiveFilter = statusFilter !== DEFAULT_STATUS || channelId !== null;
+  const hasActiveFilter = statusFilter !== DEFAULT_STATUS || channelId !== null || downloadedOnly;
 
   return (
     <div className="relative h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
@@ -350,6 +354,17 @@ export default function VideoBrowser({
                     </option>
                   ))}
                 </select>
+              </div>
+              <div className="border-t pt-2 mt-1">
+                <label className="flex items-center gap-2 px-2 py-1 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={downloadedOnly}
+                    onChange={(e) => setDownloadedOnly(e.target.checked)}
+                    className="rounded border-muted-foreground/50"
+                  />
+                  <span className="text-sm">Downloaded only</span>
+                </label>
               </div>
             </ToolbarDropdown>
           </div>

@@ -34,11 +34,9 @@ def load_board_annotation(clip_path: str, frame_index: int) -> dict[str, Any] | 
     )
 
 
-
 def list_board_annotations(clip_path: str) -> list[dict[str, Any]]:
     splits.ensure_annotation_layout_migrated()
     return annotation_dataset.list_board_annotations(BOARD_ANNOTATIONS_PATH, clip_path=clip_path)
-
 
 
 def delete_board_annotation(clip_path: str, frame_index: int) -> bool:
@@ -54,7 +52,6 @@ def delete_board_annotation(clip_path: str, frame_index: int) -> bool:
     )
 
 
-
 def save_board_annotation(
     image_rgb: np.ndarray,
     *,
@@ -64,6 +61,12 @@ def save_board_annotation(
     corners: list[list[float]],
     labels: list[int | None],
     output_size: int = DEFAULT_BOARD_SIZE,
+    image_corners: list[list[float]] | tuple[tuple[float, float], ...] | None = None,
+    corner_space: str = "clip_frame",
+    clip_frame_size: list[int] | tuple[int, int] | None = None,
+    native_corners: list[list[float]] | tuple[tuple[float, float], ...] | None = None,
+    native_image_bbox: list[int] | tuple[int, int, int, int] | None = None,
+    source_frame_index: int | None = None,
 ) -> dict[str, Any]:
     splits.ensure_annotation_layout_migrated()
     splits.assign_source_video_split(source_video_id, DATASET_SPLIT)
@@ -82,8 +85,13 @@ def save_board_annotation(
         corners=corners,
         labels=labels,
         output_size=output_size,
+        image_corners=image_corners,
+        corner_space=corner_space,
+        clip_frame_size=clip_frame_size,
+        native_corners=native_corners,
+        native_image_bbox=native_image_bbox,
+        source_frame_index=source_frame_index,
     )
-
 
 
 def get_saved_frame_counts_by_clip() -> dict[str, int]:
@@ -91,10 +99,8 @@ def get_saved_frame_counts_by_clip() -> dict[str, int]:
     return annotation_dataset.get_saved_frame_counts_by_clip(BOARD_ANNOTATIONS_PATH)
 
 
-
 def get_held_out_source_video_ids() -> list[str]:
     return splits.get_source_video_ids_for_split(DATASET_SPLIT)
-
 
 
 def get_annotation_summary() -> dict[str, Any]:

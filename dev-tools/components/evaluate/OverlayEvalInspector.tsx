@@ -18,6 +18,7 @@ import {
   createOverlayEvalSession,
   listOverlayEvalSessions,
   updateOverlayEvalPins,
+  updateOverlayEvalSessionResults,
   getModelVersions,
   type OverlayEvalResult,
   type OverlayEvalSession,
@@ -97,6 +98,7 @@ export default function OverlayEvalInspector({
   const [rejected, setRejected] = useState<Set<string>>(new Set());
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [persistingNoOverlayId, setPersistingNoOverlayId] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const sessionListRef = useRef<HTMLDivElement>(null);
@@ -214,6 +216,52 @@ export default function OverlayEvalInspector({
     }
   }
 
+  async function persistSessionResults(nextResults: OverlayEvalResult[]) {
+    if (!sessionId) return;
+    await updateOverlayEvalSessionResults(sessionId, nextResults);
+  }
+
+  async function toggleNoOverlay(r: OverlayEvalResult) {
+    const key = resultKey(r);
+    const previousResults = results;
+    const nextResults = results.map((result) => {
+      if (resultKey(result) !== key) return result;
+
+      if (result.status === "no_overlay" && result.status_before_manual) {
+        return {
+          ...result,
+          status: result.status_before_manual,
+          warning: result.warning_before_manual,
+          status_before_manual: undefined,
+          warning_before_manual: undefined,
+        };
+      }
+
+      if (result.status === "no_overlay") {
+        return result;
+      }
+
+      return {
+        ...result,
+        status_before_manual: result.status,
+        warning_before_manual: result.warning,
+        status: "no_overlay" as const,
+        warning: "Manually marked as not overlay.",
+      };
+    });
+
+    setResults(nextResults);
+    setPersistingNoOverlayId(key);
+    try {
+      await persistSessionResults(nextResults);
+    } catch (e) {
+      setResults(previousResults);
+      toast.error(e instanceof Error ? e.message : "Failed to update session");
+    } finally {
+      setPersistingNoOverlayId(null);
+    }
+  }
+
   async function runBatch() {
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -228,6 +276,7 @@ export default function OverlayEvalInspector({
     setEditedFens({});
     setRejected(new Set());
     setSaved(new Set());
+    setPersistingNoOverlayId(null);
     setEmptyMessage(null);
 
     const collected: OverlayEvalResult[] = [];
@@ -760,6 +809,7 @@ export default function OverlayEvalInspector({
                       result={r}
                       pinned
                       onPin={() => togglePin(key)}
+                      onToggleNoOverlay={sessionId ? () => toggleNoOverlay(r) : undefined}
                       editedFen={editedFens[key]}
                       onEditFen={(fen) =>
                         setEditedFens((prev) => ({ ...prev, [key]: fen }))
@@ -776,6 +826,7 @@ export default function OverlayEvalInspector({
                       isSaved={saved.has(key)}
                       isRejected={rejected.has(key)}
                       isSaving={savingId === key}
+                      isPersistingNoOverlay={persistingNoOverlayId === key}
                     />
                   );
                 })}
@@ -886,6 +937,7 @@ export default function OverlayEvalInspector({
                             result={r}
                             pinned={false}
                             onPin={() => togglePin(key)}
+                            onToggleNoOverlay={sessionId ? () => toggleNoOverlay(r) : undefined}
                             editedFen={editedFens[key]}
                             onEditFen={(fen) =>
                               setEditedFens((prev) => ({ ...prev, [key]: fen }))
@@ -902,6 +954,7 @@ export default function OverlayEvalInspector({
                             isSaved={saved.has(key)}
                             isRejected={rejected.has(key)}
                             isSaving={savingId === key}
+                            isPersistingNoOverlay={persistingNoOverlayId === key}
                           />
                         </div>
                       );

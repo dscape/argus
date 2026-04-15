@@ -38,18 +38,18 @@ from pipeline.physical.square_classifier import read_board_logits_batch_from_fra
 from pipeline.physical.square_probe import ProbeMetrics
 
 from argus.device import resolve_device
-from argus.model.vision_encoder import VisionEncoder
+from argus.model.vision_encoder import VisionEncoder, default_model_name_for_encoder_type
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "physical_joint_board_reader"
-_DEFAULT_DINO_MODEL = "facebook/dinov2-base"
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    args.model_name = args.model_name or default_model_name_for_encoder_type(args.encoder_type)
     torch.manual_seed(args.seed)
     device = torch.device(resolve_device(args.device))
     output_dir = resolve_output_dir(args.output_dir)
@@ -312,7 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--encoder-type", choices=("dinov2", "siglip", "siglip2", "yolo"), default="dinov2"
     )
-    parser.add_argument("--model-name", type=str, default=_DEFAULT_DINO_MODEL)
+    parser.add_argument("--model-name", type=str, default=None)
     parser.add_argument("--feature-layer-indices", type=str, default="8,10,11")
     parser.add_argument("--output-dir", type=Path, default=None)
     return parser

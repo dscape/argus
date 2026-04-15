@@ -308,6 +308,23 @@ def get_video_counts(channel_id: str | None = None) -> dict:
             return counts
 
 
+def get_downloaded_video_ids() -> set[str]:
+    """Scan the videos directory and return IDs of videos with local files."""
+    from pipeline.paths import VIDEOS_DIR
+
+    downloaded = set()
+    if not VIDEOS_DIR.exists():
+        return downloaded
+    for entry in VIDEOS_DIR.iterdir():
+        if not entry.is_dir():
+            continue
+        vid = entry.name
+        # Check canonical path: {video_id}/{video_id}.mp4
+        if (entry / f"{vid}.mp4").exists():
+            downloaded.add(vid)
+    return downloaded
+
+
 def list_videos(
     channel_id: str | None = None,
     status_filter: str | None = None,
@@ -316,6 +333,7 @@ def list_videos(
     order_by: str | None = None,
     layout_type: str | None = None,
     video_ids: list[str] | None = None,
+    downloaded_only: bool = False,
 ) -> dict:
     """List videos with live title scoring."""
     conditions = []
@@ -341,6 +359,14 @@ def list_videos(
         else:
             conditions.append("layout_type = %s")
             params.append(layout_type)
+
+    if downloaded_only:
+        dl_ids = get_downloaded_video_ids()
+        if not dl_ids:
+            return {"videos": [], "total": 0}
+        placeholders = ", ".join(["%s"] * len(dl_ids))
+        conditions.append(f"video_id IN ({placeholders})")
+        params.extend(dl_ids)
 
     if video_ids:
         placeholders = ", ".join(["%s"] * len(video_ids))

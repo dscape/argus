@@ -13,12 +13,21 @@ interface ChessArrow {
   color?: string;
 }
 
+interface SquareStyle {
+  fill?: string;
+  fillOpacity?: number;
+  stroke?: string;
+  strokeWidth?: number;
+  strokeOpacity?: number;
+}
+
 interface Props {
   fen: string;
   size?: number;
   flipped?: boolean;
   highlightedSquares?: string[];
   arrows?: ChessArrow[];
+  squareStyles?: Record<string, SquareStyle>;
 }
 
 type Square = {
@@ -38,6 +47,7 @@ export function ChessBoard({
   flipped = false,
   highlightedSquares = [],
   arrows = [],
+  squareStyles = {},
 }: Props) {
   const sqSize = size / 8;
   const boardFen = fen.split(" ")[0] ?? fen;
@@ -68,6 +78,9 @@ export function ChessBoard({
         const { x, y } = squareTopLeft(row, col, sqSize, flipped);
         const isLight = (row + col) % 2 === 0;
         const squareName = boardCoordsToSquare(row, col);
+        const squareStyle = squareStyles[squareName];
+        const strokeWidth = squareStyle?.strokeWidth ?? 3;
+        const strokeInset = strokeWidth / 2;
         return (
           <g key={`square-${row}-${col}`}>
             <rect x={x} y={y} width={sqSize} height={sqSize} fill={isLight ? LIGHT : DARK} />
@@ -79,6 +92,28 @@ export function ChessBoard({
                 height={sqSize}
                 fill={MOVE_HIGHLIGHT}
                 fillOpacity={0.5}
+              />
+            )}
+            {squareStyle?.fill && (
+              <rect
+                x={x}
+                y={y}
+                width={sqSize}
+                height={sqSize}
+                fill={squareStyle.fill}
+                fillOpacity={squareStyle.fillOpacity ?? 1}
+              />
+            )}
+            {squareStyle?.stroke && (
+              <rect
+                x={x + strokeInset}
+                y={y + strokeInset}
+                width={sqSize - strokeWidth}
+                height={sqSize - strokeWidth}
+                fill="none"
+                stroke={squareStyle.stroke}
+                strokeOpacity={squareStyle.strokeOpacity ?? 1}
+                strokeWidth={strokeWidth}
               />
             )}
           </g>

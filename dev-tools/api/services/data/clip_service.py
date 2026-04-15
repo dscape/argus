@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 import torch
 
+from pipeline.overlay.calibration import is_camera_bbox_usable
 from pipeline.overlay.replay import build_replay_board
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -488,8 +489,9 @@ def inspect(session_id: str) -> dict[str, Any]:
         if clip_row is not None:
             metadata["camera_bbox"] = list(clip_row["camera_bbox"])
             metadata["ref_resolution"] = list(clip_row["ref_resolution"])
-            metadata["camera_bbox_usable"] = not _is_placeholder_bbox(
-                clip_row["camera_bbox"]
+            metadata["camera_bbox_usable"] = is_camera_bbox_usable(
+                clip_row["camera_bbox"],
+                clip_row["ref_resolution"],
             )
 
     return {
@@ -604,10 +606,6 @@ def _pad_bbox(
     return x, y, x2 - x, y2 - y
 
 
-def _is_placeholder_bbox(bbox: tuple[int, int, int, int]) -> bool:
-    return bbox == (0, 0, 100, 100)
-
-
 def get_camera_frame_rgb(
     session_id: str, frame_index: int, padding_px: int = 0
 ) -> np.ndarray:
@@ -625,8 +623,7 @@ def get_camera_frame_rgb(
     if context is None or "camera_bbox" not in context:
         return _get_stored_frame_rgb(session, frame_index)
 
-    # Placeholder bbox — fall back to stored tensor
-    if _is_placeholder_bbox(context["camera_bbox"]):
+    if not is_camera_bbox_usable(context["camera_bbox"], context["ref_resolution"]):
         return _get_stored_frame_rgb(session, frame_index)
 
     source_frame_indices: torch.Tensor = context["frame_indices"]

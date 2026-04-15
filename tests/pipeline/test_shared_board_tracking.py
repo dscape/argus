@@ -377,6 +377,31 @@ def test_segmental_decoder_returns_constant_board_when_no_events_are_proposed() 
     assert all(frame.fen == chess.STARTING_BOARD_FEN for frame in decoded.frames)
 
 
+def test_segmental_decoder_can_drop_worst_board_frame_from_segment_scoring() -> None:
+    board = chess.Board()
+    board_log_probs = [
+        torch.log_softmax(_logits_for_board(board, preferred_logit=4.0), dim=1),
+        torch.log_softmax(_logits_for_board(board, preferred_logit=4.0), dim=1),
+        torch.log_softmax(_logits_for_board(board, preferred_logit=1.0), dim=1),
+    ]
+
+    plain_score = SegmentalLegalSequenceDecoder(
+        chess.STARTING_BOARD_FEN,
+        segment_board_drop_worst_frames=0,
+    )._segment_board_score(board_log_probs, board, start=0, end=3)
+    trimmed_score = SegmentalLegalSequenceDecoder(
+        chess.STARTING_BOARD_FEN,
+        segment_board_drop_worst_frames=1,
+    )._segment_board_score(board_log_probs, board, start=0, end=3)
+    kept_frame_scores = sorted(
+        [score_board_state(frame_log_probs, board) for frame_log_probs in board_log_probs],
+        reverse=True,
+    )[:2]
+
+    assert trimmed_score > plain_score
+    assert trimmed_score == sum(kept_frame_scores)
+
+
 def test_segmental_decoder_emits_state_aware_diagnostics() -> None:
     vocab = get_vocabulary()
     board = chess.Board()
