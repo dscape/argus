@@ -574,8 +574,11 @@ function AnnotationContent({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ camera_bbox: expanded }),
       });
-      toast.success("Camera bbox updated in DB — resetting padding");
-      setCameraPadding(0);
+      // Update the local metadata so the next save uses the new bbox
+      if (clipInfo.metadata) {
+        (clipInfo.metadata as Record<string, unknown>).camera_bbox = expanded;
+      }
+      toast.success("Camera bbox updated in DB");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update bbox");
     }
@@ -789,11 +792,12 @@ function AnnotationContent({
                 className="h-3 w-16"
               />
               <span className="text-[9px] tabular-nums w-6 text-right text-muted-foreground">{cameraPadding}</span>
-              {cameraPadding > 0 && clipInfo.metadata?.source_db_clip_id != null && (
+              {clipInfo.metadata?.source_db_clip_id != null && (
                 <button
                   type="button"
                   onClick={() => void updateCameraBbox()}
-                  className="rounded border border-blue-500/40 bg-blue-500/10 px-1.5 py-0.5 text-[9px] text-blue-700 hover:bg-blue-500/20 dark:text-blue-300"
+                  disabled={cameraPadding <= 0}
+                  className="rounded border border-blue-500/40 bg-blue-500/10 px-1.5 py-0.5 text-[9px] text-blue-700 hover:bg-blue-500/20 dark:text-blue-300 disabled:opacity-40"
                 >
                   Save bbox
                 </button>
