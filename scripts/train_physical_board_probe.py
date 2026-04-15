@@ -36,6 +36,7 @@ from pipeline.physical.oblique_board_data import (
     PhysicalObliqueBoardCropOnlyDataset,
     PhysicalRealObliqueBoardDataset,
     PhysicalSyntheticObliqueBoardDataset,
+    PhysicalSyntheticWarpedObliqueBoardDataset,
 )
 from pipeline.physical.oblique_square_context import (
     PhysicalAnnotatedObliqueSquareContextDataset,
@@ -61,6 +62,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "physical_board_probe"
 _DEFAULT_WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
 _DEFAULT_DINO_MODEL = "facebook/dinov2-base"
+_DEFAULT_SIGLIP2_MODEL = "google/siglip2-base-patch16-224"
 _DEFAULT_YOLO_MODEL = "weights/yolo_base/yolo11n.pt"
 _MODEL_CODE_VERSION = "v7"
 _IMAGENET_MEAN = torch.tensor((0.485, 0.456, 0.406), dtype=torch.float32).view(3, 1, 1)
@@ -531,7 +533,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--encoder-type",
         type=str,
-        choices=["dinov2", "yolo"],
+        choices=["dinov2", "siglip", "siglip2", "yolo"],
         default="dinov2",
     )
     parser.add_argument("--model-name", type=str, default=None)
@@ -623,7 +625,10 @@ def build_encoder_kwargs(args: argparse.Namespace) -> dict[str, object]:
         "frozen": True,
         "encoder_type": args.encoder_type,
     }
-    if args.encoder_type == "dinov2" and args.dino_feature_layer_indices.strip():
+    if (
+        args.encoder_type in {"dinov2", "siglip", "siglip2"}
+        and args.dino_feature_layer_indices.strip()
+    ):
         encoder_kwargs["feature_layer_indices"] = parse_feature_layer_indices(
             args.dino_feature_layer_indices
         )
@@ -638,6 +643,8 @@ def build_encoder_kwargs(args: argparse.Namespace) -> dict[str, object]:
 def default_model_name(encoder_type: str) -> str:
     if encoder_type == "yolo":
         return _DEFAULT_YOLO_MODEL
+    if encoder_type in {"siglip", "siglip2"}:
+        return _DEFAULT_SIGLIP2_MODEL
     return _DEFAULT_DINO_MODEL
 
 
@@ -666,10 +673,27 @@ def build_synthetic_dataset(
             "synthetic oblique crops are not wired into this script yet"
         )
     if synthetic_source == "topdown":
-        if board_input_mode in {"oblique_board", "oblique_board_crop"}:
-            raise ValueError(
-                "oblique whole-board inputs require synthetic_source=rendered "
-                "when synthetic data is enabled"
+        if board_input_mode == "oblique_board":
+            return PhysicalSyntheticWarpedObliqueBoardDataset(
+                num_positions=num_positions,
+                image_size=image_size,
+                seed=seed,
+                augment=augment,
+                min_moves=min_moves,
+                max_moves=max_moves,
+                min_ply=min_ply,
+            )
+        if board_input_mode == "oblique_board_crop":
+            return PhysicalObliqueBoardCropOnlyDataset(
+                PhysicalSyntheticWarpedObliqueBoardDataset(
+                    num_positions=num_positions,
+                    image_size=image_size,
+                    seed=seed,
+                    augment=augment,
+                    min_moves=min_moves,
+                    max_moves=max_moves,
+                    min_ply=min_ply,
+                )
             )
         return PhysicalSyntheticBoardDataset(
             num_positions=num_positions,

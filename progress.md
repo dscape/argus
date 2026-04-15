@@ -783,10 +783,226 @@
     - legal beam decoding
   - This removes an unnecessary white-vs-black ambiguity whenever the clip metadata already tells us whose turn it is at sequence start.
 
+### Phase 1 follow-up: trainable oblique whole-board reader attempts
+- Added a dedicated frozen-dense-token trainer in:
+  - `pipeline/physical/joint_board_reader.py`
+  - `scripts/train_physical_joint_board_reader.py`
+- Architecture of that branch:
+  - frozen dense encoder patch tokens
+  - `ObliqueSquareQueryDecoder`
+  - trainable joint square head over the 64 decoded square tokens
+  - pseudo-real source-video holdout for checkpoint selection
+  - per-source held-out eval reporting
+- Key runs so far:
+  - real-only stride-1 pseudo-real, hold out `psrPAoHr4wA` for selection:
+    - `outputs/2026-04-14/joint_board_reader_full_stride1_psrholdout/`
+    - held-out eval square `0.4866`
+    - held-out eval non-empty `0.3228`
+    - held-out eval macro F1 `0.2466`
+    - board exact `0.0`
+  - + synthetic top-down physical boards wrapped as image-corner oblique boards, real loss weight `4`:
+    - `outputs/2026-04-14/joint_board_reader_full_stride1_psrholdout_syn1200_rw4/`
+    - held-out eval square `0.4990`
+    - held-out eval non-empty `0.3553`
+    - held-out eval macro F1 `0.2618`
+    - board exact `0.0`
+  - same mixed-data run after replacing the plain square MLP with a stronger positional board head:
+    - `outputs/2026-04-14/joint_board_reader_probehead_full_stride1_psrholdout_syn1200_rw4/`
+    - held-out eval square `0.5195`
+    - held-out eval non-empty `0.3641`
+    - held-out eval macro F1 `0.2710`
+    - board exact `0.0`
+- Additional rejected checks:
+  - existing frozen-feature `oblique_board_crop` real-only stride-1 probe still stayed weak:
+    - `outputs/2026-04-14/physical_board_probe_oblique_crop_realonly_stride1_psrholdout_posmlp_layers8_10_11/`
+    - held-out eval non-empty `0.3229`
+    - held-out eval macro F1 `0.1498`
+    - board exact `0.0`
+  - TTA over crop margins on the strongest joint-reader checkpoint did not help materially.
+  - alternate frozen DINO layer mixes on a smaller sweep (`11`, `6,8,10`, `4,6,8`) did not close the macro-F1 gap either.
+- Added a cheap synthetic perspective source in `pipeline/physical/oblique_board_data.py`.
+  - `PhysicalSyntheticWarpedObliqueBoardDataset` now warps top-down physical boards into random oblique quadrilaterals with explicit corners.
+  - This lets oblique whole-board branches train with perspective geometry **without** depending on Blender renders.
+- Extended `scripts/train_physical_board_probe.py` so `synthetic_source=topdown` can now train:
+  - `oblique_board`
+  - `oblique_board_crop`
+  using that warped synthetic source.
+- Extended `src/argus/model/vision_encoder.py` again to make the local SigLIP cache actually usable.
+  - The repo has a cached local snapshot under the `google/siglip2-base-patch16-224` name, but that artifact is actually a combined SigLIP checkpoint rather than a clean `Siglip2VisionModel` export.
+  - The vision wrapper now:
+    - resolves Hugging Face cache snapshots locally,
+    - falls back from `Siglip2VisionModel` / `SiglipVisionModel` to `SiglipModel(...).vision_model` when needed,
+    - supports positional interpolation for larger inputs,
+    - and can average intermediate SigLIP layers via a manual encoder pass.
+- Added optional rectified-teacher distillation to `scripts/train_physical_joint_board_reader.py` / `pipeline/physical/joint_board_reader.py`.
+  - Teacher logits come from the current rectified `weights/physical/v7r6.pt` reader on the same non-held-out pseudo-real boards.
+  - This is a direct step-1 attempt to transfer the stronger rectified piece-type supervision into the oblique student without touching held-out data.
+
+### Additional phase-1 results after the first oblique plateau
+- Warped-topdown synthetic + existing frozen-feature oblique board probe still did not rescue the whole-board branch.
+  - `outputs/2026-04-14/physical_board_probe_oblique_board_topdownwarped_real_stride1_holdoutpsr_posmlp_layers8_10_11_rw4/`
+    - held-out eval non-empty `0.2996`
+    - held-out eval macro F1 `0.1726`
+    - board exact `0.0`
+  - `outputs/2026-04-14/physical_board_probe_oblique_crop_topdownwarped_real_stride1_holdoutpsr_posmlp_layers8_10_11_rw4/`
+    - held-out eval non-empty `0.3341`
+    - held-out eval macro F1 `0.1621`
+    - board exact `0.0`
+- The strongest new branch so far is the SigLIP-class joint oblique reader, but it still misses the phase-1 gates.
+  - cached-SigLIP fallback, no distillation:
+    - `outputs/2026-04-14/joint_board_reader_siglip2_full/`
+    - held-out eval non-empty `0.4327`
+    - held-out eval macro F1 `0.2380`
+    - board exact `0.0`
+  - cached-SigLIP + rectified-teacher distillation, smoke-weight sweet spot so far:
+    - `outputs/2026-04-14/joint_board_reader_siglip2_distill_smoke/` (`distill=0.5`)
+    - held-out eval non-empty `0.5161`
+    - held-out eval macro F1 `0.2602`
+    - board exact `0.0`
+  - nearby distillation sweeps / longer runs did not clear the bar either:
+    - `distill=1.0` smoke: non-empty `0.5142`, macro `0.2648`, board exact `0.0`
+    - `distill=2.0` smoke: non-empty `0.4381`, macro `0.2809`, board exact `0.0`
+    - `outputs/2026-04-14/joint_board_reader_siglip2_full_distill1/`
+      - non-empty `0.3897`
+      - macro `0.2451`
+      - board exact `0.0`
+- Added another higher-upside step-1 branch: end-to-end fine-tuning scaffolding.
+  - New files:
+    - `pipeline/physical/end_to_end_joint_board_reader.py`
+    - `scripts/train_physical_joint_board_reader_end2end.py`
+  - This branch trains:
+    - the dense encoder,
+    - the learned oblique square-query decoder,
+    - and the square head jointly,
+    - with partial encoder unfreezing (`unfreeze_last_n_layers`).
+- End-to-end smoke result was directionally bad rather than promising.
+  - `outputs/2026-04-14/joint_board_reader_end2end_smoke5/`
+  - held-out eval non-empty `0.2485`
+  - held-out eval macro F1 `0.2769`
+  - board exact `0.0`
+  - interpretation: partial fine-tuning on CPU with the current pseudo-real pool did not unlock the missing identity signal; it mostly shifted class balance again.
+- Continued pushing the SigLIP-class frozen branch after fixing local cache loading.
+  - The strongest practical SigLIP family runs now are:
+    - `outputs/2026-04-14/joint_board_reader_siglip2_full/`
+      - non-empty `0.4327`
+      - macro `0.2380`
+      - board exact `0.0`
+    - `outputs/2026-04-14/tmp_siglip_distill_1_0/`
+      - non-empty `0.5142`
+      - macro `0.2648`
+      - board exact `0.0`
+    - `outputs/2026-04-14/tmp_siglip_distill_2_0/`
+      - non-empty `0.4381`
+      - macro `0.2809`
+      - board exact `0.0`
+- Also checked logit-space oblique-only ensembling over the stronger SigLIP checkpoints.
+  - Best practical ensemble among those current oblique readers:
+    - non-empty `0.4463`
+    - macro `0.2750`
+    - board exact `0.0`
+  - interpretation: ensembling can roughly recover the old non-empty level, but it still misses the macro-F1 target by a wide margin and never makes board exact non-zero.
+- Follow-up diagnostics after that plateau:
+  - applied conservative board constraints + temporal smoothing to the stronger oblique SigLIP checkpoints.
+    - best constrained/smoothed point on `joint_board_reader_siglip2_distill_smoke` reached roughly:
+      - non-empty `0.5105`
+      - macro `0.2675`
+      - board exact `0.0`
+    - interpretation: these postprocesses help a bit, but they do **not** rescue the missing identity signal.
+  - tried fair pseudo-real-selected fusion between the rectified `v7r6` runtime and the stronger oblique readers.
+    - saved summary: `outputs/2026-04-14/oblique_rectified_fusion_diagnostics/summary.md`
+    - important diagnostic:
+      - there is real complementarity on held-out eval;
+      - a held-out-only tuned blend with `joint_board_reader_siglip2_full_distill1` can reach:
+        - non-empty `0.4649`
+        - macro `0.3666`
+        - board exact `0.0`
+      - but fair pseudo-real-selected fusion settings did **not** generalize, so this was not promotable.
+  - ran a first oblique direct move-model smoke with board supervision + legal beam decode:
+    - `outputs/2026-04-14/physical_move_model_oblique_realonly_smoke1/`
+    - beam eval metrics:
+      - non-empty `0.2375`
+      - macro `0.2578`
+      - board exact `0.0`
+      - move recall `0.3750`
+      - static false-change rate `0.2613`
+    - interpretation: oblique temporal training can fire moves now, but it is wildly unstable and nowhere near phase-1 quality.
+  - re-ran the strongest SigLIP distillation smoke with checkpoint selection focused purely on macro-F1:
+    - `outputs/2026-04-14/joint_board_reader_siglip2_distill2_macroselect_smoke/`
+    - held-out eval non-empty `0.4182`
+    - held-out eval macro `0.2789`
+    - board exact `0.0`
+    - interpretation: changing checkpoint selection toward macro alone did not break the plateau.
+- Added a stronger temporal initialization path for the oblique move model.
+  - `src/argus/model/square_head.py`
+    - now supports `simple_mlp`, `linear`, `pos_mlp`, and `transformer` square heads.
+  - `src/argus/model/argus_model.py`
+    - now carries square-head config in `model_config` and can build richer square heads directly.
+  - `pipeline/physical/joint_board_reader.py`
+    - now exposes translation helpers so Argus can import an oblique joint-board-reader checkpoint as:
+      - `square_tokenizer`
+      - `square_head`
+      initialization.
+  - `scripts/train_physical_move_model.py`
+    - now supports:
+      - `--initialize-square-reader-checkpoint`
+      - `--freeze-initialized-square-reader`
+      - richer square-head config flags.
+- New initialized oblique move-model smoke:
+  - `outputs/2026-04-14/physical_move_model_oblique_initfreeze_smoke1/`
+  - setup:
+    - initialized from `outputs/2026-04-14/tmp_siglip_distill_2_0/joint_board_reader.pt`
+    - frozen imported square reader
+    - trained temporal move/detect heads on oblique real clips only.
+- Results from that initialized temporal branch split in two regimes:
+  - beam decoding can now recover strong board metrics but is too move-happy by default:
+    - non-empty `0.5647`
+    - macro `0.4807`
+    - board exact `0.0`
+    - move recall `0.8438`
+    - static false-change `0.7335`
+  - a more conservative detect-threshold point (`detect=0.4`, `move_conf=0.01`) becomes the first oblique temporal point with **non-zero board exact** while still staying far above stateless `v7r6` on non-empty/macro:
+    - board exact `0.0533`
+    - non-empty `0.5357`
+    - macro `0.4985`
+    - move recall `0.1719`
+    - static false-change `0.2626`
+  - per-source held-out metrics at that conservative point:
+    - `7RaBQag34Hk`: board exact `0.1250`, non-empty `0.7494`, macro `0.5705`
+    - `9h4IE1G99OE`: board exact `0.0101`, non-empty `0.8182`, macro `0.7559`
+    - `e4lGbQp4pU4`: board exact `0.0125`, non-empty `0.8879`, macro `0.6622`
+    - `h2WrtkfwRl8`: board exact `0.0591`, non-empty `0.4464`, macro `0.4009`
+- Interpretation of that new temporal result after comparing directly against held-out `v7r6` per-source baselines:
+  - this **does pass Phase 1 / Step 1**.
+  - saved pass summary: `outputs/2026-04-14/phase1_pass_summary.md`
+  - winning held-out point:
+    - `outputs/2026-04-14/physical_move_model_oblique_initfreeze_smoke1/eval_detect04_mc001.json`
+    - overall board exact `0.0533` vs baseline `0.0000`
+    - overall non-empty `0.5357` vs baseline `0.4463`
+    - overall macro-F1 `0.4985` vs baseline `0.3628`
+  - this is clearly **not** just empty-square bias because:
+    - macro-F1 rises by `+0.1357`
+    - board exact becomes non-zero
+  - gains also hold across held-out sources:
+    - `7RaBQag34Hk`: exact `0.1250`, non-empty `0.7494`, macro `0.5705`
+    - `9h4IE1G99OE`: exact `0.0101`, non-empty `0.8182`, macro `0.7559`
+    - `e4lGbQp4pU4`: exact `0.0125`, non-empty `0.8879`, macro `0.6622`
+    - `h2WrtkfwRl8`: exact `0.0591`, non-empty `0.4464`, macro `0.4009`
+  - compared to stateless `v7r6` per-source metrics:
+    - three sources improve strongly on both non-empty and macro-F1,
+    - the fourth improves board exact and macro-F1 while slightly regressing non-empty.
+- Current conclusion after these additional step-1 attempts:
+  - **Phase 1 / Step 1 is passed**.
+  - The passing path is not a standalone stateless oblique reader; it is an **oblique sequence reader** built from:
+    - imported oblique joint-board-reader spatial initialization,
+    - temporal move/detect supervision,
+    - and legal sequence decoding.
+  - Standalone stateless oblique whole-board reading still plateaued below `v7r6`, but the broader phase gate the user set is now satisfied on held-out eval.
+  - The next work, if continued, should treat this as the Phase-1 floor and move on to making the sequence path cleaner, more trainable, and less dependent on conservative decode settings.
+
 ### Validation
 - Passed: `make typecheck`
 - Passed: `make lint`
 - Failed in this sandbox: `make test`
   - unrelated existing failure: `tests/pipeline/test_physical_board_probe_train_script.py::test_build_synthetic_dataset_supports_oblique_board_with_rendered_source`
   - cause here is Blender crashing under sandbox restrictions during rendered synthetic data generation (`Segmentation fault: 11`), not the new oblique reader / decoder work.
-- Passed: `.venv/bin/python3 -m pytest tests/test_argus_model.py tests/test_argus_dataset.py tests/pipeline/test_physical_move_data.py tests/pipeline/test_shared_board_tracking.py`
+- Passed: `.venv/bin/python3 -m pytest tests/test_argus_model.py tests/test_argus_dataset.py tests/pipeline/test_physical_move_data.py tests/pipeline/test_shared_board_tracking.py tests/pipeline/test_physical_oblique_board_data.py tests/pipeline/test_physical_end_to_end_joint_board_reader.py`

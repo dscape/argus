@@ -16,6 +16,10 @@ from torch.utils.data import ConcatDataset, DataLoader, Dataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from pipeline.physical.joint_board_reader import (
+    argus_overrides_from_joint_board_reader_checkpoint,
+    argus_square_reader_state_dict_from_joint_board_reader_checkpoint,
+)
 from pipeline.physical.move_data import build_real_move_window_clips
 
 from argus.data.dataset import ArgusDataset, ArgusInMemoryDataset
@@ -227,24 +231,64 @@ def main() -> None:
         pin_memory=True,
     )
 
-    model = ArgusModel(
-        vision_encoder_name=args.model_name,
-        vision_encoder_type=args.vision_encoder_type,
-        frozen_vision=True,
-        vision_feature_layer_indices=parse_feature_layer_indices(args.feature_layer_indices),
-        temporal_d_model=args.temporal_d_model,
-        temporal_n_layers=args.temporal_layers,
-        temporal_d_state=args.temporal_d_state,
-        temporal_expand=args.temporal_expand,
-        move_vocab_size=1970,
-        pooling_type=args.pooling_type,
-        square_pool_size=8,
-        square_head_enabled=args.square_loss_weight > 0.0,
-        square_token_mode=args.square_token_mode,
-        square_query_num_heads=args.square_query_num_heads,
-        square_query_dropout=args.square_query_dropout,
-        use_detector=False,
-    )
+    joint_board_reader_checkpoint = None
+    model_kwargs = {
+        "vision_encoder_name": args.model_name,
+        "vision_encoder_type": args.vision_encoder_type,
+        "frozen_vision": True,
+        "vision_feature_layer_indices": parse_feature_layer_indices(args.feature_layer_indices),
+        "temporal_d_model": args.temporal_d_model,
+        "temporal_n_layers": args.temporal_layers,
+        "temporal_d_state": args.temporal_d_state,
+        "temporal_expand": args.temporal_expand,
+        "move_vocab_size": 1970,
+        "pooling_type": args.pooling_type,
+        "square_pool_size": 8,
+        "square_head_enabled": args.square_loss_weight > 0.0,
+        "square_head_type": args.square_head_type,
+        "square_head_hidden_dim": args.square_head_hidden_dim,
+        "square_head_transformer_layers": args.square_head_transformer_layers,
+        "square_head_transformer_heads": args.square_head_transformer_heads,
+        "square_head_transformer_ff_dim": args.square_head_transformer_ff_dim,
+        "square_head_dropout": args.square_head_dropout,
+        "square_token_mode": args.square_token_mode,
+        "square_query_num_heads": args.square_query_num_heads,
+        "square_query_dropout": args.square_query_dropout,
+        "square_query_mlp_ratio": args.square_query_mlp_ratio,
+        "use_detector": False,
+    }
+    if args.initialize_square_reader_checkpoint is not None:
+        joint_board_reader_checkpoint = torch.load(
+            args.initialize_square_reader_checkpoint,
+            map_location="cpu",
+            weights_only=False,
+        )
+        model_kwargs.update(
+            argus_overrides_from_joint_board_reader_checkpoint(joint_board_reader_checkpoint)
+        )
+
+    model = ArgusModel(**model_kwargs)
+    if joint_board_reader_checkpoint is not None:
+        translated_state_dict = argus_square_reader_state_dict_from_joint_board_reader_checkpoint(
+            joint_board_reader_checkpoint
+        )
+        load_result = model.load_state_dict(translated_state_dict, strict=False)
+        unexpected_keys = sorted(load_result.unexpected_keys)
+        if unexpected_keys:
+            raise ValueError(
+                f"Unexpected square-reader initialization keys: {', '.join(unexpected_keys)}"
+            )
+        missing_square_keys = sorted(
+            key
+            for key in load_result.missing_keys
+            if key.startswith("square_tokenizer") or key.startswith("square_head")
+        )
+        if missing_square_keys:
+            raise ValueError(
+                f"Square-reader initialization missed model keys: {', '.join(missing_square_keys)}"
+            )
+        if args.freeze_initialized_square_reader:
+            freeze_square_reader(model)
 
     total_steps = (
         compute_num_optimizer_steps(
@@ -331,8 +375,15 @@ def main() -> None:
         "train_dataset_size": len(train_dataset),
         "val_dataset_size": len(val_dataset),
         "observation_mode": args.observation_mode,
-        "vision_encoder_type": args.vision_encoder_type,
-        "square_token_mode": args.square_token_mode,
+        "vision_encoder_type": model.model_config["vision_encoder_type"],
+        "vision_encoder_name": model.model_config["vision_encoder_name"],
+        "vision_feature_layer_indices": model.model_config.get("vision_feature_layer_indices"),
+        "square_token_mode": model.model_config["square_token_mode"],
+        "square_head_type": model.model_config.get("square_head_type"),
+        "initialize_square_reader_checkpoint": None
+        if args.initialize_square_reader_checkpoint is None
+        else str(args.initialize_square_reader_checkpoint),
+        "freeze_initialized_square_reader": args.freeze_initialized_square_reader,
         "train_move_loss_mode": args.train_move_loss_mode,
         "move_target_pre_frames": args.move_target_pre_frames,
         "detect_target_radius": args.detect_target_radius,
@@ -406,8 +457,21 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("pooled", "oblique_square_queries"),
         default="oblique_square_queries",
     )
+    parser.add_argument(
+        "--square-head-type",
+        choices=("simple_mlp", "linear", "pos_mlp", "transformer"),
+        default="simple_mlp",
+    )
+    parser.add_argument("--square-head-hidden-dim", type=int, default=512)
+    parser.add_argument("--square-head-transformer-layers", type=int, default=2)
+    parser.add_argument("--square-head-transformer-heads", type=int, default=8)
+    parser.add_argument("--square-head-transformer-ff-dim", type=int, default=1024)
+    parser.add_argument("--square-head-dropout", type=float, default=0.1)
     parser.add_argument("--square-query-num-heads", type=int, default=8)
     parser.add_argument("--square-query-dropout", type=float, default=0.0)
+    parser.add_argument("--square-query-mlp-ratio", type=float, default=4.0)
+    parser.add_argument("--initialize-square-reader-checkpoint", type=Path, default=None)
+    parser.add_argument("--freeze-initialized-square-reader", action="store_true")
     parser.add_argument("--temporal-d-model", type=int, default=512)
     parser.add_argument("--temporal-layers", type=int, default=4)
     parser.add_argument("--temporal-d-state", type=int, default=128)
@@ -435,6 +499,15 @@ def physical_move_collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, 
     if all("board_corners" in sample for sample in batch):
         collated["board_corners"] = torch.stack([sample["board_corners"] for sample in batch])
     return collated
+
+
+def freeze_square_reader(model: ArgusModel) -> None:
+    modules = (model.square_tokenizer, model.square_head)
+    for module in modules:
+        if module is None:
+            continue
+        for param in module.parameters():
+            param.requires_grad = False
 
 
 def parse_feature_layer_indices(raw_value: str) -> list[int] | None:

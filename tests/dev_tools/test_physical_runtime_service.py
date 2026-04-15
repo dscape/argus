@@ -68,9 +68,7 @@ def test_inspect_runtime_frames_groups_by_clip_and_preserves_input_order(monkeyp
         del device
         clip_calls.append((str(clip_rows[0].clip_path), selected_frame_indices))
         return [
-            _visualized_frame(row)
-            for row in clip_rows
-            if row.frame_index in selected_frame_indices
+            _visualized_frame(row) for row in clip_rows if row.frame_index in selected_frame_indices
         ]
 
     monkeypatch.setattr(

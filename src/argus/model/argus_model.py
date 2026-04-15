@@ -39,6 +39,12 @@ class ArgusModel(nn.Module):
         square_pool_size: int = 8,
         square_head_enabled: bool = False,
         square_vocab_size: int = 13,
+        square_head_type: str = "simple_mlp",
+        square_head_hidden_dim: int = 512,
+        square_head_transformer_layers: int = 2,
+        square_head_transformer_heads: int = 8,
+        square_head_transformer_ff_dim: int = 1024,
+        square_head_dropout: float = 0.1,
         square_token_mode: str = "pooled",
         square_query_num_heads: int = 8,
         square_query_dropout: float = 0.0,
@@ -84,6 +90,12 @@ class ArgusModel(nn.Module):
             "square_pool_size": square_pool_size,
             "square_head_enabled": square_head_enabled,
             "square_vocab_size": square_vocab_size,
+            "square_head_type": square_head_type,
+            "square_head_hidden_dim": square_head_hidden_dim,
+            "square_head_transformer_layers": square_head_transformer_layers,
+            "square_head_transformer_heads": square_head_transformer_heads,
+            "square_head_transformer_ff_dim": square_head_transformer_ff_dim,
+            "square_head_dropout": square_head_dropout,
             "square_token_mode": square_token_mode,
             "square_query_num_heads": square_query_num_heads,
             "square_query_dropout": square_query_dropout,
@@ -111,7 +123,16 @@ class ArgusModel(nn.Module):
         )
         self.move_head = MoveHead(hidden_dim=temporal_d_model, vocab_size=move_vocab_size)
         self.square_head = (
-            SquareHead(embed_dim=resolved_embed_dim, num_classes=square_vocab_size)
+            SquareHead(
+                embed_dim=resolved_embed_dim,
+                num_classes=square_vocab_size,
+                head_type=square_head_type,
+                hidden_dim=square_head_hidden_dim,
+                transformer_layers=square_head_transformer_layers,
+                transformer_heads=square_head_transformer_heads,
+                transformer_ff_dim=square_head_transformer_ff_dim,
+                dropout=square_head_dropout,
+            )
             if square_head_enabled
             else None
         )

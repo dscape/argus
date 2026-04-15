@@ -4,6 +4,7 @@ import numpy as np
 from pipeline.physical.oblique_board_data import (
     extract_oblique_board_crop,
     preprocess_oblique_board_image,
+    synthesize_warped_oblique_board,
 )
 
 
@@ -35,3 +36,14 @@ def test_preprocess_oblique_board_image_returns_square_tensor_and_scaled_corners
     assert scaled_corners.shape == (4, 2)
     assert float(scaled_corners.min().item()) >= 0.0
     assert float(scaled_corners.max().item()) <= 36.0
+
+
+def test_synthesize_warped_oblique_board_returns_image_and_quad() -> None:
+    board = np.full((64, 64, 3), 127, dtype=np.uint8)
+
+    warped, corners = synthesize_warped_oblique_board(board, seed=7)
+
+    assert warped.shape == (64, 64, 3)
+    assert corners.shape == (4, 2)
+    assert float(corners.min()) >= 0.0
+    assert float(corners.max()) <= 63.0

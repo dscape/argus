@@ -78,3 +78,22 @@ def test_build_synthetic_dataset_supports_oblique_board_with_rendered_source() -
     assert image.shape == (3, 64, 64)
     assert labels.shape == (64,)
     assert corners.shape == (4, 2)
+
+
+def test_build_synthetic_dataset_supports_oblique_board_with_topdown_source() -> None:
+    dataset = build_synthetic_dataset(
+        synthetic_source="topdown",
+        board_input_mode="oblique_board",
+        num_positions=1,
+        image_size=64,
+        seed=7,
+        augment=False,
+        min_moves=12,
+        max_moves=20,
+        min_ply=8,
+    )
+
+    image, labels, corners = dataset[0]
+    assert image.shape == (3, 64, 64)
+    assert labels.shape == (64,)
+    assert corners.shape == (4, 2)
