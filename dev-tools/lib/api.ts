@@ -1741,6 +1741,145 @@ export function physicalRuntimeSessionImageUrl(sessionId: string, filename: stri
   return `/api/evaluate/physical-runtime/session-image/${sessionId}/${encodeURIComponent(filename)}`;
 }
 
+export interface PhysicalFailureStudyListItem {
+  path: string;
+  label: string;
+  modified_at: string | null;
+  selected_failures: number;
+  total_failures: number;
+  observation_input?: string;
+  tracker_mode?: string;
+  report_path?: string | null;
+}
+
+export interface PhysicalFailureStudyEntry {
+  selected_index: number;
+  annotation_id: string;
+  clip_path: string | null;
+  clip_filename: string;
+  frame_index: number;
+  source_video_id?: string | null;
+  suggested_root_cause?: string | null;
+  decoded_error_count: number;
+  stateless_error_count: number;
+  decoded_matches_previous_gt?: boolean;
+  decoded_matches_next_gt?: boolean;
+  best_legal_matches_gt?: boolean;
+  best_legal_move_uci?: string | null;
+  gt_legal_rank?: number | null;
+  final_bucket?: string;
+  notes?: string;
+  image_path?: string | null;
+  decoded_move_uci?: string | null;
+  decoded_move_score?: number | null;
+  decoded_stay_score?: number | null;
+  gt_changed_squares?: string[];
+  decoded_changed_squares?: string[];
+  decoded_error_squares?: string[];
+  stateless_error_squares?: string[];
+}
+
+export interface PhysicalFailureStudyDetail {
+  path: string;
+  label: string;
+  modified_at: string | null;
+  summary: {
+    report_path?: string | null;
+    selected_failures?: number;
+    total_failures?: number;
+    sample_mode?: string;
+    config?: {
+      observation_input?: string;
+      tracker_mode?: string;
+      lookahead_window?: number;
+      lookahead_margin?: number;
+      move_accept_threshold?: number;
+      move_accept_margin?: number;
+      temporal_mode?: string;
+      temporal_ema_alpha?: number;
+      weights_path?: string | null;
+    };
+  };
+  report_metrics?: {
+    board_exact_match?: number | null;
+    non_empty_accuracy?: number | null;
+    macro_f1?: number | null;
+    accuracy?: number | null;
+    move_detection_recall?: number | null;
+    static_frame_false_change_rate?: number | null;
+  } | null;
+  entries: PhysicalFailureStudyEntry[];
+  bucket_options: string[];
+  bucket_counts: Record<string, number>;
+}
+
+export interface PhysicalFailureStudyContextFrame {
+  annotation_id: string;
+  frame_index: number;
+  relative_offset: number;
+  is_anchor: boolean;
+  image_data_url: string;
+}
+
+export interface PhysicalFailureStudyContext {
+  study_path: string;
+  selected_index: number;
+  context_frames: number;
+  observation_input: string;
+  entry: PhysicalFailureStudyEntry;
+  anchor_panel_data_url: string | null;
+  frames: PhysicalFailureStudyContextFrame[];
+}
+
+export async function listPhysicalFailureStudies(): Promise<{
+  studies: PhysicalFailureStudyListItem[];
+}> {
+  const res = await fetch("/api/evaluate/physical-failures/studies");
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPhysicalFailureStudy(
+  path: string,
+): Promise<PhysicalFailureStudyDetail> {
+  const params = new URLSearchParams({ path });
+  const res = await fetch(`/api/evaluate/physical-failures/study?${params.toString()}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPhysicalFailureStudyContext(options: {
+  path: string;
+  selected_index: number;
+  context_frames?: number;
+  image_max_side?: number;
+}): Promise<PhysicalFailureStudyContext> {
+  const params = new URLSearchParams({
+    path: options.path,
+    selected_index: String(options.selected_index),
+    context_frames: String(options.context_frames ?? 10),
+    image_max_side: String(options.image_max_side ?? 720),
+  });
+  const res = await fetch(`/api/evaluate/physical-failures/context?${params.toString()}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updatePhysicalFailureStudyEntry(body: {
+  study_path: string;
+  selected_index: number;
+  final_bucket?: string | null;
+  notes?: string | null;
+}): Promise<{ selected_index: number; final_bucket: string; notes: string }> {
+  const res = await fetch("/api/evaluate/physical-failures/entry", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ── Physical validation/train annotation ───────────────────
 
 export interface PhysicalEvalClip {

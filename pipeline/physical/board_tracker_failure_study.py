@@ -61,14 +61,21 @@ _BUCKET_GUIDE = """# Manual failure buckets
 
 Use `final_bucket` in `manual_buckets.csv`.
 
-- `rectification`: board geometry is visibly wrong in the crop
+- `rectification / localization`
+  board geometry is visibly wrong in the crop
   (warped grid, shifted squares, clipped files/ranks)
-- `classifier`: geometry looks usable, but the board evidence itself is wrong
+- `piece classifier / square evidence`
+  geometry looks usable, but the board evidence itself is wrong
   (piece identity, occupancy, blur/confusable classes)
-- `tracker_boundary_jitter`: decoded board matches the previous or next GT board;
-  move timing is off by about a frame
-- `tracker_desync`: decoded sequence inserted/missed a move and diverged from GT
-- `eval_artifact`: annotation/eval issue, not a model failure
+- `temporal in-between / move execution ambiguity`
+  the sampled frames are in the middle of a move, so the board state is genuinely
+  ambiguous for a few frames
+- `decoder / wrong legal hypothesis / error propagation`
+  the decoder picked the wrong legal successor or failed to recover after a bad step
+- `eval or label issue`
+  annotation/eval issue, not a model failure
+- `other / unclear`
+  none of the above, or not enough evidence
 
 `Suggested_root_cause` is only a heuristic. Override it manually.
 """

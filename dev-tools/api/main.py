@@ -18,7 +18,7 @@ from api.routers.annotate import (
     video_session,
 )
 from api.routers.data import clips, real, synthetic
-from api.routers.evaluate import models, overlay, physical_runtime
+from api.routers.evaluate import models, overlay, physical_failure_study, physical_runtime
 from api.routers.videos import crawl
 
 logging.basicConfig(
@@ -61,6 +61,11 @@ app.include_router(
     physical_runtime.router,
     prefix="/api/evaluate/physical-runtime",
     tags=["physical-runtime"],
+)
+app.include_router(
+    physical_failure_study.router,
+    prefix="/api/evaluate/physical-failures",
+    tags=["physical-failures"],
 )
 
 
