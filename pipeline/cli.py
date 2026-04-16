@@ -229,6 +229,79 @@ def cmd_physical_visualize_runtime(args):
     print(f"  Summary:       {args.output_dir}/summary.json")
 
 
+def cmd_physical_board_failure_study(args):
+    """Render a manual-review bundle for board_exact tracker failures."""
+    from pipeline.physical.board_tracker_failure_study import (
+        TrackerFailureStudyConfig,
+        create_tracker_failure_study,
+        load_config_from_eval_report,
+    )
+
+    base_config = (
+        load_config_from_eval_report(args.eval_report)
+        if args.eval_report is not None
+        else TrackerFailureStudyConfig()
+    )
+    config = TrackerFailureStudyConfig(
+        observation_input=(
+            base_config.observation_input
+            if args.observation_input is None
+            else args.observation_input
+        ),
+        temporal_mode=(
+            base_config.temporal_mode if args.temporal_mode is None else args.temporal_mode
+        ),
+        temporal_ema_alpha=(
+            base_config.temporal_ema_alpha
+            if args.temporal_ema_alpha is None
+            else args.temporal_ema_alpha
+        ),
+        tracker_mode=(
+            base_config.tracker_mode if args.tracker_mode is None else args.tracker_mode
+        ),
+        move_accept_threshold=(
+            base_config.move_accept_threshold
+            if args.move_accept_threshold is None
+            else args.move_accept_threshold
+        ),
+        move_accept_margin=(
+            base_config.move_accept_margin
+            if args.move_accept_margin is None
+            else args.move_accept_margin
+        ),
+        lookahead_window=(
+            base_config.lookahead_window
+            if args.lookahead_window is None
+            else args.lookahead_window
+        ),
+        lookahead_margin=(
+            base_config.lookahead_margin
+            if args.lookahead_margin is None
+            else args.lookahead_margin
+        ),
+        weights_path=base_config.weights_path if args.weights_path is None else args.weights_path,
+    )
+
+    summary = create_tracker_failure_study(
+        config=config,
+        output_dir=args.output_dir,
+        limit=args.limit,
+        device=args.device,
+        panel_size=args.panel_size,
+        top_legal_candidates=args.top_legal_candidates,
+        sample_mode=args.sample_mode,
+        report_path=args.eval_report,
+    )
+    print("Built physical board failure study")
+    print(f"  Total failures:     {summary['total_failures']}")
+    print(f"  Selected failures:  {summary['selected_failures']}")
+    print(f"  Manifest:           {summary['manifest']}")
+    print(f"  Manual buckets CSV: {summary['manual_buckets_csv']}")
+    if summary.get("contact_sheet") is not None:
+        print(f"  Contact sheet:      {summary['contact_sheet']}")
+    print(f"  Summary:            {summary['summary_path']}")
+
+
 def _resolve_project_path(path: str):
     from pathlib import Path
 
@@ -1620,6 +1693,115 @@ def main():
         help="Output directory for the rendered contact sheet and per-frame panels",
     )
 
+    # physical-board-failure-study
+    p = subparsers.add_parser(
+        "physical-board-failure-study",
+        help=(
+            "Bundle board_exact tracker failures for manual "
+            "rectification/classifier/tracker review"
+        ),
+    )
+    p.add_argument(
+        "--eval-report",
+        type=str,
+        default=None,
+        help="Optional board-tracker eval JSON to load tracker settings from",
+    )
+    p.add_argument(
+        "--observation-input",
+        type=str,
+        choices=["rectified_board", "original_oblique"],
+        default=None,
+        help="Input representation to inspect (overrides --eval-report)",
+    )
+    p.add_argument(
+        "--temporal-mode",
+        type=str,
+        choices=["off", "fixed", "metadata"],
+        default=None,
+        help="Temporal smoothing mode before tracker decode (overrides --eval-report)",
+    )
+    p.add_argument(
+        "--temporal-ema-alpha",
+        type=float,
+        default=None,
+        help="Fixed EMA alpha when --temporal-mode=fixed",
+    )
+    p.add_argument(
+        "--tracker-mode",
+        type=str,
+        choices=["greedy", "lookahead"],
+        default=None,
+        help="Tracker mode to inspect (overrides --eval-report)",
+    )
+    p.add_argument(
+        "--move-accept-threshold",
+        type=float,
+        default=None,
+        help="Greedy tracker move-accept threshold (overrides --eval-report)",
+    )
+    p.add_argument(
+        "--move-accept-margin",
+        type=float,
+        default=None,
+        help="Greedy tracker move-accept margin (overrides --eval-report)",
+    )
+    p.add_argument(
+        "--lookahead-window",
+        type=int,
+        default=None,
+        help="Lookahead tracker window size (overrides --eval-report)",
+    )
+    p.add_argument(
+        "--lookahead-margin",
+        type=float,
+        default=None,
+        help="Lookahead tracker score margin (overrides --eval-report)",
+    )
+    p.add_argument(
+        "--weights-path",
+        type=str,
+        default=None,
+        help="Optional physical weights checkpoint path (overrides --eval-report)",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="How many failing frames to include in the review bundle",
+    )
+    p.add_argument(
+        "--sample-mode",
+        type=str,
+        choices=["first", "round_robin"],
+        default="round_robin",
+        help="How to pick failures when there are more than --limit",
+    )
+    p.add_argument(
+        "--top-legal-candidates",
+        type=int,
+        default=5,
+        help="How many legal board alternatives to record per failure",
+    )
+    p.add_argument(
+        "--panel-size",
+        type=int,
+        default=240,
+        help="Panel size for each failure frame image",
+    )
+    p.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Torch device to run the runtime reader on",
+    )
+    p.add_argument(
+        "--output-dir",
+        type=str,
+        default="outputs/physical_board_failure_study",
+        help="Output directory for the failure study bundle",
+    )
+
     # real-data-overview
     p = subparsers.add_parser(
         "real-data-overview",
@@ -2188,6 +2370,7 @@ def main():
         "split-clips": cmd_split_clips,
         "physical-split-clips": cmd_physical_split_clips,
         "physical-visualize-runtime": cmd_physical_visualize_runtime,
+        "physical-board-failure-study": cmd_physical_board_failure_study,
         "real-data-overview": cmd_real_data_overview,
         "real-data-process": cmd_real_data_process,
         "real-data-audit": cmd_real_data_audit,

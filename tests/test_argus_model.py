@@ -121,6 +121,47 @@ def test_siglip2_backbone_rejects_siglip_checkpoints(monkeypatch: pytest.MonkeyP
         vision_encoder_module.Siglip2Backbone(model_name="broken-siglip2")
 
 
+def test_siglip2_backbone_loads_true_siglip2_checkpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DummyConfig:
+        model_type = "siglip2"
+
+    class DummyVisionModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.config = type(
+                "DummyVisionConfig",
+                (),
+                {"hidden_size": 32, "num_hidden_layers": 2, "patch_size": 16},
+            )()
+            self.encoder = type(
+                "DummyEncoder",
+                (),
+                {"layers": [torch.nn.Linear(1, 1), torch.nn.Linear(1, 1)]},
+            )()
+
+    class DummySiglip2Model:
+        def __init__(self) -> None:
+            self.vision_model = DummyVisionModel()
+
+        @staticmethod
+        def from_pretrained(*_args, **_kwargs) -> "DummySiglip2Model":
+            return DummySiglip2Model()
+
+    monkeypatch.setattr(
+        vision_encoder_module,
+        "_load_transformers_config",
+        lambda _path: DummyConfig(),
+    )
+    monkeypatch.setattr(vision_encoder_module, "Siglip2Model", DummySiglip2Model)
+
+    backbone = vision_encoder_module.Siglip2Backbone(model_name="real-siglip2")
+
+    assert backbone.embed_dim == 32
+    assert backbone.patch_size == 16
+
+
 def test_patch_pooling_head_mean_matches_manual_mean() -> None:
     tokens = torch.arange(2 * 17 * 4, dtype=torch.float32).reshape(2, 17, 4)
     head = PatchPoolingHead(embed_dim=4, pooling_type="mean")

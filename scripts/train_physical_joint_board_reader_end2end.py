@@ -15,6 +15,7 @@ from torch.utils.data import ConcatDataset, Dataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from pipeline.physical.board_data import PhysicalSyntheticClipBoardDataset
 from pipeline.physical.end_to_end_joint_board_reader import (
     EndToEndJointBoardReaderConfig,
     EndToEndPhysicalJointBoardReader,
@@ -24,7 +25,7 @@ from pipeline.physical.end_to_end_joint_board_reader import (
 from pipeline.physical.oblique_board_data import (
     PhysicalEvalObliqueBoardDataset,
     PhysicalRealObliqueBoardDataset,
-    PhysicalSyntheticWarpedObliqueBoardDataset,
+    PhysicalSyntheticObliqueBoardDataset,
 )
 from pipeline.physical.oblique_square_context import PhysicalRealObliqueBoardRow
 from pipeline.physical.real_board_data import PhysicalRealBoardRow, load_real_board_rows
@@ -65,14 +66,13 @@ def main() -> None:
     train_parts: list[Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]] = []
     if args.synthetic_train_positions > 0:
         train_parts.append(
-            PhysicalSyntheticWarpedObliqueBoardDataset(
-                num_positions=args.synthetic_train_positions,
-                image_size=args.input_size,
-                seed=args.seed,
-                augment=args.synthetic_augment,
-                min_moves=args.synthetic_min_moves,
-                max_moves=args.synthetic_max_moves,
-                min_ply=args.synthetic_min_ply,
+            PhysicalSyntheticObliqueBoardDataset(
+                PhysicalSyntheticClipBoardDataset(
+                    clips_dir=args.synthetic_clips_dir,
+                    num_positions=args.synthetic_train_positions,
+                    image_size=args.input_size,
+                    seed=args.seed,
+                )
             )
         )
     train_parts.append(real_train_dataset)
@@ -173,6 +173,8 @@ def main() -> None:
         "train_frames": len(train_dataset),
         "selection_frames": len(selection_dataset),
         "eval_frames": len(eval_dataset),
+        "synthetic_source": str(args.synthetic_clips_dir),
+        "synthetic_clips_dir": str(args.synthetic_clips_dir),
         "train_source_video_ids": train_source_ids,
         "selection_source_video_ids": selection_source_ids,
         "selection_score": best_selection_score,
@@ -222,10 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="non_empty_plus_macro",
     )
     parser.add_argument("--synthetic-train-positions", type=int, default=0)
-    parser.add_argument("--synthetic-augment", action="store_true")
-    parser.add_argument("--synthetic-min-moves", type=int, default=12)
-    parser.add_argument("--synthetic-max-moves", type=int, default=80)
-    parser.add_argument("--synthetic-min-ply", type=int, default=8)
+    parser.add_argument("--synthetic-clips-dir", type=Path, default=Path("data/argus/train"))
     parser.add_argument("--real-train-clips-dir", type=Path, default=Path("data/argus/train_real"))
     parser.add_argument("--real-train-frame-stride", type=int, default=1)
     parser.add_argument("--real-train-max-frames", type=int, default=512)

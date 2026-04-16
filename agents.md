@@ -70,3 +70,4 @@ Docker: `docker exec argus-dev-api python3 -m pipeline.cli <command>` or use `ma
 - Model versioning: `v{code}r{revision}` (e.g. `v2r3`). Bump code version on architecture changes
 - If you change the overlay detector, run `scripts/visualize_overlay_tests.py` on every iteration and treat that visual output as mandatory validation
 - Before completing tasks: run `make typecheck`, `make lint`, `make test` — all must pass
+- Never put data in output. Always put data in the data/ folder

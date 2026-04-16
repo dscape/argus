@@ -3,12 +3,35 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+import scripts.eval_physical_move_model as eval_physical_move_model
 import scripts.train_physical_move_model as train_physical_move_model
 from scripts.train_physical_move_model import (
     normalized_checkpoint_model_config,
     resolve_selection_sequence_source,
     select_real_val_source_video_ids,
 )
+
+
+def test_eval_move_model_normalized_checkpoint_model_config_remaps_legacy_siglip2_to_siglip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        eval_physical_move_model,
+        "load_transformers_config",
+        lambda _model_name: SimpleNamespace(model_type="siglip"),
+    )
+
+    normalized = eval_physical_move_model.normalized_checkpoint_model_config(
+        {
+            "vision_encoder_type": "siglip2",
+            "vision_encoder_name": "google/siglip2-base-patch16-224",
+            "temporal_d_model": 256,
+        }
+    )
+
+    assert normalized["vision_encoder_type"] == "siglip"
+    assert normalized["vision_encoder_name"] == "google/siglip2-base-patch16-224"
+    assert normalized["temporal_d_model"] == 256
 
 
 def test_normalized_checkpoint_model_config_remaps_legacy_siglip2_to_siglip(

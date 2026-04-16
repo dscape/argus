@@ -373,25 +373,6 @@ def get_physical_runtime_session(session_id: str) -> dict[str, Any] | None:
     model_path = _evaluation_model_path(evaluation_per_class, row[9])
     model_label = _evaluation_model_label(evaluation_per_class, row[9], model_path)
 
-    if results and "gt_fen" not in results[0]:
-        try:
-            rehydrated_results = inspect_runtime_frames(
-                annotation_ids=[str(result["annotation_id"]) for result in results],
-                model_path=model_path,
-            )
-            legacy_by_annotation_id = {
-                str(result["annotation_id"]): result for result in results if "annotation_id" in result
-            }
-            results = [
-                {
-                    **legacy_by_annotation_id.get(str(result["annotation_id"]), {}),
-                    **result,
-                }
-                for result in rehydrated_results
-            ]
-        except Exception:
-            pass
-
     return {
         "id": row[0],
         "created_at": str(row[1]),

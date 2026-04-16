@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import numpy as np
+import torch
 from pipeline.physical.oblique_board_data import (
+    PhysicalSyntheticObliqueBoardDataset,
     extract_oblique_board_crop,
     preprocess_oblique_board_image,
-    synthesize_warped_oblique_board,
 )
+
+
+class _StubBoardDataset:
+    def __len__(self) -> int:
+        return 1
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        assert index == 0
+        return torch.zeros((3, 36, 36)), torch.zeros((64,), dtype=torch.long)
 
 
 def test_extract_oblique_board_crop_returns_relative_corners() -> None:
@@ -38,12 +48,17 @@ def test_preprocess_oblique_board_image_returns_square_tensor_and_scaled_corners
     assert float(scaled_corners.max().item()) <= 36.0
 
 
-def test_synthesize_warped_oblique_board_returns_image_and_quad() -> None:
-    board = np.full((64, 64, 3), 127, dtype=np.uint8)
+def test_physical_synthetic_oblique_board_dataset_uses_full_frame_corners() -> None:
+    dataset = PhysicalSyntheticObliqueBoardDataset(_StubBoardDataset())
 
-    warped, corners = synthesize_warped_oblique_board(board, seed=7)
+    image, labels, corners = dataset[0]
 
-    assert warped.shape == (64, 64, 3)
-    assert corners.shape == (4, 2)
-    assert float(corners.min()) >= 0.0
-    assert float(corners.max()) <= 63.0
+    assert image.shape == (3, 36, 36)
+    assert labels.shape == (64,)
+    assert torch.equal(
+        corners,
+        torch.tensor(
+            [[0.0, 0.0], [35.0, 0.0], [35.0, 35.0], [0.0, 35.0]],
+            dtype=torch.float32,
+        ),
+    )

@@ -233,6 +233,62 @@ class TestPhysicalSplitClipsCommand:
         assert "Excluded clip count: 3" in out
 
 
+class TestPhysicalBoardFailureStudyCommand:
+    """Test the physical-board-failure-study CLI command."""
+
+    def test_prints_failure_study_summary(self, monkeypatch, capsys):
+        import pipeline.physical.board_tracker_failure_study as failure_study
+
+        monkeypatch.setattr(
+            failure_study,
+            "load_config_from_eval_report",
+            lambda path: failure_study.TrackerFailureStudyConfig(
+                tracker_mode="lookahead",
+                observation_input="rectified_board",
+            ),
+        )
+        monkeypatch.setattr(
+            failure_study,
+            "create_tracker_failure_study",
+            lambda **kwargs: {
+                "total_failures": 42,
+                "selected_failures": 10,
+                "manifest": "outputs/physical_board_failure_study/manifest.json",
+                "manual_buckets_csv": "outputs/physical_board_failure_study/manual_buckets.csv",
+                "contact_sheet": "outputs/physical_board_failure_study/contact_sheet.png",
+                "summary_path": "outputs/physical_board_failure_study/summary.json",
+            },
+        )
+
+        cli.cmd_physical_board_failure_study(
+            SimpleNamespace(
+                eval_report="outputs/eval.json",
+                observation_input=None,
+                temporal_mode=None,
+                temporal_ema_alpha=None,
+                tracker_mode=None,
+                move_accept_threshold=None,
+                move_accept_margin=None,
+                lookahead_window=None,
+                lookahead_margin=None,
+                weights_path=None,
+                limit=10,
+                sample_mode="round_robin",
+                top_legal_candidates=5,
+                panel_size=240,
+                device="cpu",
+                output_dir="outputs/physical_board_failure_study",
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "Built physical board failure study" in out
+        assert "Total failures:     42" in out
+        assert "Selected failures:  10" in out
+        assert "Manifest:           outputs/physical_board_failure_study/manifest.json" in out
+        assert "Contact sheet:      outputs/physical_board_failure_study/contact_sheet.png" in out
+
+
 class TestRealDataOverviewCommand:
     """Test the real-data-overview CLI command."""
 

@@ -20,8 +20,7 @@ from pipeline.physical.board_data import INPUT_SIZE as DEFAULT_INPUT_SIZE
 from pipeline.physical.board_data import (
     PhysicalEvalBoardDataset,
     PhysicalManualTrainBoardDataset,
-    PhysicalSyntheticBoardDataset,
-    PhysicalSyntheticRenderedBoardDataset,
+    PhysicalSyntheticClipBoardDataset,
 )
 from pipeline.physical.board_probe import (
     board_probe_config_from_checkpoint,
@@ -36,7 +35,6 @@ from pipeline.physical.oblique_board_data import (
     PhysicalObliqueBoardCropOnlyDataset,
     PhysicalRealObliqueBoardDataset,
     PhysicalSyntheticObliqueBoardDataset,
-    PhysicalSyntheticWarpedObliqueBoardDataset,
 )
 from pipeline.physical.oblique_square_context import (
     PhysicalAnnotatedObliqueSquareContextDataset,
@@ -88,28 +86,20 @@ def main() -> None:
     synthetic_train_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]] | None = None
     if args.synthetic_train_positions > 0:
         synthetic_train_dataset = build_synthetic_dataset(
-            synthetic_source=args.synthetic_source,
+            synthetic_clips_dir=args.synthetic_clips_dir,
             board_input_mode=args.board_input_mode,
             num_positions=args.synthetic_train_positions,
             image_size=args.input_size,
             seed=args.seed,
-            augment=args.augment,
-            min_moves=args.synthetic_min_moves,
-            max_moves=args.synthetic_max_moves,
-            min_ply=args.synthetic_min_ply,
         )
     val_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]] | None = None
     if args.synthetic_val_positions > 0:
         val_dataset = build_synthetic_dataset(
-            synthetic_source=args.synthetic_source,
+            synthetic_clips_dir=args.synthetic_clips_dir,
             board_input_mode=args.board_input_mode,
             num_positions=args.synthetic_val_positions,
             image_size=args.input_size,
             seed=args.seed + 1,
-            augment=False,
-            min_moves=args.synthetic_min_moves,
-            max_moves=args.synthetic_max_moves,
-            min_ply=args.synthetic_min_ply,
         )
     eval_dataset = build_eval_dataset(
         board_input_mode=args.board_input_mode,
@@ -328,15 +318,12 @@ def main() -> None:
             "feature_layer_indices": encoder_kwargs.get("feature_layer_indices"),
             "output_grid_size": encoder_kwargs.get("output_grid_size"),
             "board_input_mode": args.board_input_mode,
-            "synthetic_source": args.synthetic_source,
+            "synthetic_source": relative_to_project(args.synthetic_clips_dir),
+            "synthetic_clips_dir": relative_to_project(args.synthetic_clips_dir),
             "synthetic_train_positions": synthetic_train_positions,
             "real_train_positions": real_train_positions,
             "manual_train_positions": manual_train_positions,
             "synthetic_val_positions": synthetic_val_positions,
-            "synthetic_min_moves": args.synthetic_min_moves,
-            "synthetic_max_moves": args.synthetic_max_moves,
-            "synthetic_min_ply": args.synthetic_min_ply,
-            "augment": args.augment,
             "class_weighting": args.class_weighting,
             "real_train_exclude_move_neighborhood": args.real_train_exclude_move_neighborhood,
             "real_loss_weight": args.real_loss_weight,
@@ -373,8 +360,8 @@ def main() -> None:
         "epochs": args.epochs,
         "lr": args.lr,
         "weight_decay": args.weight_decay,
-        "synthetic_source": args.synthetic_source,
-        "augment": args.augment,
+        "synthetic_source": relative_to_project(args.synthetic_clips_dir),
+        "synthetic_clips_dir": relative_to_project(args.synthetic_clips_dir),
         "class_weighting": args.class_weighting,
         "real_loss_weight": args.real_loss_weight,
         "head_type": args.head_type,
@@ -388,9 +375,6 @@ def main() -> None:
         "real_selection_positions": real_selection_positions,
         "manual_train_positions": manual_train_positions,
         "synthetic_val_positions": synthetic_val_positions,
-        "synthetic_min_moves": args.synthetic_min_moves,
-        "synthetic_max_moves": args.synthetic_max_moves,
-        "synthetic_min_ply": args.synthetic_min_ply,
         "real_train_exclude_move_neighborhood": args.real_train_exclude_move_neighborhood,
         "manual_train_root": (
             relative_to_project(args.manual_train_root)
@@ -434,12 +418,11 @@ def main() -> None:
         "",
         f"- encoder: `{args.encoder_type}`",
         f"- model: `{str(encoder_kwargs['model_name'])}`",
-        f"- synthetic source: `{args.synthetic_source}`",
+        f"- synthetic clips dir: `{relative_to_project(args.synthetic_clips_dir)}`",
         f"- board input mode: `{args.board_input_mode}`",
         f"- input size: `{args.input_size}`",
         f"- head type: `{args.head_type}`",
         f"- real loss weight: `{args.real_loss_weight}`",
-        f"- train augmentation: `{args.augment}`",
         f"- class weighting: `{args.class_weighting}`",
         f"- real move exclusion: `{args.real_train_exclude_move_neighborhood}`",
         f"- selection dataset: `{selection_dataset_name}`",
@@ -538,12 +521,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yolo-feature-layer-indices", type=str, default="16,19,22")
     parser.add_argument("--yolo-output-grid-size", type=int, default=16)
     parser.add_argument("--input-size", type=int, default=DEFAULT_INPUT_SIZE)
-    parser.add_argument(
-        "--synthetic-source",
-        type=str,
-        choices=["topdown", "rendered"],
-        default="topdown",
-    )
+    parser.add_argument("--synthetic-clips-dir", type=Path, default=Path("data/argus/train"))
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -588,10 +566,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manual-train-max-boards", type=int, default=0)
     parser.add_argument("--real-loss-weight", type=float, default=1.0)
     parser.add_argument("--manual-train-loss-weight", type=float, default=1.0)
-    parser.add_argument("--synthetic-min-moves", type=int, default=12)
-    parser.add_argument("--synthetic-max-moves", type=int, default=80)
-    parser.add_argument("--synthetic-min-ply", type=int, default=8)
-    parser.add_argument("--augment", action="store_true")
     parser.add_argument(
         "--class-weighting",
         type=str,
@@ -646,68 +620,32 @@ def parse_feature_layer_indices(raw_value: str) -> list[int]:
 
 def build_synthetic_dataset(
     *,
-    synthetic_source: str,
+    synthetic_clips_dir: Path,
     board_input_mode: str,
     num_positions: int,
     image_size: int,
     seed: int,
-    augment: bool,
-    min_moves: int,
-    max_moves: int,
-    min_ply: int,
 ) -> Dataset[tuple[torch.Tensor, torch.Tensor]]:
     if board_input_mode == "oblique_square_context":
         raise ValueError(
             "Oblique square-context training currently requires pseudo-real or manual rows; "
             "synthetic oblique crops are not wired into this script yet"
         )
-    if synthetic_source == "topdown":
-        if board_input_mode == "oblique_board":
-            return PhysicalSyntheticWarpedObliqueBoardDataset(
-                num_positions=num_positions,
-                image_size=image_size,
-                seed=seed,
-                augment=augment,
-                min_moves=min_moves,
-                max_moves=max_moves,
-                min_ply=min_ply,
-            )
-        if board_input_mode == "oblique_board_crop":
-            return PhysicalObliqueBoardCropOnlyDataset(
-                PhysicalSyntheticWarpedObliqueBoardDataset(
-                    num_positions=num_positions,
-                    image_size=image_size,
-                    seed=seed,
-                    augment=augment,
-                    min_moves=min_moves,
-                    max_moves=max_moves,
-                    min_ply=min_ply,
-                )
-            )
-        return PhysicalSyntheticBoardDataset(
+    synthetic_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]] = (
+        PhysicalSyntheticClipBoardDataset(
+            clips_dir=synthetic_clips_dir,
             num_positions=num_positions,
             image_size=image_size,
             seed=seed,
-            augment=augment,
-            min_moves=min_moves,
-            max_moves=max_moves,
-            min_ply=min_ply,
         )
-    if synthetic_source == "rendered":
-        rendered_dataset: Dataset[tuple[torch.Tensor, torch.Tensor]] = (
-            PhysicalSyntheticRenderedBoardDataset(
-                num_positions=num_positions,
-                image_size=image_size,
-                seed=seed,
-                augment=augment,
-                min_moves=min_moves,
-                max_moves=max_moves,
-            )
+    )
+    if board_input_mode == "oblique_board":
+        return PhysicalSyntheticObliqueBoardDataset(synthetic_dataset)
+    if board_input_mode == "oblique_board_crop":
+        return PhysicalObliqueBoardCropOnlyDataset(
+            PhysicalSyntheticObliqueBoardDataset(synthetic_dataset)
         )
-        if board_input_mode == "oblique_board":
-            return PhysicalSyntheticObliqueBoardDataset(rendered_dataset)
-        return rendered_dataset
-    raise ValueError(f"Unsupported synthetic source: {synthetic_source}")
+    return synthetic_dataset
 
 
 def build_eval_dataset(

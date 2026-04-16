@@ -233,6 +233,7 @@ export default function PhysicalRuntimeInspector({
   const [recentSessions, setRecentSessions] = useState<PhysicalRuntimeSession[]>([]);
   const [showSessionList, setShowSessionList] = useState(false);
   const [emptyMessage, setEmptyMessage] = useState<string | null>(null);
+  const [hydratingLegacySession, setHydratingLegacySession] = useState(false);
   const [modelOptions, setModelOptions] = useState<PhysicalRuntimeModelOption[]>([]);
   const [modelPath, setModelPath] = useState<string>(initialSession?.model_path ?? "");
 
@@ -274,6 +275,45 @@ export default function PhysicalRuntimeInspector({
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showSessionList]);
+
+  useEffect(() => {
+    if (!initialSession?.id || initialSession.results.length === 0) return;
+    if (initialSession.results.every((result) => result.gt_fen)) return;
+
+    let cancelled = false;
+    setHydratingLegacySession(true);
+
+    inspectPhysicalRuntimeFrames(
+      initialSession.results.map((result) => result.annotation_id),
+      {
+        model_path: initialSession.model_path ?? undefined,
+      },
+    )
+      .then((freshResults) => {
+        if (cancelled) return;
+        const legacyById = new Map(
+          initialSession.results.map((result) => [result.annotation_id, result]),
+        );
+        setResults(
+          freshResults.map((result) => ({
+            ...legacyById.get(result.annotation_id),
+            ...result,
+          })),
+        );
+      })
+      .catch((error) => {
+        console.warn("Failed to hydrate legacy physical runtime session:", error);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setHydratingLegacySession(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialSession]);
 
   async function fetchHistory() {
     try {
@@ -577,6 +617,12 @@ export default function PhysicalRuntimeInspector({
       {emptyMessage && (
         <div className="border rounded-lg px-3 py-2 text-sm text-muted-foreground">
           {emptyMessage}
+        </div>
+      )}
+
+      {hydratingLegacySession && (
+        <div className="border rounded-lg px-3 py-2 text-sm text-muted-foreground">
+          Refreshing legacy session boards with the selected model...
         </div>
       )}
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -9,7 +10,14 @@ from typing import Any, Protocol, cast
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoConfig, Dinov2Model, Siglip2VisionModel, SiglipModel, SiglipVisionModel
+from transformers import (
+    AutoConfig,
+    Dinov2Model,
+    Siglip2Model,
+    Siglip2VisionModel,
+    SiglipModel,
+    SiglipVisionModel,
+)
 
 _WEIGHTS_ROOT = Path(__file__).resolve().parent.parent.parent.parent / "weights"
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -19,7 +27,7 @@ _SIGLIP_STD = (0.5, 0.5, 0.5)
 
 DEFAULT_DINOV2_MODEL = "facebook/dinov2-base"
 DEFAULT_SIGLIP_MODEL = "google/siglip-base-patch16-224"
-DEFAULT_SIGLIP2_MODEL = "google/siglip2-base-patch16-224"
+DEFAULT_SIGLIP2_MODEL = "google/siglip2-base-patch16-naflex"
 DEFAULT_YOLO_MODEL = "weights/yolo_base/yolo11n.pt"
 
 
@@ -138,12 +146,20 @@ def _load_siglip2_vision_model(model_name: str) -> nn.Module:
         raise ValueError(
             "Requested encoder_type='siglip2' for"
             f" {model_name!r}, but config model_type is {model_type!r}."
-            " Use encoder_type='siglip' for SigLIP checkpoints or pass a real SigLIP2"
-            " checkpoint."
+            " Pass a real SigLIP2 checkpoint such as"
+            f" {DEFAULT_SIGLIP2_MODEL!r}; do not use SigLIP-compatible FixRes"
+            " checkpoints here."
         )
     try:
+        if model_type == "siglip2":
+            return cast(
+                nn.Module,
+                Siglip2Model.from_pretrained(model_name, local_files_only=True).vision_model,
+            )
         return Siglip2VisionModel.from_pretrained(model_name, local_files_only=True)
     except OSError:
+        if model_type == "siglip2":
+            return cast(nn.Module, Siglip2Model.from_pretrained(model_name).vision_model)
         return Siglip2VisionModel.from_pretrained(model_name)
 
 
@@ -464,19 +480,20 @@ class Siglip2Backbone(nn.Module, _SiglipNormalizationMixin):
 
     def forward_patches(self, x: torch.Tensor) -> torch.Tensor:
         prepared = self._prepare_inputs(x)
-        patch_values, pixel_attention_mask, spatial_shapes = self._patchify(prepared)
+        patch_values, attention_mask, spatial_shapes = self._patchify(prepared)
         if not self.feature_layer_indices:
-            outputs = self.model(
-                pixel_values=patch_values,
-                pixel_attention_mask=pixel_attention_mask,
+            outputs = self._forward_siglip2_model(
+                patch_values=patch_values,
+                attention_mask=attention_mask,
                 spatial_shapes=spatial_shapes,
+                output_hidden_states=False,
             )
             result: torch.Tensor = outputs.last_hidden_state
             return result
 
-        outputs = self.model(
-            pixel_values=patch_values,
-            pixel_attention_mask=pixel_attention_mask,
+        outputs = self._forward_siglip2_model(
+            patch_values=patch_values,
+            attention_mask=attention_mask,
             spatial_shapes=spatial_shapes,
             output_hidden_states=True,
         )
@@ -488,6 +505,26 @@ class Siglip2Backbone(nn.Module, _SiglipNormalizationMixin):
         ]
         result = torch.stack(selected_states, dim=0).mean(dim=0)
         return result
+
+    def _forward_siglip2_model(
+        self,
+        *,
+        patch_values: torch.Tensor,
+        attention_mask: torch.Tensor,
+        spatial_shapes: torch.Tensor,
+        output_hidden_states: bool,
+    ) -> Any:
+        signature = inspect.signature(self.model.forward)
+        kwargs: dict[str, Any] = {
+            "pixel_values": patch_values,
+            "spatial_shapes": spatial_shapes,
+            "output_hidden_states": output_hidden_states,
+        }
+        if "pixel_attention_mask" in signature.parameters:
+            kwargs["pixel_attention_mask"] = attention_mask
+        else:
+            kwargs["attention_mask"] = attention_mask
+        return self.model(**kwargs)
 
     def forward_pooled(self, x: torch.Tensor) -> torch.Tensor:
         patches = self.forward_patches(x)
