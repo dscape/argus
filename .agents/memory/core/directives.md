@@ -1,0 +1,6 @@
+- Goal from `outputs/plan.md`: push `board_exact` as close to 90% as current data/architecture support on the target split.
+- Diagnosis-first loop: always state current baseline, rerun failure study on the current best eval report, review/tag failures, then choose experiments only from dominant buckets.
+- Avoid architecture sweeps without failure-mode justification; abandon low-return directions; use oracle checks when results contradict hypotheses or failure data is ambiguous.
+- Keep repo changes focused/minimal; prefer shrinking plan text rather than expanding it.
+- Do not commit local `.agents/memory/*` changes.
+- Preserve explicit invalidates/supersedes links when future memory replaces prior conclusions.

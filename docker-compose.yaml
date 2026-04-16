@@ -31,6 +31,7 @@ services:
       - ./data:/app/data
       - ./tests:/app/tests
       - ./weights:/app/weights
+      - ./outputs:/app/outputs
       - ./dev-tools/api:/app/dev-tools/api
       - ./scripts:/app/scripts
     env_file: .env

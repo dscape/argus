@@ -1,0 +1,3 @@
+- Current objective: improve physical board tracking by addressing the dominant temporal move-execution ambiguity failure mode on the rectified realplusmanual baseline.
+- Immediate next step: implement and evaluate handling for `temporal in-between / move execution ambiguity` in the board tracker/decoder, using the tagged episode study as justification.
+- Keep the failure-study viewer and episode-based sampler as the standard diagnosis loop for future iterations.

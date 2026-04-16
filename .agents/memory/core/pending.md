@@ -1,0 +1,5 @@
+- Next likely change: handle `temporal in-between / move execution ambiguity` in the board tracker / decoder. Latest tagged study (`outputs/2026-04-16/physical_board_failure_study_rectified_realplusmanual_w2_m10/`) is 12/13 temporal, 1 classifier on baseline `outputs/2026-04-16/tracker_sweep_rectified_realplusmanual/eval_w2_m10.json`.
+- Confirm/manual-complete final bucket tagging for all selected episodes in `manual_buckets.csv` if any rows remain only heuristically suggested rather than reviewed.
+- Design the concrete mitigation for transition-frame misses and long desyncs (e.g. decoder tolerance/hysteresis/lookahead behavior) before running new experiments.
+- Open question: whether the `max_per_video=5` cap should remain for future studies when total episodes are low (14 total, 13 selected here).
+- Environment warning remains noted but unblocked: duplicate `AVFFrameReceiver` implementations from `cv2` and `av` may cause spurious casting failures/crashes.

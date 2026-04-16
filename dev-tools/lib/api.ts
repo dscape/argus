@@ -1745,38 +1745,96 @@ export interface PhysicalFailureStudyListItem {
   path: string;
   label: string;
   modified_at: string | null;
-  selected_failures: number;
-  total_failures: number;
+  total_episodes: number;
+  selected_episodes: number;
   observation_input?: string;
   tracker_mode?: string;
   report_path?: string | null;
 }
 
-export interface PhysicalFailureStudyEntry {
-  selected_index: number;
+export interface PhysicalFailureStudyTopLegalCandidate {
+  move_uci: string | null;
+  fen: string;
+  score: number;
+  matches_gt: boolean;
+}
+
+export interface PhysicalFailureStudyLegalDiagnostics {
+  best_legal_move_uci?: string | null;
+  best_legal_fen?: string | null;
+  best_legal_score?: number | null;
+  best_legal_matches_gt?: boolean;
+  gt_is_legal_successor?: boolean;
+  gt_legal_rank?: number | null;
+  gt_legal_move_uci?: string | null;
+  gt_legal_score?: number | null;
+  gt_score_gap_to_best?: number | null;
+  top_legal_candidates?: PhysicalFailureStudyTopLegalCandidate[];
+}
+
+export interface PhysicalFailureStudySquareDiagnostic {
+  square: string;
+  gt_class: string;
+  stateless_class: string;
+  tracker_input_class: string;
+  decoded_class: string;
+  top1_class: string;
+  top1_prob: number;
+  top2_class: string;
+  top2_prob: number;
+  gt_changed: boolean;
+  decoded_changed: boolean;
+}
+
+export interface PhysicalFailureStudyFrame {
   annotation_id: string;
   clip_path: string | null;
   clip_filename: string;
   frame_index: number;
+  board_path?: string | null;
   source_video_id?: string | null;
-  suggested_root_cause?: string | null;
+  gt_fen: string;
+  decoded_fen: string;
+  decoded_full_fen: string;
+  stateless_fen: string;
+  decoded_move_uci: string | null;
+  decoded_move_score?: number | null;
+  decoded_stay_score?: number | null;
   decoded_error_count: number;
   stateless_error_count: number;
   decoded_matches_previous_gt?: boolean;
   decoded_matches_next_gt?: boolean;
-  best_legal_matches_gt?: boolean;
-  best_legal_move_uci?: string | null;
-  gt_legal_rank?: number | null;
+  stateless_error_squares?: string[];
+  decoded_error_squares?: string[];
+  decoded_changed_squares?: string[];
+  stateless_changed_squares?: string[];
+  gt_changed_squares?: string[];
+  legal_from_previous_decoded?: PhysicalFailureStudyLegalDiagnostics | null;
+  square_diagnostics?: PhysicalFailureStudySquareDiagnostic[];
+  decoded_square_confidences?: number[];
+  stateless_square_confidences?: number[];
+  suggested_bucket?: string | null;
+  image_path: string;
+  offset_from_failure: number;
+  is_failing_frame: boolean;
+}
+
+export interface PhysicalFailureStudyEntry {
+  episode_id: string;
+  selected_index: number;
+  source_video_id: string;
+  clip_path: string;
+  clip_filename: string;
+  first_frame_index: number;
+  last_frame_index: number;
+  length: number;
+  preceding_frame_count: number;
+  suggested_bucket: string;
+  failing_frame: PhysicalFailureStudyFrame;
+  preceding_frames: PhysicalFailureStudyFrame[];
   final_bucket?: string;
   notes?: string;
-  image_path?: string | null;
-  decoded_move_uci?: string | null;
-  decoded_move_score?: number | null;
-  decoded_stay_score?: number | null;
-  gt_changed_squares?: string[];
-  decoded_changed_squares?: string[];
-  decoded_error_squares?: string[];
-  stateless_error_squares?: string[];
+  bucket_updated_at?: string;
 }
 
 export interface PhysicalFailureStudyDetail {
@@ -1785,9 +1843,8 @@ export interface PhysicalFailureStudyDetail {
   modified_at: string | null;
   summary: {
     report_path?: string | null;
-    selected_failures?: number;
-    total_failures?: number;
-    sample_mode?: string;
+    selected_episodes?: number;
+    total_episodes?: number;
     config?: {
       observation_input?: string;
       tracker_mode?: string;
@@ -1798,7 +1855,13 @@ export interface PhysicalFailureStudyDetail {
       temporal_mode?: string;
       temporal_ema_alpha?: number;
       weights_path?: string | null;
+      preceding_frames?: number;
+      recovery_gap?: number;
+      max_per_video?: number;
     };
+    per_video_episode_counts?: Record<string, number>;
+    selected_per_video_counts?: Record<string, number>;
+    suggested_bucket_counts?: Record<string, number>;
   };
   report_metrics?: {
     board_exact_match?: number | null;
@@ -1813,22 +1876,12 @@ export interface PhysicalFailureStudyDetail {
   bucket_counts: Record<string, number>;
 }
 
-export interface PhysicalFailureStudyContextFrame {
-  annotation_id: string;
-  frame_index: number;
-  relative_offset: number;
-  is_anchor: boolean;
-  image_data_url: string;
-}
-
-export interface PhysicalFailureStudyContext {
-  study_path: string;
-  selected_index: number;
-  context_frames: number;
-  observation_input: string;
-  entry: PhysicalFailureStudyEntry;
-  anchor_panel_data_url: string | null;
-  frames: PhysicalFailureStudyContextFrame[];
+export function physicalFailureStudyImageUrl(
+  studyPath: string,
+  imagePath: string,
+): string {
+  const params = new URLSearchParams({ path: studyPath, image: imagePath });
+  return `/api/evaluate/physical-failures/image?${params.toString()}`;
 }
 
 export async function listPhysicalFailureStudies(): Promise<{
@@ -1848,29 +1901,17 @@ export async function getPhysicalFailureStudy(
   return res.json();
 }
 
-export async function getPhysicalFailureStudyContext(options: {
-  path: string;
-  selected_index: number;
-  context_frames?: number;
-  image_max_side?: number;
-}): Promise<PhysicalFailureStudyContext> {
-  const params = new URLSearchParams({
-    path: options.path,
-    selected_index: String(options.selected_index),
-    context_frames: String(options.context_frames ?? 10),
-    image_max_side: String(options.image_max_side ?? 720),
-  });
-  const res = await fetch(`/api/evaluate/physical-failures/context?${params.toString()}`);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
 export async function updatePhysicalFailureStudyEntry(body: {
   study_path: string;
-  selected_index: number;
+  episode_id: string;
   final_bucket?: string | null;
   notes?: string | null;
-}): Promise<{ selected_index: number; final_bucket: string; notes: string }> {
+}): Promise<{
+  episode_id: string;
+  final_bucket: string;
+  notes: string;
+  updated_at?: string | null;
+}> {
   const res = await fetch("/api/evaluate/physical-failures/entry", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -1878,6 +1919,11 @@ export async function updatePhysicalFailureStudyEntry(body: {
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+export function exportPhysicalFailureStudyCsvUrl(studyPath: string): string {
+  const params = new URLSearchParams({ path: studyPath });
+  return `/api/evaluate/physical-failures/export-csv?${params.toString()}`;
 }
 
 // ── Physical validation/train annotation ───────────────────

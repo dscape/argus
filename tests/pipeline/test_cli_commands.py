@@ -251,12 +251,14 @@ class TestPhysicalBoardFailureStudyCommand:
             failure_study,
             "create_tracker_failure_study",
             lambda **kwargs: {
-                "total_failures": 42,
-                "selected_failures": 10,
+                "total_episodes": 42,
+                "selected_episodes": 10,
                 "manifest": "outputs/physical_board_failure_study/manifest.json",
                 "manual_buckets_csv": "outputs/physical_board_failure_study/manual_buckets.csv",
                 "contact_sheet": "outputs/physical_board_failure_study/contact_sheet.png",
                 "summary_path": "outputs/physical_board_failure_study/summary.json",
+                "selected_per_video_counts": {"video-A": 2},
+                "suggested_bucket_counts": {"piece classifier / square evidence": 7},
             },
         )
 
@@ -273,7 +275,9 @@ class TestPhysicalBoardFailureStudyCommand:
                 lookahead_margin=None,
                 weights_path=None,
                 limit=10,
-                sample_mode="round_robin",
+                max_per_video=5,
+                preceding_frames=10,
+                recovery_gap=3,
                 top_legal_candidates=5,
                 panel_size=240,
                 device="cpu",
@@ -283,10 +287,12 @@ class TestPhysicalBoardFailureStudyCommand:
 
         out = capsys.readouterr().out
         assert "Built physical board failure study" in out
-        assert "Total failures:     42" in out
-        assert "Selected failures:  10" in out
+        assert "Total episodes:     42" in out
+        assert "Selected episodes:  10" in out
         assert "Manifest:           outputs/physical_board_failure_study/manifest.json" in out
         assert "Contact sheet:      outputs/physical_board_failure_study/contact_sheet.png" in out
+        assert "video-A: 2" in out
+        assert "piece classifier / square evidence: 7" in out
 
 
 class TestRealDataOverviewCommand:

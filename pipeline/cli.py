@@ -280,6 +280,9 @@ def cmd_physical_board_failure_study(args):
             else args.lookahead_margin
         ),
         weights_path=base_config.weights_path if args.weights_path is None else args.weights_path,
+        preceding_frames=args.preceding_frames,
+        recovery_gap=args.recovery_gap,
+        max_per_video=args.max_per_video,
     )
 
     summary = create_tracker_failure_study(
@@ -289,17 +292,26 @@ def cmd_physical_board_failure_study(args):
         device=args.device,
         panel_size=args.panel_size,
         top_legal_candidates=args.top_legal_candidates,
-        sample_mode=args.sample_mode,
         report_path=args.eval_report,
     )
     print("Built physical board failure study")
-    print(f"  Total failures:     {summary['total_failures']}")
-    print(f"  Selected failures:  {summary['selected_failures']}")
+    print(f"  Total episodes:     {summary['total_episodes']}")
+    print(f"  Selected episodes:  {summary['selected_episodes']}")
     print(f"  Manifest:           {summary['manifest']}")
     print(f"  Manual buckets CSV: {summary['manual_buckets_csv']}")
     if summary.get("contact_sheet") is not None:
         print(f"  Contact sheet:      {summary['contact_sheet']}")
     print(f"  Summary:            {summary['summary_path']}")
+    selected_by_video = summary.get("selected_per_video_counts") or {}
+    if selected_by_video:
+        print("  Selected per video:")
+        for video_id, count in sorted(selected_by_video.items()):
+            print(f"    {video_id}: {count}")
+    bucket_counts = summary.get("suggested_bucket_counts") or {}
+    if bucket_counts:
+        print("  Suggested buckets:")
+        for bucket, count in sorted(bucket_counts.items()):
+            print(f"    {bucket}: {count}")
 
 
 def _resolve_project_path(path: str):
@@ -1768,14 +1780,34 @@ def main():
         "--limit",
         type=int,
         default=100,
-        help="How many failing frames to include in the review bundle",
+        help="How many failure episodes to include in the review bundle",
     )
     p.add_argument(
-        "--sample-mode",
-        type=str,
-        choices=["first", "round_robin"],
-        default="round_robin",
-        help="How to pick failures when there are more than --limit",
+        "--max-per-video",
+        type=int,
+        default=5,
+        help=(
+            "Hard cap on episodes per source_video_id, so one game cannot "
+            "dominate the selection"
+        ),
+    )
+    p.add_argument(
+        "--preceding-frames",
+        type=int,
+        default=10,
+        help=(
+            "How many frames of context to capture before each episode's "
+            "first failing frame"
+        ),
+    )
+    p.add_argument(
+        "--recovery-gap",
+        type=int,
+        default=3,
+        help=(
+            "Correct-frame gap required between episodes; shorter gaps keep "
+            "consecutive failures together as one episode"
+        ),
     )
     p.add_argument(
         "--top-legal-candidates",

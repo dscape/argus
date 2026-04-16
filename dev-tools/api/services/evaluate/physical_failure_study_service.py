@@ -2,30 +2,17 @@
 
 from __future__ import annotations
 
-import base64
 import csv
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-import cv2
-import numpy as np
 from pipeline.paths import PROJECT_ROOT
-from pipeline.physical import board_tracker_failure_study as failure_study
+from pipeline.physical.board_tracker_failure_study import BUCKETS
 
 _OUTPUTS_DIR = PROJECT_ROOT / "outputs"
-_CANONICAL_BUCKETS = [
-    "rectification / localization",
-    "piece classifier / square evidence",
-    "temporal in-between / move execution ambiguity",
-    "decoder / wrong legal hypothesis / error propagation",
-    "eval or label issue",
-    "other / unclear",
-]
-_MAX_CONTEXT_FRAMES = 30
-_DEFAULT_CONTEXT_FRAMES = 10
-_DEFAULT_IMAGE_MAX_SIDE = 720
 
 
 def list_failure_studies() -> list[dict[str, Any]]:
@@ -36,20 +23,25 @@ def list_failure_studies() -> list[dict[str, Any]]:
         except (FileNotFoundError, ValueError, json.JSONDecodeError, csv.Error):
             continue
 
+        summary = bundle["summary"]
+        config = summary.get("config") if isinstance(summary, dict) else None
+        if not isinstance(config, dict):
+            continue
+
+        selected_episodes = int(
+            summary.get("selected_episodes", summary.get("selected_failures", 0))
+        )
+        total_episodes = int(summary.get("total_episodes", summary.get("total_failures", 0)))
         studies.append(
             {
                 "path": _relative_to_project(bundle["study_dir"]),
                 "label": bundle["study_dir"].name,
                 "modified_at": _isoformat_mtime(bundle["summary_path"]),
-                "selected_failures": int(bundle["summary"].get("selected_failures", 0)),
-                "total_failures": int(bundle["summary"].get("total_failures", 0)),
-                "observation_input": str(
-                    bundle["summary"].get("config", {}).get("observation_input", "")
-                ),
-                "tracker_mode": str(
-                    bundle["summary"].get("config", {}).get("tracker_mode", "")
-                ),
-                "report_path": bundle["summary"].get("report_path"),
+                "selected_episodes": selected_episodes,
+                "total_episodes": total_episodes,
+                "observation_input": config.get("observation_input"),
+                "tracker_mode": config.get("tracker_mode"),
+                "report_path": summary.get("report_path"),
             }
         )
 
@@ -67,9 +59,8 @@ def list_failure_studies() -> list[dict[str, Any]]:
 
 def get_failure_study(study_path: str) -> dict[str, Any]:
     bundle = _load_bundle(_resolve_study_dir(study_path))
-    entries = _merged_entries(bundle)
     report_metrics = _load_report_metrics(bundle.get("report_path"))
-
+    entries = _merge_annotations(bundle)
     return {
         "path": _relative_to_project(bundle["study_dir"]),
         "label": bundle["study_dir"].name,
@@ -77,112 +68,53 @@ def get_failure_study(study_path: str) -> dict[str, Any]:
         "summary": bundle["summary"],
         "report_metrics": report_metrics,
         "entries": entries,
-        "bucket_options": list(_CANONICAL_BUCKETS),
+        "bucket_options": list(BUCKETS),
         "bucket_counts": _bucket_counts(entries),
     }
 
 
-def get_failure_study_context(
-    study_path: str,
-    *,
-    selected_index: int,
-    context_frames: int = _DEFAULT_CONTEXT_FRAMES,
-    image_max_side: int = _DEFAULT_IMAGE_MAX_SIDE,
-) -> dict[str, Any]:
-    if selected_index <= 0:
-        raise ValueError(f"selected_index must be > 0, got {selected_index}")
-    if context_frames < 0 or context_frames > _MAX_CONTEXT_FRAMES:
-        raise ValueError(
-            f"context_frames must be between 0 and {_MAX_CONTEXT_FRAMES}, got {context_frames}"
-        )
-    if image_max_side <= 0:
-        raise ValueError(f"image_max_side must be > 0, got {image_max_side}")
-
-    bundle = _load_bundle(_resolve_study_dir(study_path))
-    entries = _merged_entries(bundle)
-    entry = next(
-        (item for item in entries if int(item.get("selected_index", 0)) == selected_index),
-        None,
-    )
-    if entry is None:
-        raise FileNotFoundError(
-            f"Failure-study entry {selected_index} not found in {study_path}"
-        )
-
-    config = bundle["summary"].get("config", {})
-    observation_input = cast(
-        failure_study.ObservationInput,
-        str(config.get("observation_input", "rectified_board")),
-    )
-    rows_by_clip = failure_study._load_rows_by_clip(observation_input)
-    clip_key = str(entry.get("clip_path") or "")
-    clip_rows = rows_by_clip.get(clip_key)
-    if clip_rows is None:
-        raise FileNotFoundError(f"Clip {clip_key} not found for failure-study context")
-
-    anchor_position = _find_anchor_position(
-        clip_rows,
-        annotation_id=str(entry.get("annotation_id") or ""),
-        frame_index=int(entry.get("frame_index", 0)),
-    )
-    start_position = max(0, anchor_position - context_frames)
-    window_rows = clip_rows[start_position : anchor_position + 1]
-
-    clip_cache: dict[Path, dict[str, Any]] = {}
-    frames = [
-        {
-            "annotation_id": row.annotation_id,
-            "frame_index": int(getattr(row, "frame_index", 0)),
-            "relative_offset": int(getattr(row, "frame_index", 0)) - int(entry["frame_index"]),
-            "is_anchor": row.annotation_id == entry["annotation_id"],
-            "image_data_url": _image_data_url(
-                failure_study._load_row_image(
-                    row,
-                    observation_input=observation_input,
-                    clip_cache=clip_cache,
-                ),
-                max_side=image_max_side,
-            ),
-        }
-        for row in window_rows
-    ]
-
-    return {
-        "study_path": _relative_to_project(bundle["study_dir"]),
-        "selected_index": selected_index,
-        "context_frames": context_frames,
-        "observation_input": observation_input,
-        "entry": entry,
-        "anchor_panel_data_url": _file_data_url(entry.get("image_path")),
-        "frames": frames,
-    }
+def resolve_image_path(study_path: str, image_path: str) -> Path:
+    _load_bundle(_resolve_study_dir(study_path))
+    target = (PROJECT_ROOT / image_path).resolve()
+    try:
+        target.relative_to(PROJECT_ROOT.resolve())
+    except ValueError as error:
+        raise PermissionError(f"Image path escaped project root: {image_path}") from error
+    if not target.is_file():
+        raise FileNotFoundError(f"Failure-study image not found: {image_path}")
+    return target
 
 
 def update_failure_study_entry(
     study_path: str,
     *,
-    selected_index: int,
+    episode_id: str,
     final_bucket: str | None,
     notes: str | None,
 ) -> dict[str, Any]:
-    if selected_index <= 0:
-        raise ValueError(f"selected_index must be > 0, got {selected_index}")
+    if not episode_id:
+        raise ValueError("episode_id is required")
+    if final_bucket is not None and final_bucket.strip() and final_bucket not in BUCKETS:
+        raise ValueError(f"Unknown bucket: {final_bucket}")
 
     bundle = _load_bundle(_resolve_study_dir(study_path))
     fieldnames, rows = _load_csv_rows(bundle["manual_buckets_csv_path"])
 
     updated_row: dict[str, str] | None = None
+    updated_at = datetime.now(tz=timezone.utc).isoformat()
     for row in rows:
-        if int(row.get("selected_index", "0") or 0) != selected_index:
+        if row.get("episode_id") != episode_id:
             continue
         row["final_bucket"] = (final_bucket or "").strip()
         row["notes"] = notes or ""
+        if "bucket_updated_at" in fieldnames:
+            row["bucket_updated_at"] = updated_at
         updated_row = row
         break
 
     if updated_row is None:
         raise FileNotFoundError(
-            f"Failure-study entry {selected_index} not found in {bundle['manual_buckets_csv_path']}"
+            f"Failure-study episode {episode_id} not found in {bundle['manual_buckets_csv_path']}"
         )
 
     with bundle["manual_buckets_csv_path"].open("w", newline="") as handle:
@@ -191,10 +123,16 @@ def update_failure_study_entry(
         writer.writerows(rows)
 
     return {
-        "selected_index": selected_index,
+        "episode_id": episode_id,
         "final_bucket": updated_row.get("final_bucket", ""),
         "notes": updated_row.get("notes", ""),
+        "updated_at": updated_row.get("bucket_updated_at") or updated_at,
     }
+
+
+def export_manual_buckets_csv(study_path: str) -> str:
+    bundle = _load_bundle(_resolve_study_dir(study_path))
+    return bundle["manual_buckets_csv_path"].read_text()
 
 
 def _candidate_summary_paths() -> list[Path]:
@@ -256,7 +194,6 @@ def _load_bundle(study_dir: Path) -> dict[str, Any]:
         "study_dir": study_dir,
         "summary_path": summary_path,
         "summary": summary,
-        "manifest_path": manifest_path,
         "manifest": manifest,
         "manual_buckets_csv_path": manual_buckets_csv_path,
         "report_path": report_path,
@@ -290,34 +227,95 @@ def _load_csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     return fieldnames, rows
 
 
-def _merged_entries(bundle: dict[str, Any]) -> list[dict[str, Any]]:
+def _merge_annotations(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     _fieldnames, csv_rows = _load_csv_rows(bundle["manual_buckets_csv_path"])
-    csv_by_selected_index = {
-        int(row.get("selected_index", "0") or 0): row for row in csv_rows
+    csv_by_episode_id = {
+        row.get("episode_id", ""): row for row in csv_rows if row.get("episode_id")
     }
 
     entries: list[dict[str, Any]] = []
     for raw_entry in bundle["manifest"]:
+        if not isinstance(raw_entry, dict):
+            continue
         entry = dict(raw_entry)
-        selected_index = int(entry.get("selected_index", 0))
-        csv_row = csv_by_selected_index.get(selected_index, {})
+        selected_index = int(entry.get("selected_index", 0) or 0)
+        episode_id = str(entry.get("episode_id") or f"entry-{selected_index:03d}")
+        csv_row = csv_by_episode_id.get(episode_id, {})
+
+        if isinstance(entry.get("failing_frame"), dict):
+            entry["failing_frame"] = _normalize_frame(entry.get("failing_frame") or {})
+            entry["preceding_frames"] = [
+                _normalize_frame(frame) for frame in entry.get("preceding_frames") or []
+            ]
+            entry["first_frame_index"] = int(entry.get("first_frame_index", 0) or 0)
+            entry["last_frame_index"] = int(entry.get("last_frame_index", 0) or 0)
+            entry["length"] = int(entry.get("length", 0) or 0)
+            entry["preceding_frame_count"] = int(entry.get("preceding_frame_count", 0) or 0)
+            entry["suggested_bucket"] = str(entry.get("suggested_bucket") or "")
+        else:
+            normalized = _normalize_frame(entry)
+            entry["failing_frame"] = {**normalized, "is_failing_frame": True}
+            entry["preceding_frames"] = []
+            entry["first_frame_index"] = normalized["frame_index"]
+            entry["last_frame_index"] = normalized["frame_index"]
+            entry["length"] = 1
+            entry["preceding_frame_count"] = 0
+            entry["suggested_bucket"] = str(entry.get("suggested_bucket") or "")
+
+        entry["episode_id"] = episode_id
         entry["selected_index"] = selected_index
-        entry["frame_index"] = int(entry.get("frame_index", 0))
-        entry["decoded_error_count"] = int(entry.get("decoded_error_count", 0))
-        entry["stateless_error_count"] = int(entry.get("stateless_error_count", 0))
+        entry["source_video_id"] = str(entry.get("source_video_id") or "")
+        entry["clip_path"] = str(entry.get("clip_path") or "")
+        entry["clip_filename"] = str(entry.get("clip_filename") or "")
         entry["final_bucket"] = csv_row.get("final_bucket", "")
         entry["notes"] = csv_row.get("notes", "")
-        entry["image_path"] = entry.get("image_path")
-        legal = entry.get("legal_from_previous_decoded")
-        if not isinstance(legal, dict):
-            legal = {}
-        entry["best_legal_matches_gt"] = bool(legal.get("best_legal_matches_gt"))
-        entry["best_legal_move_uci"] = legal.get("best_legal_move_uci")
-        entry["gt_legal_rank"] = legal.get("gt_legal_rank")
+        entry["bucket_updated_at"] = csv_row.get("bucket_updated_at")
         entries.append(entry)
 
-    entries.sort(key=lambda item: (int(item["selected_index"]), int(item["frame_index"])))
+    entries.sort(key=lambda item: (int(item["selected_index"]), item["episode_id"]))
     return entries
+
+
+def _normalize_frame(frame: dict[str, Any]) -> dict[str, Any]:
+    legal = frame.get("legal_from_previous_decoded")
+    if not isinstance(legal, dict):
+        legal = None
+    square_diagnostics = frame.get("square_diagnostics")
+    if not isinstance(square_diagnostics, list):
+        square_diagnostics = []
+    return {
+        **frame,
+        "annotation_id": str(frame.get("annotation_id") or ""),
+        "clip_path": frame.get("clip_path"),
+        "clip_filename": str(frame.get("clip_filename") or ""),
+        "frame_index": int(frame.get("frame_index", 0) or 0),
+        "board_path": frame.get("board_path"),
+        "source_video_id": frame.get("source_video_id"),
+        "gt_fen": str(frame.get("gt_fen") or ""),
+        "decoded_fen": str(frame.get("decoded_fen") or ""),
+        "decoded_full_fen": str(frame.get("decoded_full_fen") or ""),
+        "stateless_fen": str(frame.get("stateless_fen") or ""),
+        "decoded_move_uci": frame.get("decoded_move_uci"),
+        "decoded_move_score": frame.get("decoded_move_score"),
+        "decoded_stay_score": frame.get("decoded_stay_score"),
+        "decoded_error_count": int(frame.get("decoded_error_count", 0) or 0),
+        "stateless_error_count": int(frame.get("stateless_error_count", 0) or 0),
+        "decoded_matches_previous_gt": bool(frame.get("decoded_matches_previous_gt")),
+        "decoded_matches_next_gt": bool(frame.get("decoded_matches_next_gt")),
+        "stateless_error_squares": frame.get("stateless_error_squares") or [],
+        "decoded_error_squares": frame.get("decoded_error_squares") or [],
+        "decoded_changed_squares": frame.get("decoded_changed_squares") or [],
+        "stateless_changed_squares": frame.get("stateless_changed_squares") or [],
+        "gt_changed_squares": frame.get("gt_changed_squares") or [],
+        "legal_from_previous_decoded": legal,
+        "square_diagnostics": square_diagnostics,
+        "decoded_square_confidences": frame.get("decoded_square_confidences") or [],
+        "stateless_square_confidences": frame.get("stateless_square_confidences") or [],
+        "suggested_bucket": frame.get("suggested_bucket"),
+        "image_path": str(frame.get("image_path") or ""),
+        "offset_from_failure": int(frame.get("offset_from_failure", 0) or 0),
+        "is_failing_frame": bool(frame.get("is_failing_frame")),
+    }
 
 
 def _load_report_metrics(report_path: Path | None) -> dict[str, Any] | None:
@@ -343,71 +341,6 @@ def _bucket_counts(entries: list[dict[str, Any]]) -> dict[str, int]:
         bucket = str(entry.get("final_bucket") or "").strip() or "(untagged)"
         counts[bucket] = counts.get(bucket, 0) + 1
     return dict(sorted(counts.items(), key=lambda item: item[0]))
-
-
-def _find_anchor_position(
-    clip_rows: list[Any],
-    *,
-    annotation_id: str,
-    frame_index: int,
-) -> int:
-    for index, row in enumerate(clip_rows):
-        if row.annotation_id == annotation_id:
-            return index
-    for index, row in enumerate(clip_rows):
-        if int(getattr(row, "frame_index", -1)) == frame_index:
-            return index
-    raise FileNotFoundError(
-        f"Failure-study anchor {annotation_id or frame_index} not found in clip rows"
-    )
-
-
-def _image_data_url(image_bgr: np.ndarray, *, max_side: int) -> str:
-    resized = _resize_image(image_bgr, max_side=max_side)
-    success, encoded = cv2.imencode(
-        ".jpg",
-        resized,
-        [int(cv2.IMWRITE_JPEG_QUALITY), 85],
-    )
-    if not success:
-        raise ValueError("Failed to encode failure-study context image")
-    payload = base64.b64encode(encoded.tobytes()).decode("ascii")
-    return f"data:image/jpeg;base64,{payload}"
-
-
-def _file_data_url(path_value: Any) -> str | None:
-    if not isinstance(path_value, str) or not path_value.strip():
-        return None
-    path = Path(path_value)
-    if not path.is_absolute():
-        path = PROJECT_ROOT / path
-    resolved = path.resolve()
-    if not resolved.is_relative_to(PROJECT_ROOT.resolve()):
-        return None
-    if not resolved.exists() or not resolved.is_file():
-        return None
-    suffix = resolved.suffix.lower()
-    mime = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".webp": "image/webp",
-    }.get(suffix)
-    if mime is None:
-        return None
-    payload = base64.b64encode(resolved.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{payload}"
-
-
-def _resize_image(image_bgr: np.ndarray, *, max_side: int) -> np.ndarray:
-    height, width = image_bgr.shape[:2]
-    largest_side = max(height, width)
-    if largest_side <= max_side:
-        return image_bgr
-    scale = max_side / float(largest_side)
-    resized_width = max(1, int(round(width * scale)))
-    resized_height = max(1, int(round(height * scale)))
-    return cv2.resize(image_bgr, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
 
 
 def _isoformat_mtime(path: Path) -> str | None:

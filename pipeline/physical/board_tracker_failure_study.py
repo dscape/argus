@@ -1,4 +1,13 @@
-"""Failure-study tooling for physical board-tracker runs."""
+"""Failure-study tooling for physical board-tracker runs.
+
+The tool groups per-frame board_exact failures into *episodes* (maximal runs
+of consecutive failing frames, separated by at least ``recovery_gap`` correct
+frames). For each selected episode we capture the first failing frame plus
+the preceding ``preceding_frames`` frames of context, so the reviewer can
+see how the per-square confidence and decoder state drifted before the
+failure. Selection round-robins across ``source_video_id`` with a hard
+``max_per_video`` cap so a single game cannot dominate the sample.
+"""
 
 from __future__ import annotations
 
@@ -57,28 +66,38 @@ _PANEL_BG = (255, 255, 255)
 _CONTACT_SHEET_BG = (245, 245, 245)
 _EMPTY_CLASS_ID = 0
 _INFERENCE_BATCH_SIZE = 16
+
+BUCKETS: tuple[str, ...] = (
+    "rectification / localization",
+    "piece classifier / square evidence",
+    "temporal in-between / move execution ambiguity",
+    "decoder / wrong legal hypothesis / error propagation",
+    "eval or label issue",
+    "other / unclear",
+)
+
 _BUCKET_GUIDE = """# Manual failure buckets
 
-Use `final_bucket` in `manual_buckets.csv`.
+Review each episode in the dev-tools viewer and set `final_bucket` in
+`manual_buckets.csv`.
 
-- `rectification / localization`
-  board geometry is visibly wrong in the crop
-  (warped grid, shifted squares, clipped files/ranks)
-- `piece classifier / square evidence`
-  geometry looks usable, but the board evidence itself is wrong
-  (piece identity, occupancy, blur/confusable classes)
-- `temporal in-between / move execution ambiguity`
-  the sampled frames are in the middle of a move, so the board state is genuinely
-  ambiguous for a few frames
-- `decoder / wrong legal hypothesis / error propagation`
-  the decoder picked the wrong legal successor or failed to recover after a bad step
-- `eval or label issue`
-  annotation/eval issue, not a model failure
-- `other / unclear`
-  none of the above, or not enough evidence
+- `rectification / localization`: board geometry is visibly wrong in the crop
+  (warped grid, shifted squares, clipped files/ranks, localizer drift)
+- `piece classifier / square evidence`: geometry is usable but the per-square
+  evidence itself is wrong (confusable class pair, occlusion, hand over
+  piece, lighting changes)
+- `temporal in-between / move execution ambiguity`: frame is mid-move (hand
+  on board, piece lifted, not yet placed), so no single FEN is "correct";
+  the decoder committed too early or too late
+- `decoder / wrong legal hypothesis / error propagation`: classifier evidence
+  looks reasonable but the decoder picked the wrong legal hypothesis, or a
+  prior mistake is propagating forward through the sequence
+- `eval or label issue`: the ground-truth annotation is wrong or ambiguous
+- `other / unclear`: doesn't fit any of the above (use notes to explain)
 
-`Suggested_root_cause` is only a heuristic. Override it manually.
+`suggested_bucket` is a heuristic hint. Override it manually.
 """
+
 _CLASS_ID_TO_SYMBOL = {
     class_id: ("" if name == "empty" else name)
     for class_id, name in enumerate(SQUARE_CLASS_NAMES)
@@ -96,6 +115,9 @@ class TrackerFailureStudyConfig:
     lookahead_window: int = 3
     lookahead_margin: float = 8.0
     weights_path: str | None = None
+    preceding_frames: int = 10
+    recovery_gap: int = 3
+    max_per_video: int = 5
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -108,13 +130,29 @@ class TrackerFailureStudyConfig:
             "lookahead_window": self.lookahead_window,
             "lookahead_margin": self.lookahead_margin,
             "weights_path": self.weights_path,
+            "preceding_frames": self.preceding_frames,
+            "recovery_gap": self.recovery_gap,
+            "max_per_video": self.max_per_video,
         }
 
 
 @dataclass(frozen=True)
-class _FailureRecord:
+class _FramePayload:
     row: ObservationRow
     payload: dict[str, Any]
+    frame_offset: int
+    decoded_error_count: int
+
+
+@dataclass(frozen=True)
+class _Episode:
+    clip_key: str
+    source_video_id: str
+    first_frame_offset: int
+    last_frame_offset: int
+    failing_frame: _FramePayload
+    preceding_frames: tuple[_FramePayload, ...]
+    suggested_bucket: str
 
 
 def load_config_from_eval_report(report_path: str | Path) -> TrackerFailureStudyConfig:
@@ -158,7 +196,6 @@ def create_tracker_failure_study(
     device: str = "cpu",
     panel_size: int = 240,
     top_legal_candidates: int = 5,
-    sample_mode: Literal["first", "round_robin"] = "round_robin",
     report_path: str | Path | None = None,
 ) -> dict[str, Any]:
     if limit <= 0:
@@ -167,57 +204,113 @@ def create_tracker_failure_study(
         raise ValueError(f"panel_size must be > 0, got {panel_size}")
     if top_legal_candidates <= 0:
         raise ValueError(f"top_legal_candidates must be > 0, got {top_legal_candidates}")
+    if config.preceding_frames < 0:
+        raise ValueError(f"preceding_frames must be >= 0, got {config.preceding_frames}")
+    if config.recovery_gap < 1:
+        raise ValueError(f"recovery_gap must be >= 1, got {config.recovery_gap}")
+    if config.max_per_video < 1:
+        raise ValueError(f"max_per_video must be >= 1, got {config.max_per_video}")
 
     rows_by_clip = _load_rows_by_clip(config.observation_input)
-    failures = _collect_failures(
+    frame_payloads_by_clip = _collect_frame_payloads(
         rows_by_clip,
         config=config,
         device=device,
         top_legal_candidates=top_legal_candidates,
     )
-    selected_failures = _select_failures(failures, limit=limit, sample_mode=sample_mode)
+    episodes = _group_into_episodes(
+        frame_payloads_by_clip,
+        recovery_gap=config.recovery_gap,
+        preceding_frames=config.preceding_frames,
+    )
+    selected_episodes = _select_episodes(
+        episodes,
+        limit=limit,
+        max_per_video=config.max_per_video,
+    )
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    frame_dir = output_path / "frames"
-    frame_dir.mkdir(parents=True, exist_ok=True)
+    episodes_dir = output_path / "episodes"
+    episodes_dir.mkdir(parents=True, exist_ok=True)
 
-    rendered_images: list[Image.Image] = []
     manifest: list[dict[str, Any]] = []
     clip_cache: dict[Path, dict[str, Any]] = {}
-    for index, failure in enumerate(selected_failures, start=1):
-        image_bgr = _load_row_image(
-            failure.row,
-            observation_input=config.observation_input,
-            clip_cache=clip_cache,
-        )
-        rendered = _render_failure_frame(
-            failure.payload,
-            crop_rgb=cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB),
-            panel_size=panel_size,
-        )
-        filename = (
-            f"{index:03d}_{_safe_filename_stem(Path(str(failure.payload['clip_filename'])).stem)}"
-            f"_f{int(failure.payload['frame_index']):04d}.png"
-        )
-        rendered.save(frame_dir / filename)
-        rendered_images.append(rendered)
+    failing_frame_images: list[Image.Image] = []
 
-        payload = dict(failure.payload)
-        payload["image_path"] = _relative_to_project(frame_dir / filename)
-        payload["selected_index"] = index
-        manifest.append(payload)
+    for selected_index, episode in enumerate(selected_episodes, start=1):
+        episode_id = f"ep{selected_index:03d}"
+        episode_dir = episodes_dir / episode_id
+        episode_dir.mkdir(parents=True, exist_ok=True)
+
+        window: list[_FramePayload] = list(episode.preceding_frames) + [episode.failing_frame]
+        offset_base = -len(episode.preceding_frames)
+        rendered_window: list[dict[str, Any]] = []
+
+        for window_index, frame_payload in enumerate(window):
+            offset_from_failure = offset_base + window_index
+            filename = f"frame_{int(frame_payload.payload['frame_index']):04d}.png"
+            image_bgr = _load_row_image(
+                frame_payload.row,
+                observation_input=config.observation_input,
+                clip_cache=clip_cache,
+            )
+            annotation_suffix = (
+                "FAIL (episode first frame)"
+                if offset_from_failure == 0
+                else f"pre {offset_from_failure:+d}"
+            )
+            rendered = _render_failure_frame(
+                frame_payload.payload,
+                crop_rgb=cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB),
+                panel_size=panel_size,
+                annotation_suffix=annotation_suffix,
+            )
+            rendered_path = episode_dir / filename
+            rendered.save(rendered_path)
+
+            enriched_payload = dict(frame_payload.payload)
+            enriched_payload["image_path"] = _relative_to_project(rendered_path)
+            enriched_payload["offset_from_failure"] = offset_from_failure
+            enriched_payload["is_failing_frame"] = offset_from_failure == 0
+            rendered_window.append(enriched_payload)
+
+        failing_entry = rendered_window[-1]
+        failing_frame_images.append(Image.open(PROJECT_ROOT / failing_entry["image_path"]).copy())
+        preceding_entries = rendered_window[:-1]
+
+        last_frame_index = int(
+            frame_payloads_by_clip[episode.clip_key][episode.last_frame_offset]
+            .payload["frame_index"]
+        )
+        manifest.append(
+            {
+                "episode_id": episode_id,
+                "selected_index": selected_index,
+                "source_video_id": episode.source_video_id,
+                "clip_path": episode.clip_key,
+                "clip_filename": Path(episode.clip_key).name,
+                "first_frame_index": int(episode.failing_frame.payload["frame_index"]),
+                "last_frame_index": last_frame_index,
+                "length": episode.last_frame_offset - episode.first_frame_offset + 1,
+                "preceding_frame_count": len(preceding_entries),
+                "suggested_bucket": episode.suggested_bucket,
+                "failing_frame": failing_entry,
+                "preceding_frames": preceding_entries,
+            }
+        )
 
     contact_sheet_path = output_path / "contact_sheet.png"
-    if rendered_images:
+    if failing_frame_images:
         contact_sheet = _render_contact_sheet(
-            rendered_images,
+            failing_frame_images,
             title=(
                 f"physical board failure study · {config.tracker_mode} · "
                 f"{config.observation_input}"
             ),
             subtitle=(
-                f"selected {len(rendered_images)} of {len(failures)} board_exact failures"
+                f"selected {len(failing_frame_images)} of {len(episodes)} "
+                f"board_exact failure episodes"
             ),
         )
         contact_sheet.save(contact_sheet_path)
@@ -231,27 +324,32 @@ def create_tracker_failure_study(
     guide_path = output_path / "BUCKETS.md"
     guide_path.write_text(_BUCKET_GUIDE)
 
-    per_clip_failure_counts = Counter(str(record.payload["clip_path"]) for record in failures)
-    suggested_root_cause_counts = Counter(
-        str(record.payload["suggested_root_cause"]) for record in selected_failures
+    per_video_episode_counts = Counter(episode.source_video_id for episode in episodes)
+    selected_per_video_counts = Counter(
+        episode.source_video_id for episode in selected_episodes
+    )
+    per_clip_episode_counts = Counter(episode.clip_key for episode in episodes)
+    suggested_bucket_counts = Counter(
+        episode.suggested_bucket for episode in selected_episodes
     )
     summary = {
         "report_path": None if report_path is None else _relative_to_project(Path(report_path)),
         "config": config.to_dict(),
         "total_clips": len(rows_by_clip),
-        "total_failures": len(failures),
-        "selected_failures": len(manifest),
-        "sample_mode": sample_mode,
+        "total_episodes": len(episodes),
+        "selected_episodes": len(manifest),
         "panel_size": panel_size,
         "top_legal_candidates": top_legal_candidates,
         "manifest": _relative_to_project(manifest_path),
         "manual_buckets_csv": _relative_to_project(buckets_path),
         "bucket_guide": _relative_to_project(guide_path),
         "contact_sheet": (
-            _relative_to_project(contact_sheet_path) if rendered_images else None
+            _relative_to_project(contact_sheet_path) if failing_frame_images else None
         ),
-        "per_clip_failure_counts": dict(sorted(per_clip_failure_counts.items())),
-        "suggested_root_cause_counts": dict(sorted(suggested_root_cause_counts.items())),
+        "per_video_episode_counts": dict(sorted(per_video_episode_counts.items())),
+        "selected_per_video_counts": dict(sorted(selected_per_video_counts.items())),
+        "per_clip_episode_counts": dict(sorted(per_clip_episode_counts.items())),
+        "suggested_bucket_counts": dict(sorted(suggested_bucket_counts.items())),
     }
     summary_path = output_path / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
@@ -281,16 +379,16 @@ def _load_rows_by_clip(
     }
 
 
-def _collect_failures(
+def _collect_frame_payloads(
     rows_by_clip: dict[str, list[ObservationRow]],
     *,
     config: TrackerFailureStudyConfig,
     device: str,
     top_legal_candidates: int,
-) -> list[_FailureRecord]:
+) -> dict[str, list[_FramePayload]]:
     clip_state_cache: dict[str, tuple[str, str | None]] = {}
     clip_cache: dict[Path, dict[str, Any]] = {}
-    failures: list[_FailureRecord] = []
+    result: dict[str, list[_FramePayload]] = {}
 
     for clip_key, clip_rows in sorted(rows_by_clip.items()):
         initial_board_fen, initial_side_to_move = _initial_board_state(
@@ -321,6 +419,7 @@ def _collect_failures(
             _class_ids_to_fen(tuple(int(value) for value in row.labels))
             for row in clip_rows
         ]
+        clip_payloads: list[_FramePayload] = []
         previous_gt_class_ids: tuple[int, ...] | None = None
         previous_stateless_class_ids: tuple[int, ...] | None = None
         previous_tracker_input_class_ids: tuple[int, ...] | None = None
@@ -345,42 +444,12 @@ def _collect_failures(
                 gt_class_ids,
             )
             decoded_error_count = _count_differences(decoded_class_ids, gt_class_ids)
-            if decoded_error_count == 0:
-                previous_gt_class_ids = gt_class_ids
-                previous_stateless_class_ids = stateless_class_ids
-                previous_tracker_input_class_ids = tracker_input_class_ids
-                previous_decoded_class_ids = decoded_class_ids
-                previous_decoded_board = decoded_board.copy(stack=False)
-                continue
 
             gt_fen = gt_fens[frame_offset]
             previous_gt_fen = None if previous_gt_class_ids is None else gt_fens[frame_offset - 1]
             next_gt_fen = None if frame_offset + 1 >= len(gt_fens) else gt_fens[frame_offset + 1]
 
-            legal_diagnostics = None
-            if previous_decoded_board is not None:
-                legal_diagnostics = _legal_transition_diagnostics(
-                    previous_board=previous_decoded_board,
-                    gt_fen=gt_fen,
-                    log_probs=tracker_log_probs,
-                    frame_index=frame_offset,
-                    lookahead_window=(
-                        config.lookahead_window if config.tracker_mode == "lookahead" else 1
-                    ),
-                    top_legal_candidates=top_legal_candidates,
-                )
-
-            square_diagnostics = _square_diagnostics(
-                probabilities=probabilities,
-                gt_class_ids=gt_class_ids,
-                stateless_class_ids=stateless_class_ids,
-                decoded_class_ids=decoded_class_ids,
-                tracker_input_class_ids=tracker_input_class_ids,
-                previous_gt_class_ids=previous_gt_class_ids,
-                previous_decoded_class_ids=previous_decoded_class_ids,
-            )
-
-            payload = {
+            payload: dict[str, Any] = {
                 "annotation_id": row.annotation_id,
                 "clip_path": row.clip_path,
                 "clip_filename": Path(str(row.clip_path or row.annotation_id)).name,
@@ -427,13 +496,11 @@ def _collect_failures(
                 "decoded_error_count": decoded_error_count,
                 "stateless_exact_match": stateless_error_count == 0,
                 "tracker_input_exact_match": tracker_input_error_count == 0,
-                "decoded_exact_match": False,
+                "decoded_exact_match": decoded_error_count == 0,
                 "decoded_matches_previous_gt": decoded_board.board_fen() == previous_gt_fen,
                 "decoded_matches_next_gt": decoded_board.board_fen() == next_gt_fen,
                 "stateless_matches_previous_gt": stateless_observation.fen == previous_gt_fen,
                 "stateless_matches_next_gt": stateless_observation.fen == next_gt_fen,
-                "legal_from_previous_decoded": legal_diagnostics,
-                "square_diagnostics": square_diagnostics,
                 "stateless_square_confidences": _class_confidences(
                     probabilities,
                     stateless_class_ids,
@@ -443,8 +510,44 @@ def _collect_failures(
                     decoded_class_ids,
                 ),
             }
-            payload["suggested_root_cause"] = _suggested_root_cause(payload)
-            failures.append(_FailureRecord(row=row, payload=payload))
+
+            if decoded_error_count > 0:
+                legal_diagnostics = None
+                if previous_decoded_board is not None:
+                    legal_diagnostics = _legal_transition_diagnostics(
+                        previous_board=previous_decoded_board,
+                        gt_fen=gt_fen,
+                        log_probs=tracker_log_probs,
+                        frame_index=frame_offset,
+                        lookahead_window=(
+                            config.lookahead_window if config.tracker_mode == "lookahead" else 1
+                        ),
+                        top_legal_candidates=top_legal_candidates,
+                    )
+                payload["legal_from_previous_decoded"] = legal_diagnostics
+                payload["square_diagnostics"] = _square_diagnostics(
+                    probabilities=probabilities,
+                    gt_class_ids=gt_class_ids,
+                    stateless_class_ids=stateless_class_ids,
+                    decoded_class_ids=decoded_class_ids,
+                    tracker_input_class_ids=tracker_input_class_ids,
+                    previous_gt_class_ids=previous_gt_class_ids,
+                    previous_decoded_class_ids=previous_decoded_class_ids,
+                )
+                payload["suggested_bucket"] = _suggested_bucket(payload)
+            else:
+                payload["legal_from_previous_decoded"] = None
+                payload["square_diagnostics"] = []
+                payload["suggested_bucket"] = None
+
+            clip_payloads.append(
+                _FramePayload(
+                    row=row,
+                    payload=payload,
+                    frame_offset=frame_offset,
+                    decoded_error_count=decoded_error_count,
+                )
+            )
 
             previous_gt_class_ids = gt_class_ids
             previous_stateless_class_ids = stateless_class_ids
@@ -452,14 +555,96 @@ def _collect_failures(
             previous_decoded_class_ids = decoded_class_ids
             previous_decoded_board = decoded_board.copy(stack=False)
 
-    failures.sort(
-        key=lambda record: (
-            str(record.payload["clip_path"]),
-            int(record.payload["frame_index"]),
-            record.payload["annotation_id"],
-        )
-    )
-    return failures
+        result[clip_key] = clip_payloads
+
+    return result
+
+
+def _group_into_episodes(
+    frame_payloads_by_clip: dict[str, list[_FramePayload]],
+    *,
+    recovery_gap: int,
+    preceding_frames: int,
+) -> list[_Episode]:
+    episodes: list[_Episode] = []
+
+    for clip_key in sorted(frame_payloads_by_clip):
+        clip_payloads = frame_payloads_by_clip[clip_key]
+        state: dict[str, int | None] = {"first": None, "last": None}
+        correct_streak = 0
+
+        def flush() -> None:
+            first_offset = state["first"]
+            last_offset = state["last"]
+            if first_offset is None or last_offset is None:
+                return
+            failing = clip_payloads[first_offset]
+            preceding_start = max(0, first_offset - preceding_frames)
+            preceding = tuple(clip_payloads[preceding_start:first_offset])
+            source_video_id = failing.payload["source_video_id"]
+            suggested_bucket = failing.payload.get("suggested_bucket") or "other / unclear"
+            episodes.append(
+                _Episode(
+                    clip_key=clip_key,
+                    source_video_id=str(source_video_id),
+                    first_frame_offset=first_offset,
+                    last_frame_offset=last_offset,
+                    failing_frame=failing,
+                    preceding_frames=preceding,
+                    suggested_bucket=suggested_bucket,
+                )
+            )
+            state["first"] = None
+            state["last"] = None
+
+        for frame_payload in clip_payloads:
+            if frame_payload.decoded_error_count > 0:
+                if state["first"] is None:
+                    state["first"] = frame_payload.frame_offset
+                state["last"] = frame_payload.frame_offset
+                correct_streak = 0
+            else:
+                correct_streak += 1
+                if state["first"] is not None and correct_streak >= recovery_gap:
+                    flush()
+
+        flush()
+
+    return episodes
+
+
+def _select_episodes(
+    episodes: list[_Episode],
+    *,
+    limit: int,
+    max_per_video: int,
+) -> list[_Episode]:
+    by_video: dict[str, list[_Episode]] = defaultdict(list)
+    for episode in episodes:
+        by_video[episode.source_video_id].append(episode)
+    for video_episodes in by_video.values():
+        video_episodes.sort(key=lambda ep: (ep.clip_key, ep.first_frame_offset))
+
+    selected: list[_Episode] = []
+    selected_per_video: dict[str, int] = defaultdict(int)
+    video_keys = sorted(by_video)
+
+    while len(selected) < limit:
+        made_progress = False
+        for video_id in video_keys:
+            if len(selected) >= limit:
+                break
+            if not by_video[video_id]:
+                continue
+            if selected_per_video[video_id] >= max_per_video:
+                continue
+            selected.append(by_video[video_id].pop(0))
+            selected_per_video[video_id] += 1
+            made_progress = True
+        if not made_progress:
+            break
+
+    return selected
 
 
 def _initial_board_state(
@@ -707,48 +892,22 @@ def _square_diagnostics(
     return payload
 
 
-def _suggested_root_cause(payload: dict[str, Any]) -> str:
-    if bool(payload["decoded_matches_previous_gt"]) or bool(payload["decoded_matches_next_gt"]):
-        return "tracker_boundary_jitter"
+def _suggested_bucket(payload: dict[str, Any]) -> str:
+    if bool(payload.get("decoded_matches_previous_gt")) or bool(
+        payload.get("decoded_matches_next_gt")
+    ):
+        return "temporal in-between / move execution ambiguity"
 
     legal = payload.get("legal_from_previous_decoded")
     if isinstance(legal, dict) and bool(legal.get("best_legal_matches_gt")):
-        return "tracker_desync"
+        return "decoder / wrong legal hypothesis / error propagation"
 
-    if bool(payload.get("stateless_exact_match")) or bool(payload.get("tracker_input_exact_match")):
-        return "tracker_desync"
+    if bool(payload.get("stateless_exact_match")) or bool(
+        payload.get("tracker_input_exact_match")
+    ):
+        return "decoder / wrong legal hypothesis / error propagation"
 
-    return "rectification_or_classifier"
-
-
-def _select_failures(
-    failures: list[_FailureRecord],
-    *,
-    limit: int,
-    sample_mode: Literal["first", "round_robin"],
-) -> list[_FailureRecord]:
-    if len(failures) <= limit or sample_mode == "first":
-        return failures[:limit]
-
-    by_clip: dict[str, list[_FailureRecord]] = defaultdict(list)
-    for failure in failures:
-        by_clip[str(failure.payload["clip_path"])].append(failure)
-
-    selected: list[_FailureRecord] = []
-    clip_keys = sorted(by_clip)
-    while len(selected) < limit and clip_keys:
-        next_clip_keys: list[str] = []
-        for clip_key in clip_keys:
-            clip_failures = by_clip[clip_key]
-            if not clip_failures:
-                continue
-            selected.append(clip_failures.pop(0))
-            if len(selected) >= limit:
-                break
-            if clip_failures:
-                next_clip_keys.append(clip_key)
-        clip_keys = next_clip_keys
-    return selected
+    return "piece classifier / square evidence"
 
 
 def _load_row_image(
@@ -773,6 +932,7 @@ def _render_failure_frame(
     *,
     crop_rgb: np.ndarray,
     panel_size: int,
+    annotation_suffix: str | None = None,
 ) -> Image.Image:
     margin = 12
     panel_gap = 12
@@ -786,22 +946,24 @@ def _render_failure_frame(
     header_font = _load_font(20)
     body_font = _load_font(15)
 
-    move_label = payload["decoded_move_uci"] or "stay"
+    move_label = payload.get("decoded_move_uci") or "stay"
     legal = payload.get("legal_from_previous_decoded") or {}
     rank_label = legal.get("gt_legal_rank")
     rank_text = "-" if rank_label is None else str(rank_label)
+    suggested = payload.get("suggested_bucket") or "-"
+    header_suffix = f" · {annotation_suffix}" if annotation_suffix else ""
     header_text = (
         f"{payload['clip_filename']} · f{int(payload['frame_index']):04d} · "
-        f"move={move_label} · suggested={payload['suggested_root_cause']}"
+        f"move={move_label} · suggested={suggested}{header_suffix}"
     )
     metrics_text = (
-        f"single err={payload['stateless_error_count']:02d} "
-        f"tracker err={payload['decoded_error_count']:02d} "
+        f"single err={int(payload.get('stateless_error_count', 0)):02d} "
+        f"tracker err={int(payload.get('decoded_error_count', 0)):02d} "
         f"gt legal rank={rank_text}"
     )
     flags_text = (
-        f"prevGT={_flag(payload['decoded_matches_previous_gt'])} "
-        f"nextGT={_flag(payload['decoded_matches_next_gt'])} "
+        f"prevGT={_flag(bool(payload.get('decoded_matches_previous_gt')))} "
+        f"nextGT={_flag(bool(payload.get('decoded_matches_next_gt')))} "
         f"bestLegalGT={_flag(bool(legal.get('best_legal_matches_gt')))}"
     )
 
@@ -999,10 +1161,13 @@ def _render_contact_sheet(
 def _write_manual_buckets_csv(path: Path, manifest: list[dict[str, Any]]) -> None:
     fieldnames = [
         "selected_index",
-        "annotation_id",
+        "episode_id",
+        "source_video_id",
         "clip_path",
-        "frame_index",
-        "suggested_root_cause",
+        "first_frame_index",
+        "last_frame_index",
+        "length",
+        "suggested_bucket",
         "decoded_error_count",
         "stateless_error_count",
         "decoded_matches_previous_gt",
@@ -1018,22 +1183,26 @@ def _write_manual_buckets_csv(path: Path, manifest: list[dict[str, Any]]) -> Non
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for row in manifest:
-            legal = row.get("legal_from_previous_decoded") or {}
+            failing = row.get("failing_frame") or {}
+            legal = failing.get("legal_from_previous_decoded") or {}
             writer.writerow(
                 {
                     "selected_index": row.get("selected_index"),
-                    "annotation_id": row.get("annotation_id"),
+                    "episode_id": row.get("episode_id"),
+                    "source_video_id": row.get("source_video_id"),
                     "clip_path": row.get("clip_path"),
-                    "frame_index": row.get("frame_index"),
-                    "suggested_root_cause": row.get("suggested_root_cause"),
-                    "decoded_error_count": row.get("decoded_error_count"),
-                    "stateless_error_count": row.get("stateless_error_count"),
-                    "decoded_matches_previous_gt": row.get("decoded_matches_previous_gt"),
-                    "decoded_matches_next_gt": row.get("decoded_matches_next_gt"),
+                    "first_frame_index": row.get("first_frame_index"),
+                    "last_frame_index": row.get("last_frame_index"),
+                    "length": row.get("length"),
+                    "suggested_bucket": row.get("suggested_bucket"),
+                    "decoded_error_count": failing.get("decoded_error_count"),
+                    "stateless_error_count": failing.get("stateless_error_count"),
+                    "decoded_matches_previous_gt": failing.get("decoded_matches_previous_gt"),
+                    "decoded_matches_next_gt": failing.get("decoded_matches_next_gt"),
                     "best_legal_matches_gt": legal.get("best_legal_matches_gt"),
                     "best_legal_move_uci": legal.get("best_legal_move_uci"),
                     "gt_legal_rank": legal.get("gt_legal_rank"),
-                    "image_path": row.get("image_path"),
+                    "image_path": failing.get("image_path"),
                     "final_bucket": "",
                     "notes": "",
                 }
@@ -1177,11 +1346,6 @@ def _load_font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
             except OSError:
                 continue
     return ImageFont.load_default()
-
-
-def _safe_filename_stem(value: str) -> str:
-    safe = [char if char.isalnum() or char in {"-", "_"} else "_" for char in value]
-    return "".join(safe).strip("_") or "frame"
 
 
 def _relative_to_project(path: Path) -> str:
