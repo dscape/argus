@@ -66,3 +66,4 @@ next-env.d.ts
 *.log
 .env
 weights/dinov2-base/
+/.agents/memory/attachments/
