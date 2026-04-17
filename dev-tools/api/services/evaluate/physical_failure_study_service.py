@@ -6,11 +6,18 @@ import csv
 import json
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import cv2
+
 from pipeline.paths import PROJECT_ROOT
 from pipeline.physical.board_tracker_failure_study import BUCKETS
+from pipeline.physical.oblique_square_context import (
+    _load_clip_frame_bgr,
+    load_annotated_oblique_rows,
+)
 
 _OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 
@@ -232,6 +239,8 @@ def _merge_annotations(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     csv_by_episode_id = {
         row.get("episode_id", ""): row for row in csv_rows if row.get("episode_id")
     }
+    raw_snapshot_paths: dict[str, str | None] = {}
+    clip_cache: dict[Path, dict[str, Any]] = {}
 
     entries: list[dict[str, Any]] = []
     for raw_entry in bundle["manifest"]:
@@ -243,9 +252,20 @@ def _merge_annotations(bundle: dict[str, Any]) -> list[dict[str, Any]]:
         csv_row = csv_by_episode_id.get(episode_id, {})
 
         if isinstance(entry.get("failing_frame"), dict):
-            entry["failing_frame"] = _normalize_frame(entry.get("failing_frame") or {})
+            entry["failing_frame"] = _normalize_frame(
+                entry.get("failing_frame") or {},
+                study_dir=bundle["study_dir"],
+                raw_snapshot_paths=raw_snapshot_paths,
+                clip_cache=clip_cache,
+            )
             entry["preceding_frames"] = [
-                _normalize_frame(frame) for frame in entry.get("preceding_frames") or []
+                _normalize_frame(
+                    frame,
+                    study_dir=bundle["study_dir"],
+                    raw_snapshot_paths=raw_snapshot_paths,
+                    clip_cache=clip_cache,
+                )
+                for frame in entry.get("preceding_frames") or []
             ]
             entry["first_frame_index"] = int(entry.get("first_frame_index", 0) or 0)
             entry["last_frame_index"] = int(entry.get("last_frame_index", 0) or 0)
@@ -253,7 +273,12 @@ def _merge_annotations(bundle: dict[str, Any]) -> list[dict[str, Any]]:
             entry["preceding_frame_count"] = int(entry.get("preceding_frame_count", 0) or 0)
             entry["suggested_bucket"] = str(entry.get("suggested_bucket") or "")
         else:
-            normalized = _normalize_frame(entry)
+            normalized = _normalize_frame(
+                entry,
+                study_dir=bundle["study_dir"],
+                raw_snapshot_paths=raw_snapshot_paths,
+                clip_cache=clip_cache,
+            )
             entry["failing_frame"] = {**normalized, "is_failing_frame": True}
             entry["preceding_frames"] = []
             entry["first_frame_index"] = normalized["frame_index"]
@@ -276,20 +301,85 @@ def _merge_annotations(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     return entries
 
 
-def _normalize_frame(frame: dict[str, Any]) -> dict[str, Any]:
+@lru_cache(maxsize=1)
+def _annotation_rows_by_id() -> dict[str, Any]:
+    rows_by_id: dict[str, Any] = {}
+    for split in ("val", "train"):
+        annotation_root = PROJECT_ROOT / "data" / "physical" / split
+        annotations_path = annotation_root / "board_annotations.jsonl"
+        if not annotations_path.exists():
+            continue
+        for row in load_annotated_oblique_rows(annotation_root):
+            rows_by_id[row.annotation_id] = row
+    return rows_by_id
+
+
+def _raw_snapshot_path(
+    *,
+    study_dir: Path,
+    annotation_id: str,
+    raw_snapshot_paths: dict[str, str | None],
+    clip_cache: dict[Path, dict[str, Any]],
+) -> str | None:
+    if not annotation_id:
+        return None
+    cached = raw_snapshot_paths.get(annotation_id)
+    if annotation_id in raw_snapshot_paths:
+        return cached
+
+    try:
+        row = _annotation_rows_by_id().get(annotation_id)
+        if row is None:
+            raw_snapshot_paths[annotation_id] = None
+            return None
+
+        snapshots_dir = study_dir / "viewer_cache" / "raw_snapshots"
+        snapshots_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_path = snapshots_dir / f"{annotation_id}.png"
+        if not snapshot_path.exists():
+            frame_bgr = _load_clip_frame_bgr(row, clip_cache=clip_cache)
+            encoded, buffer = cv2.imencode(".png", frame_bgr)
+            if not encoded:
+                raise ValueError(f"Failed to encode raw snapshot for {annotation_id}")
+            snapshot_path.write_bytes(buffer.tobytes())
+        raw_snapshot_paths[annotation_id] = _relative_to_project(snapshot_path)
+    except Exception:
+        raw_snapshot_paths[annotation_id] = None
+
+    return raw_snapshot_paths[annotation_id]
+
+
+def _normalize_frame(
+    frame: dict[str, Any],
+    *,
+    study_dir: Path,
+    raw_snapshot_paths: dict[str, str | None],
+    clip_cache: dict[Path, dict[str, Any]],
+) -> dict[str, Any]:
     legal = frame.get("legal_from_previous_decoded")
     if not isinstance(legal, dict):
         legal = None
     square_diagnostics = frame.get("square_diagnostics")
     if not isinstance(square_diagnostics, list):
         square_diagnostics = []
+    annotation_id = str(frame.get("annotation_id") or "")
+    processed_image_path = frame.get("board_path")
+    if not isinstance(processed_image_path, str) or not processed_image_path.strip():
+        processed_image_path = None
     return {
         **frame,
-        "annotation_id": str(frame.get("annotation_id") or ""),
+        "annotation_id": annotation_id,
         "clip_path": frame.get("clip_path"),
         "clip_filename": str(frame.get("clip_filename") or ""),
         "frame_index": int(frame.get("frame_index", 0) or 0),
         "board_path": frame.get("board_path"),
+        "processed_image_path": processed_image_path,
+        "raw_image_path": _raw_snapshot_path(
+            study_dir=study_dir,
+            annotation_id=annotation_id,
+            raw_snapshot_paths=raw_snapshot_paths,
+            clip_cache=clip_cache,
+        ),
         "source_video_id": frame.get("source_video_id"),
         "gt_fen": str(frame.get("gt_fen") or ""),
         "decoded_fen": str(frame.get("decoded_fen") or ""),

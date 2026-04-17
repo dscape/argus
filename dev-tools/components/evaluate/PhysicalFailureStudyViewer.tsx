@@ -53,6 +53,8 @@ const BUCKET_DESCRIPTIONS: Record<string, string> = {
   [OTHER_BUCKET]: "Does not fit the buckets above; explain the reason in notes.",
 };
 
+const VISUAL_PANEL_SIZE = 216;
+
 function formatPercent(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "-";
   return `${(value * 100).toFixed(1)}%`;
@@ -85,8 +87,18 @@ function decodedErrorSquares(frame: PhysicalFailureStudyFrame): string[] {
     .map((square) => square.square);
 }
 
-function cropImagePath(frame: PhysicalFailureStudyFrame): string {
-  return frame.board_path?.trim() || frame.image_path;
+function processedCropImagePath(frame: PhysicalFailureStudyFrame): string | null {
+  const path = frame.processed_image_path?.trim();
+  return path ? path : null;
+}
+
+function rawSnapshotImagePath(frame: PhysicalFailureStudyFrame): string | null {
+  const path = frame.raw_image_path?.trim();
+  return path ? path : null;
+}
+
+function thumbnailImagePath(frame: PhysicalFailureStudyFrame): string {
+  return rawSnapshotImagePath(frame) ?? processedCropImagePath(frame) ?? frame.image_path;
 }
 
 function bucketLabel(entry: PhysicalFailureStudyEntry): string {
@@ -224,6 +236,50 @@ function MetricCard({
   );
 }
 
+function ImagePanel({
+  title,
+  subtitle,
+  studyPath,
+  imagePath,
+  alt,
+  emptyLabel,
+}: {
+  title: string;
+  subtitle: string;
+  studyPath: string;
+  imagePath?: string | null;
+  alt: string;
+  emptyLabel: string;
+}) {
+  return (
+    <div className="space-y-2 rounded-lg border bg-muted/10 p-3">
+      <div>
+        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          {title}
+        </div>
+        <div className="text-xs text-muted-foreground">{subtitle}</div>
+      </div>
+      {imagePath ? (
+        <div className="flex justify-center rounded border bg-muted/20 p-1">
+          <img
+            src={physicalFailureStudyImageUrl(studyPath, imagePath)}
+            alt={alt}
+            className="object-contain"
+            style={{ width: VISUAL_PANEL_SIZE, height: VISUAL_PANEL_SIZE }}
+          />
+        </div>
+      ) : (
+        <div
+          className="mx-auto flex items-center justify-center rounded border bg-muted/30 px-4 text-center text-sm text-muted-foreground"
+          style={{ width: VISUAL_PANEL_SIZE, height: VISUAL_PANEL_SIZE }}
+        >
+          {emptyLabel}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BoardPanel({
   title,
   subtitle,
@@ -244,11 +300,14 @@ function BoardPanel({
         <div className="text-xs text-muted-foreground">{subtitle}</div>
       </div>
       {fen ? (
-        <div className="overflow-x-auto">
-          <ChessBoard fen={fen} size={216} squareStyles={squareStyles} />
+        <div className="flex justify-center overflow-x-auto">
+          <ChessBoard fen={fen} size={VISUAL_PANEL_SIZE} squareStyles={squareStyles} />
         </div>
       ) : (
-        <div className="flex aspect-square items-center justify-center rounded border bg-muted/30 text-sm text-muted-foreground">
+        <div
+          className="mx-auto flex items-center justify-center rounded border bg-muted/30 text-sm text-muted-foreground"
+          style={{ width: VISUAL_PANEL_SIZE, height: VISUAL_PANEL_SIZE }}
+        >
           Board unavailable
         </div>
       )}
@@ -801,28 +860,27 @@ export default function PhysicalFailureStudyViewer() {
                     </div>
                   </div>
 
-                  <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.35fr)_repeat(3,minmax(0,220px))]">
-                    <div className="space-y-3 rounded-lg border bg-muted/10 p-3 2xl:row-span-2">
-                      <div>
-                        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                          Crop
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          Keep this for geometry, hands, and move timing.
-                        </div>
-                      </div>
-                      <img
-                        src={physicalFailureStudyImageUrl(
-                          study.path,
-                          cropImagePath(currentFrame),
-                        )}
-                        alt={`${currentFrame.clip_filename} ${formatFrameIndex(
-                          currentFrame.frame_index,
-                        )}`}
-                        className="max-h-[620px] w-full rounded-lg border bg-muted/20 object-contain"
-                      />
-                    </div>
-
+                  <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-5">
+                    <ImagePanel
+                      title="Raw snapshot"
+                      subtitle="Human-readable frame before rectification or board rendering."
+                      studyPath={study.path}
+                      imagePath={rawSnapshotImagePath(currentFrame)}
+                      alt={`${currentFrame.clip_filename} ${formatFrameIndex(
+                        currentFrame.frame_index,
+                      )} raw snapshot`}
+                      emptyLabel="Snapshot unavailable"
+                    />
+                    <ImagePanel
+                      title="Model crop"
+                      subtitle="Preprocessed board crop when this study/input exposes one."
+                      studyPath={study.path}
+                      imagePath={processedCropImagePath(currentFrame)}
+                      alt={`${currentFrame.clip_filename} ${formatFrameIndex(
+                        currentFrame.frame_index,
+                      )} model crop`}
+                      emptyLabel="No explicit crop for this study"
+                    />
                     <BoardPanel
                       title="Ground truth"
                       subtitle="Yellow border = GT changed vs previous frame"
@@ -856,7 +914,7 @@ export default function PhysicalFailureStudyViewer() {
                       )}
                     />
 
-                    <div className="rounded-lg border bg-muted/10 p-3 2xl:col-span-3">
+                    <div className="rounded-lg border bg-muted/10 p-3 xl:col-span-2 2xl:col-span-5">
                       <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         Legend
                       </div>
@@ -914,7 +972,7 @@ export default function PhysicalFailureStudyViewer() {
                           <img
                             src={physicalFailureStudyImageUrl(
                               study.path,
-                              cropImagePath(frame),
+                              thumbnailImagePath(frame),
                             )}
                             alt={formatFrameIndex(frame.frame_index)}
                             className="h-20 w-28 object-cover"

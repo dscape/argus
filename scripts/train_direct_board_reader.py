@@ -20,7 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.overlay.replay import build_replay_board
 from pipeline.physical.direct_board_reader import DirectBoardReaderConfig, DirectPhysicalBoardReader
-from pipeline.physical.direct_board_reader_data import DirectBoardManifestDataset
+from pipeline.physical.direct_board_reader_data import (
+    DirectBoardManifestDataset,
+    DirectBoardRecord,
+    DirectBoardSample,
+)
 from pipeline.physical.square_probe import ProbeMetrics, evaluate_probe
 from pipeline.shared import SQUARE_CLASS_NAMES, LookaheadLegalMoveStateTracker, board_to_class_ids
 
@@ -60,6 +64,32 @@ class FramePrediction:
 class IdentityProbe(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x
+
+
+def toggle_side_to_move(side_to_move: str | None) -> str | None:
+    if side_to_move == "w":
+        return "b"
+    if side_to_move == "b":
+        return "w"
+    return None
+
+
+def model_uses_previous_board_context(model: DirectPhysicalBoardReader) -> bool:
+    return model.config.previous_board_conditioning != "none"
+
+
+def model_logits_for_batch(
+    model: DirectPhysicalBoardReader,
+    batch: DirectBoardSample,
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    return model(
+        batch["image"].to(device),
+        previous_labels=batch["previous_labels"].to(device),
+        previous_board_available=batch["previous_board_available"].to(device),
+        previous_side_to_move=batch["previous_side_to_move"].to(device),
+    )
 
 
 def main() -> None:
@@ -111,6 +141,8 @@ def main() -> None:
             transformer_layers=args.transformer_layers,
             transformer_heads=args.transformer_heads,
             transformer_ff_dim=args.transformer_ff_dim,
+            previous_board_conditioning=args.previous_board_conditioning,
+            use_previous_side_to_move=args.use_previous_side_to_move,
         ),
     ).to(device)
 
@@ -190,6 +222,8 @@ def main() -> None:
         **best_model.checkpoint_config(),
         "selection_score": best_selection_score,
         "selection_metric": args.selection_metric,
+        "previous_board_conditioning": args.previous_board_conditioning,
+        "use_previous_side_to_move": args.use_previous_side_to_move,
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }
     checkpoint_path = output_dir / "direct_board_reader.pt"
@@ -214,6 +248,8 @@ def main() -> None:
         "chessred_val_count": len(chessred_val_dataset),
         "selection_score": best_selection_score,
         "selection_metric": args.selection_metric,
+        "previous_board_conditioning": args.previous_board_conditioning,
+        "use_previous_side_to_move": args.use_previous_side_to_move,
         "train_metrics": train_metrics.to_dict(),
         "physical_val_metrics": physical_metrics.to_dict(),
         "chessred_val_metrics": chessred_metrics.to_dict(),
@@ -251,6 +287,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--transformer-layers", type=int, default=2)
     parser.add_argument("--transformer-heads", type=int, default=8)
     parser.add_argument("--transformer-ff-dim", type=int, default=1024)
+    parser.add_argument(
+        "--previous-board-conditioning",
+        choices=("none", "add", "gated"),
+        default="none",
+    )
+    parser.add_argument(
+        "--use-previous-side-to-move",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument(
         "--selection-metric",
         choices=("accuracy", "non_empty_accuracy", "macro_f1", "non_empty_plus_macro"),
@@ -314,15 +360,15 @@ def train_direct_board_reader(
     best_score = float("-inf")
     for _epoch in range(epochs):
         model.train()
-        for images, labels, sample_weights in train_loader:
-            logits = model(images.to(device))
-            labels = labels.to(device)
+        for batch in train_loader:
+            logits = model_logits_for_batch(model, batch, device=device)
+            labels = batch["labels"].to(device)
             per_square_loss = criterion(
                 logits.reshape(-1, logits.shape[-1]),
                 labels.reshape(-1),
             )
             per_board_loss = per_square_loss.reshape(labels.shape[0], labels.shape[1]).mean(dim=1)
-            sample_weights = sample_weights.to(device)
+            sample_weights = batch["sample_weight"].to(device)
             loss = (per_board_loss * sample_weights).sum() / sample_weights.sum().clamp_min(1e-8)
             optimizer.zero_grad()
             loss.backward()
@@ -364,16 +410,80 @@ def predict_dataset(
     device: torch.device,
     batch_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    if model_uses_previous_board_context(model):
+        return predict_dataset_autoregressive(
+            model,
+            dataset=dataset,
+            device=device,
+        )
+
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
     logits_batches: list[torch.Tensor] = []
     label_batches: list[torch.Tensor] = []
     model.eval()
     with torch.no_grad():
-        for images, labels, _sample_weights in loader:
-            logits = model(images.to(device))
+        for batch in loader:
+            logits = model_logits_for_batch(model, batch, device=device)
             logits_batches.append(logits.cpu())
-            label_batches.append(labels.cpu())
+            label_batches.append(batch["labels"].cpu())
     return torch.cat(logits_batches, dim=0), torch.cat(label_batches, dim=0)
+
+
+def predict_dataset_autoregressive(
+    model: DirectPhysicalBoardReader,
+    *,
+    dataset: DirectBoardManifestDataset,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    rows_by_sequence: dict[str, list[tuple[int, DirectBoardRecord]]] = defaultdict(list)
+    for row_index, row in enumerate(dataset.rows):
+        rows_by_sequence[row.clip_path or row.example_id].append((row_index, row))
+
+    logits_by_index: list[torch.Tensor | None] = [None] * len(dataset.rows)
+    labels_by_index: list[torch.Tensor | None] = [None] * len(dataset.rows)
+    model.eval()
+    with torch.no_grad():
+        for sequence_rows in rows_by_sequence.values():
+            sequence_rows.sort(
+                key=lambda item: (
+                    -1 if item[1].frame_index is None else int(item[1].frame_index),
+                    item[1].annotation_id or item[1].example_id,
+                )
+            )
+            first_row = sequence_rows[0][1]
+            previous_labels = first_row.previous_labels
+            previous_board_available = first_row.previous_board_available
+            previous_side_to_move = first_row.previous_side_to_move
+            for row_index, row in sequence_rows:
+                sample = dataset.sample_from_row(
+                    row,
+                    previous_labels=previous_labels,
+                    previous_board_available=previous_board_available,
+                    previous_side_to_move=previous_side_to_move,
+                )
+                single_batch: DirectBoardSample = {
+                    "image": sample["image"].unsqueeze(0),
+                    "labels": sample["labels"].unsqueeze(0),
+                    "sample_weight": sample["sample_weight"].unsqueeze(0),
+                    "previous_labels": sample["previous_labels"].unsqueeze(0),
+                    "previous_board_available": sample["previous_board_available"].unsqueeze(0),
+                    "previous_side_to_move": sample["previous_side_to_move"].unsqueeze(0),
+                }
+                logits = model_logits_for_batch(model, single_batch, device=device).squeeze(0).cpu()
+                labels = sample["labels"].cpu()
+                logits_by_index[row_index] = logits
+                labels_by_index[row_index] = labels
+                predicted_labels = tuple(int(value) for value in logits.argmax(dim=-1).tolist())
+                if previous_board_available and previous_labels is not None:
+                    if predicted_labels != previous_labels:
+                        previous_side_to_move = toggle_side_to_move(previous_side_to_move)
+                previous_labels = predicted_labels
+                previous_board_available = True
+
+    return (
+        torch.stack([tensor for tensor in logits_by_index if tensor is not None], dim=0),
+        torch.stack([tensor for tensor in labels_by_index if tensor is not None], dim=0),
+    )
 
 
 def evaluate_logits(
@@ -655,6 +765,8 @@ def render_summary_markdown(summary: dict[str, object]) -> str:
         f"- encoder: `{summary['encoder_type']}`",
         f"- model: `{summary['model_name']}`",
         f"- input size: `{summary['input_size']}`",
+        f"- previous-board conditioning: `{summary['previous_board_conditioning']}`",
+        f"- use previous side-to-move: `{summary['use_previous_side_to_move']}`",
         "- train counts by domain: "
         f"`{json.dumps(summary['train_counts_by_domain'], sort_keys=True)}`",
         "",

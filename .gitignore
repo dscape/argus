@@ -61,7 +61,9 @@ next-env.d.ts
 # Local cache (Blender tarball, etc.)
 .cache/
 .pi/
-authresearch/
+autoresearch/
+autoresearch_wholeboard/
+.agents/memory/compactions/
 
 # Misc
 *.log

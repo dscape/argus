@@ -16,11 +16,15 @@ BOARDS_DIR = DATASET_ROOT / "boards"
 SQUARES_DIR = DATASET_ROOT / "squares"
 BOARD_ANNOTATIONS_PATH = DATASET_ROOT / "board_annotations.jsonl"
 SQUARE_MANIFEST_PATH = DATASET_ROOT / "square_manifest.jsonl"
+TRANSIENT_ANNOTATIONS_PATH = DATASET_ROOT / "transient_annotations.jsonl"
 DEFAULT_BOARD_SIZE = annotation_dataset.DEFAULT_BOARD_SIZE
 
 
 SavedBoardAnnotation = annotation_dataset.SavedBoardAnnotation
 SavedSquareCrop = annotation_dataset.SavedSquareCrop
+SavedTransientAnnotation = annotation_dataset.SavedTransientAnnotation
+SavedTransientMoveAnnotation = annotation_dataset.SavedTransientMoveAnnotation
+SavedHandOcclusionSpan = annotation_dataset.SavedHandOcclusionSpan
 rectify_board_image = annotation_dataset.rectify_board_image
 extract_square_crops = annotation_dataset.extract_square_crops
 
@@ -91,6 +95,40 @@ def save_board_annotation(
         native_corners=native_corners,
         native_image_bbox=native_image_bbox,
         source_frame_index=source_frame_index,
+    )
+
+
+def load_transient_annotation(clip_path: str) -> dict[str, Any] | None:
+    splits.ensure_annotation_layout_migrated()
+    return annotation_dataset.load_transient_annotation(
+        TRANSIENT_ANNOTATIONS_PATH,
+        clip_path=clip_path,
+    )
+
+
+def save_transient_annotation(
+    *,
+    clip_path: str,
+    source_video_id: str | None,
+    move_annotations: list[dict[str, Any]],
+    hand_occlusion_spans: list[dict[str, Any]],
+) -> dict[str, Any]:
+    splits.ensure_annotation_layout_migrated()
+    splits.assign_source_video_split(source_video_id, DATASET_SPLIT)
+    return annotation_dataset.save_transient_annotation(
+        TRANSIENT_ANNOTATIONS_PATH,
+        clip_path=clip_path,
+        source_video_id=source_video_id,
+        move_annotations=move_annotations,
+        hand_occlusion_spans=hand_occlusion_spans,
+    )
+
+
+def delete_transient_annotation(clip_path: str) -> bool:
+    splits.ensure_annotation_layout_migrated()
+    return annotation_dataset.delete_transient_annotation(
+        TRANSIENT_ANNOTATIONS_PATH,
+        clip_path=clip_path,
     )
 
 

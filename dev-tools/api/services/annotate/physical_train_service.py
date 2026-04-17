@@ -50,11 +50,25 @@ def get_move_corrections(session_id: str, clip_path: str) -> dict[str, Any]:
     )
 
 
+def get_transient_annotation(clip_path: str) -> dict[str, Any] | None:
+    return physical_eval_service._get_transient_annotation(
+        manual_train_dataset,
+        clip_path,
+    )
+
+
 def delete_annotation(clip_path: str, frame_index: int) -> dict[str, Any] | None:
     return physical_eval_service._delete_annotation(
         manual_train_dataset,
         clip_path,
         frame_index,
+    )
+
+
+def delete_transient_annotation(clip_path: str) -> bool:
+    return physical_eval_service._delete_transient_annotation(
+        manual_train_dataset,
+        clip_path,
     )
 
 
@@ -82,4 +96,17 @@ def save_annotation(
         labels,
         output_size=output_size,
         padding_px=padding_px,
+    )
+
+
+def save_transient_annotation(
+    clip_path: str,
+    move_annotations: list[dict[str, Any]],
+    hand_occlusion_spans: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return physical_eval_service._save_transient_annotation(
+        manual_train_dataset,
+        clip_path,
+        move_annotations,
+        hand_occlusion_spans,
     )

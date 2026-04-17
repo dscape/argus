@@ -50,6 +50,38 @@ class SavedSquareCrop:
     split: str
 
 
+@dataclass(frozen=True)
+class SavedTransientMoveAnnotation:
+    move_index: int
+    uci: str
+    san: str | None
+    move_frame_index: int
+    side_to_move: str | None
+    fen_before: str | None
+    fen_after: str | None
+    start_frame_index: int | None
+    end_frame_index: int | None
+    is_capture: bool | None
+
+
+@dataclass(frozen=True)
+class SavedHandOcclusionSpan:
+    start_frame_index: int
+    end_frame_index: int
+
+
+@dataclass(frozen=True)
+class SavedTransientAnnotation:
+    annotation_id: str
+    clip_path: str
+    source_video_id: str | None
+    total_moves: int
+    move_annotations: list[SavedTransientMoveAnnotation]
+    hand_occlusion_spans: list[SavedHandOcclusionSpan]
+    created_at: str
+    updated_at: str
+
+
 def rectify_board_image(
     image_rgb: np.ndarray,
     corners: list[list[float]] | tuple[tuple[float, float], ...],
@@ -273,6 +305,71 @@ def save_board_annotation(
     return annotation_record
 
 
+def load_transient_annotation(
+    transient_annotations_path: Path,
+    *,
+    clip_path: str,
+) -> dict[str, Any] | None:
+    """Return the saved transient annotation for one clip, if present."""
+    for record in _load_jsonl(transient_annotations_path):
+        if record.get("clip_path") == clip_path:
+            return record
+    return None
+
+
+def delete_transient_annotation(
+    transient_annotations_path: Path,
+    *,
+    clip_path: str,
+) -> bool:
+    """Delete one saved transient annotation."""
+    records = _load_jsonl(transient_annotations_path)
+    filtered = [record for record in records if record.get("clip_path") != clip_path]
+    if len(filtered) == len(records):
+        return False
+    _upsert_jsonl(transient_annotations_path, filtered)
+    return True
+
+
+def save_transient_annotation(
+    transient_annotations_path: Path,
+    *,
+    clip_path: str,
+    source_video_id: str | None,
+    move_annotations: list[dict[str, Any]],
+    hand_occlusion_spans: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Persist clip-level transient move timing and occlusion labels."""
+    annotation_id = f"{Path(clip_path).stem}_transient"
+    existing_record = load_transient_annotation(transient_annotations_path, clip_path=clip_path)
+    move_records = _normalize_transient_move_annotations(move_annotations)
+    span_records = _normalize_hand_occlusion_spans(hand_occlusion_spans)
+    now = datetime.now(timezone.utc).isoformat()
+
+    annotation_record = asdict(
+        SavedTransientAnnotation(
+            annotation_id=annotation_id,
+            clip_path=clip_path,
+            source_video_id=source_video_id,
+            total_moves=len(move_records),
+            move_annotations=move_records,
+            hand_occlusion_spans=span_records,
+            created_at=(existing_record or {}).get("created_at", now),
+            updated_at=now,
+        )
+    )
+
+    rows = [
+        record
+        for record in _load_jsonl(transient_annotations_path)
+        if record.get("clip_path") != clip_path
+    ]
+    rows.append(annotation_record)
+    rows.sort(key=lambda record: str(record.get("clip_path", "")))
+    _upsert_jsonl(transient_annotations_path, rows)
+    return annotation_record
+
+
 def get_saved_frame_counts_by_clip(board_annotations_path: Path) -> dict[str, int]:
     """Return the number of uniquely annotated frames for each clip."""
     frame_indices_by_clip: dict[str, set[int]] = {}
@@ -331,6 +428,139 @@ def get_annotation_summary(
         "class_counts": {name: int(class_counts.get(name, 0)) for name in SQUARE_CLASS_NAMES},
         "recent_annotations": recent_annotations,
     }
+
+
+def _normalize_transient_move_annotations(
+    move_annotations: list[dict[str, Any]],
+) -> list[SavedTransientMoveAnnotation]:
+    if not isinstance(move_annotations, list):
+        raise ValueError("move_annotations must be a list")
+
+    normalized: list[SavedTransientMoveAnnotation] = []
+    seen_move_indices: set[int] = set()
+    for raw_record in sorted(
+        move_annotations,
+        key=lambda record: _required_nonnegative_int(
+            record.get("move_index") if isinstance(record, dict) else None,
+            name="move_index",
+        ),
+    ):
+        if not isinstance(raw_record, dict):
+            raise ValueError("move_annotations entries must be objects")
+
+        move_index = _required_nonnegative_int(raw_record.get("move_index"), name="move_index")
+        if move_index in seen_move_indices:
+            raise ValueError(f"duplicate move_index in move_annotations: {move_index}")
+        seen_move_indices.add(move_index)
+
+        move_frame_index = _required_nonnegative_int(
+            raw_record.get("move_frame_index"),
+            name="move_frame_index",
+        )
+        start_frame_index = _optional_nonnegative_int(
+            raw_record.get("start_frame_index"),
+            name="start_frame_index",
+        )
+        end_frame_index = _optional_nonnegative_int(
+            raw_record.get("end_frame_index"),
+            name="end_frame_index",
+        )
+        if (
+            start_frame_index is not None
+            and end_frame_index is not None
+            and end_frame_index < start_frame_index
+        ):
+            raise ValueError(
+                "end_frame_index must be greater than or equal to start_frame_index"
+            )
+
+        uci = raw_record.get("uci")
+        if not isinstance(uci, str) or not uci.strip():
+            raise ValueError("move_annotations entries must include a non-empty uci")
+
+        san = _optional_string(raw_record.get("san"), name="san")
+        fen_before = _optional_string(raw_record.get("fen_before"), name="fen_before")
+        fen_after = _optional_string(raw_record.get("fen_after"), name="fen_after")
+        side_to_move = _optional_string(raw_record.get("side_to_move"), name="side_to_move")
+        if side_to_move not in {None, "white", "black"}:
+            raise ValueError("side_to_move must be 'white', 'black', or null")
+
+        is_capture_raw = raw_record.get("is_capture")
+        if is_capture_raw is not None and not isinstance(is_capture_raw, bool):
+            raise ValueError("is_capture must be true, false, or null")
+
+        normalized.append(
+            SavedTransientMoveAnnotation(
+                move_index=move_index,
+                uci=uci,
+                san=san,
+                move_frame_index=move_frame_index,
+                side_to_move=side_to_move,
+                fen_before=fen_before,
+                fen_after=fen_after,
+                start_frame_index=start_frame_index,
+                end_frame_index=end_frame_index,
+                is_capture=is_capture_raw,
+            )
+        )
+
+    return normalized
+
+
+def _normalize_hand_occlusion_spans(
+    hand_occlusion_spans: list[dict[str, Any]],
+) -> list[SavedHandOcclusionSpan]:
+    if not isinstance(hand_occlusion_spans, list):
+        raise ValueError("hand_occlusion_spans must be a list")
+
+    normalized: list[SavedHandOcclusionSpan] = []
+    for raw_record in hand_occlusion_spans:
+        if not isinstance(raw_record, dict):
+            raise ValueError("hand_occlusion_spans entries must be objects")
+
+        start_frame_index = _required_nonnegative_int(
+            raw_record.get("start_frame_index"),
+            name="start_frame_index",
+        )
+        end_frame_index = _required_nonnegative_int(
+            raw_record.get("end_frame_index"),
+            name="end_frame_index",
+        )
+        if end_frame_index < start_frame_index:
+            raise ValueError(
+                "hand occlusion span end_frame_index must be greater than or equal to "
+                "start_frame_index"
+            )
+
+        normalized.append(
+            SavedHandOcclusionSpan(
+                start_frame_index=start_frame_index,
+                end_frame_index=end_frame_index,
+            )
+        )
+
+    normalized.sort(key=lambda span: (span.start_frame_index, span.end_frame_index))
+    return normalized
+
+
+def _required_nonnegative_int(value: Any, *, name: str) -> int:
+    if not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _optional_nonnegative_int(value: Any, *, name: str) -> int | None:
+    if value is None:
+        return None
+    return _required_nonnegative_int(value, name=name)
+
+
+def _optional_string(value: Any, *, name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string or null")
+    return value
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:

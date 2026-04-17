@@ -181,11 +181,11 @@ def extract_oblique_square_context_crops(
     corners: tuple[tuple[float, float], ...] | list[list[float]],
     *,
     flip_left_half: bool = True,
-    far_rank_top_margin: float = 1.65,
-    near_rank_top_margin: float = 0.65,
-    bottom_margin: float = 0.10,
-    center_file_side_margin: float = 0.20,
-    edge_file_side_margin: float = 0.45,
+    far_rank_top_margin: float = 3.0,
+    near_rank_top_margin: float = 1.0,
+    bottom_margin: float = 0.0,
+    center_file_side_margin: float = 0.25,
+    edge_file_side_margin: float = 1.0,
 ) -> list[np.ndarray]:
     """Extract 64 chesscog-style context crops from the original board frame.
 
@@ -194,6 +194,9 @@ def extract_oblique_square_context_crops(
     - extend the crop upward more for far ranks than for near ranks
     - extend the crop width more for edge files than for center files
     - horizontally flip left-half crops so lateral context is more consistent
+
+    Default margins match chesscog's single-crop scheme (height 1..3 squares,
+    side 0.25..1 squares).
     """
 
     transform = board_to_image_transform(corners)

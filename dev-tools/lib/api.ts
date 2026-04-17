@@ -39,7 +39,7 @@ export async function testOverlayImage(
     overlay_bbox?: string;
     flipped?: boolean;
     theme?: string;
-  }
+  },
 ): Promise<OverlayTestResponse> {
   const form = new FormData();
   form.append("image", image);
@@ -61,7 +61,7 @@ export async function testOverlayUrl(
     overlay_bbox?: string;
     flipped?: boolean;
     theme?: string;
-  }
+  },
 ): Promise<OverlayTestResponse> {
   const body: Record<string, unknown> = { url };
   if (options?.overlay_bbox) body.overlay_bbox = options.overlay_bbox;
@@ -88,7 +88,7 @@ export async function listCalibrations(): Promise<CalibrationEntry[]> {
 
 export async function saveCalibration(
   channel: string,
-  calibration: Omit<CalibrationEntry, "channel_handle">
+  calibration: Omit<CalibrationEntry, "channel_handle">,
 ): Promise<void> {
   const res = await fetch(`/api/calibration/${encodeURIComponent(channel)}`, {
     method: "PUT",
@@ -107,9 +107,7 @@ export async function deleteCalibration(channel: string): Promise<void> {
 
 // ── Clips ───────────────────────────────────────────────────
 
-export async function loadClip(
-  file: File
-): Promise<{ session_id: string }> {
+export async function loadClip(file: File): Promise<{ session_id: string }> {
   const form = new FormData();
   form.append("clip_file", file);
   const res = await fetch("/api/clips/load", { method: "POST", body: form });
@@ -118,7 +116,7 @@ export async function loadClip(
 }
 
 export async function getClipInfo(
-  sessionId: string
+  sessionId: string,
 ): Promise<ClipInspectResponse> {
   const res = await fetch(`/api/clips/${sessionId}/info`);
   if (!res.ok) throw new Error(await res.text());
@@ -126,7 +124,7 @@ export async function getClipInfo(
 }
 
 export async function loadClipFromPath(
-  filepath: string
+  filepath: string,
 ): Promise<{ session_id: string }> {
   const res = await fetch("/api/clips/load-from-path", {
     method: "POST",
@@ -141,7 +139,11 @@ export function clipFrameUrl(sessionId: string, index: number): string {
   return `/api/clips/${sessionId}/frame/${index}`;
 }
 
-export function clipCameraFrameUrl(sessionId: string, index: number, padding: number = 0): string {
+export function clipCameraFrameUrl(
+  sessionId: string,
+  index: number,
+  padding: number = 0,
+): string {
   return `/api/clips/${sessionId}/camera-frame/${index}?padding=${padding}`;
 }
 
@@ -154,7 +156,7 @@ export function clipSourceVideoUrl(sessionId: string): string {
 }
 
 export async function getClipAnnotation(
-  filename: string
+  filename: string,
 ): Promise<ClipAnnotationResponse> {
   const params = new URLSearchParams({ filename });
   const res = await fetch(`/api/clips/annotation?${params}`);
@@ -164,7 +166,7 @@ export async function getClipAnnotation(
 
 export async function saveClipAnnotation(
   filename: string,
-  content: string
+  content: string,
 ): Promise<ClipAnnotationResponse> {
   const res = await fetch("/api/clips/annotation", {
     method: "PUT",
@@ -183,7 +185,7 @@ export async function deleteClipSession(sessionId: string): Promise<void> {
 
 export async function openVideo(
   videoPath: string,
-  channelHandle?: string
+  channelHandle?: string,
 ): Promise<VideoSession> {
   const res = await fetch("/api/video/open", {
     method: "POST",
@@ -205,7 +207,7 @@ export async function readOverlayFrame(
   sessionId: string,
   index: number,
   clipId?: number,
-  readerBackend: string = "overlay"
+  readerBackend: string = "overlay",
 ): Promise<FrameOverlayResponse> {
   let url = `/api/video/${sessionId}/overlay-read?index=${index}&reader_backend=${encodeURIComponent(readerBackend)}`;
   if (clipId !== undefined) url += `&clip_id=${clipId}`;
@@ -218,7 +220,7 @@ export async function detectVideoMoves(
   sessionId: string,
   sampleFps: number = 2.0,
   clipId?: number,
-  readerBackend: string = "overlay"
+  readerBackend: string = "overlay",
 ): Promise<VideoMoveDetectionResponse> {
   const body: Record<string, unknown> = {
     sample_fps: sampleFps,
@@ -238,7 +240,7 @@ export async function startDetectVideoMovesJob(
   sessionId: string,
   sampleFps: number = 2.0,
   clipId?: number,
-  readerBackend: string = "overlay"
+  readerBackend: string = "overlay",
 ): Promise<VideoMoveDetectionJobStatus> {
   const body: Record<string, unknown> = {
     sample_fps: sampleFps,
@@ -256,9 +258,11 @@ export async function startDetectVideoMovesJob(
 
 export async function getDetectVideoMovesJobStatus(
   sessionId: string,
-  jobId: string
+  jobId: string,
 ): Promise<VideoMoveDetectionJobStatus> {
-  const res = await fetch(`/api/video/${sessionId}/detect-moves/jobs/${encodeURIComponent(jobId)}`);
+  const res = await fetch(
+    `/api/video/${sessionId}/detect-moves/jobs/${encodeURIComponent(jobId)}`,
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -269,7 +273,9 @@ export async function deleteVideoSession(sessionId: string): Promise<void> {
 
 // ── Crawl ───────────────────────────────────────────────────
 
-export async function listCrawlChannels(opts?: { screenedOnly?: boolean }): Promise<CrawlChannel[]> {
+export async function listCrawlChannels(opts?: {
+  screenedOnly?: boolean;
+}): Promise<CrawlChannel[]> {
   const params = new URLSearchParams();
   if (opts?.screenedOnly) params.set("screened_only", "true");
   const qs = params.toString();
@@ -290,7 +296,7 @@ export async function addCrawlChannel(handle: string): Promise<CrawlChannel> {
 
 export async function toggleCrawlChannel(
   channelId: string,
-  enabled: boolean
+  enabled: boolean,
 ): Promise<CrawlChannel> {
   const res = await fetch(
     `/api/crawl/channels/${encodeURIComponent(channelId)}`,
@@ -298,28 +304,28 @@ export async function toggleCrawlChannel(
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }),
-    }
+    },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getCrawlChannelDetail(
-  channelId: string
+  channelId: string,
 ): Promise<CrawlChannelDetail> {
   const res = await fetch(
-    `/api/crawl/channels/${encodeURIComponent(channelId)}`
+    `/api/crawl/channels/${encodeURIComponent(channelId)}`,
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function crawlChannel(
-  channelId: string
+  channelId: string,
 ): Promise<{ channel_id: string; new_videos: number }> {
   const res = await fetch(
     `/api/crawl/channels/${encodeURIComponent(channelId)}/crawl`,
-    { method: "POST" }
+    { method: "POST" },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -327,11 +333,15 @@ export async function crawlChannel(
 
 export async function fetchFramesForChannel(
   channelId: string,
-  hires: boolean = true
-): Promise<{ channel_id: string; videos_processed: number; frames_fetched: number }> {
+  hires: boolean = true,
+): Promise<{
+  channel_id: string;
+  videos_processed: number;
+  frames_fetched: number;
+}> {
   const res = await fetch(
     `/api/crawl/channels/${encodeURIComponent(channelId)}/fetch-frames?hires=${hires}`,
-    { method: "POST" }
+    { method: "POST" },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -347,7 +357,7 @@ export async function crawlAllChannels(): Promise<{
 }
 
 export async function getVideoCounts(
-  channelId?: string
+  channelId?: string,
 ): Promise<Record<string, number>> {
   const qs = new URLSearchParams();
   if (channelId) qs.set("channel_id", channelId);
@@ -386,7 +396,8 @@ export async function listCrawlVideos(params: {
   if (params.order_by) qs.set("order_by", params.order_by);
   if (params.limit !== undefined) qs.set("limit", String(params.limit));
   if (params.offset !== undefined) qs.set("offset", String(params.offset));
-  if (params.video_ids && params.video_ids.length > 0) qs.set("video_ids", params.video_ids.join(","));
+  if (params.video_ids && params.video_ids.length > 0)
+    qs.set("video_ids", params.video_ids.join(","));
   if (params.downloaded_only) qs.set("downloaded_only", "true");
   const res = await fetch(`/api/crawl/videos?${qs}`);
   if (!res.ok) throw new Error(await res.text());
@@ -396,7 +407,7 @@ export async function listCrawlVideos(params: {
 export async function updateVideoStatus(
   videoId: string,
   status: string | null,
-  layoutType?: string
+  layoutType?: string,
 ): Promise<void> {
   const body: Record<string, unknown> = { status };
   if (layoutType) body.layout_type = layoutType;
@@ -406,14 +417,14 @@ export async function updateVideoStatus(
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    }
+    },
   );
   if (!res.ok) throw new Error(await res.text());
 }
 
 export async function batchUpdateVideoStatus(
   videoIds: string[],
-  status: string
+  status: string,
 ): Promise<{ updated: number }> {
   const res = await fetch("/api/crawl/videos/batch-status", {
     method: "POST",
@@ -425,7 +436,7 @@ export async function batchUpdateVideoStatus(
 }
 
 export async function undoAutoReject(
-  videoIds: string[]
+  videoIds: string[],
 ): Promise<{ restored: number }> {
   const res = await fetch("/api/crawl/videos/undo-auto-reject", {
     method: "POST",
@@ -437,10 +448,10 @@ export async function undoAutoReject(
 }
 
 export async function getVideoAnnotations(
-  videoId: string
+  videoId: string,
 ): Promise<{ video_id: string; annotations: VideoAnnotations | null }> {
   const res = await fetch(
-    `/api/crawl/videos/${encodeURIComponent(videoId)}/annotations`
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/annotations`,
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -448,7 +459,7 @@ export async function getVideoAnnotations(
 
 export async function saveVideoAnnotations(
   videoId: string,
-  annotations: VideoAnnotations
+  annotations: VideoAnnotations,
 ): Promise<{ video_id: string; annotations: VideoAnnotations }> {
   const res = await fetch(
     `/api/crawl/videos/${encodeURIComponent(videoId)}/annotations`,
@@ -456,7 +467,7 @@ export async function saveVideoAnnotations(
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(annotations),
-    }
+    },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -471,18 +482,16 @@ export async function getQuotaStatus(): Promise<QuotaStatus> {
 // ── Single video ────────────────────────────────────────────
 
 export async function getVideo(videoId: string): Promise<CrawlVideo> {
-  const res = await fetch(
-    `/api/crawl/videos/${encodeURIComponent(videoId)}`
-  );
+  const res = await fetch(`/api/crawl/videos/${encodeURIComponent(videoId)}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getDownloadStatus(
-  videoId: string
+  videoId: string,
 ): Promise<DownloadStatus> {
   const res = await fetch(
-    `/api/crawl/videos/${encodeURIComponent(videoId)}/download-status`
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/download-status`,
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -492,7 +501,7 @@ export async function getDownloadStatus(
 
 export async function listVideoClips(videoId: string): Promise<VideoClip[]> {
   const res = await fetch(
-    `/api/crawl/videos/${encodeURIComponent(videoId)}/clips`
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/clips`,
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -500,7 +509,7 @@ export async function listVideoClips(videoId: string): Promise<VideoClip[]> {
 
 export async function createVideoClip(
   videoId: string,
-  clip: Omit<VideoClip, "id" | "video_id" | "clip_index">
+  clip: Omit<VideoClip, "id" | "video_id" | "clip_index">,
 ): Promise<VideoClip> {
   const res = await fetch(
     `/api/crawl/videos/${encodeURIComponent(videoId)}/clips`,
@@ -508,7 +517,7 @@ export async function createVideoClip(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(clip),
-    }
+    },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -517,7 +526,7 @@ export async function createVideoClip(
 export async function updateVideoClip(
   videoId: string,
   clipId: number,
-  updates: Partial<VideoClip>
+  updates: Partial<VideoClip>,
 ): Promise<VideoClip> {
   const res = await fetch(
     `/api/crawl/videos/${encodeURIComponent(videoId)}/clips/${clipId}`,
@@ -525,7 +534,7 @@ export async function updateVideoClip(
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(updates),
-    }
+    },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -533,11 +542,11 @@ export async function updateVideoClip(
 
 export async function deleteVideoClip(
   videoId: string,
-  clipId: number
+  clipId: number,
 ): Promise<void> {
   const res = await fetch(
     `/api/crawl/videos/${encodeURIComponent(videoId)}/clips/${clipId}`,
-    { method: "DELETE" }
+    { method: "DELETE" },
   );
   if (!res.ok) throw new Error(await res.text());
 }
@@ -546,7 +555,7 @@ export async function deleteVideoClip(
 
 export async function autoSegmentVideo(
   videoId: string,
-  opts?: { sampleIntervalSec?: number; replaceExisting?: boolean }
+  opts?: { sampleIntervalSec?: number; replaceExisting?: boolean },
 ): Promise<AutoSegmentResponse> {
   const res = await fetch(
     `/api/crawl/videos/${encodeURIComponent(videoId)}/auto-segment`,
@@ -557,7 +566,7 @@ export async function autoSegmentVideo(
         sample_interval_sec: opts?.sampleIntervalSec ?? 30.0,
         replace_existing: opts?.replaceExisting ?? false,
       }),
-    }
+    },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -565,22 +574,20 @@ export async function autoSegmentVideo(
 
 export async function autoCalibrateClip(
   videoId: string,
-  clipId: number
+  clipId: number,
 ): Promise<AutoCalibrateResponse> {
   const res = await fetch(
     `/api/crawl/videos/${encodeURIComponent(videoId)}/clips/${clipId}/auto-calibrate`,
-    { method: "POST" }
+    { method: "POST" },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-export async function downloadVideo(
-  videoId: string
-): Promise<DownloadResult> {
+export async function downloadVideo(videoId: string): Promise<DownloadResult> {
   const res = await fetch(
     `/api/crawl/videos/${encodeURIComponent(videoId)}/download`,
-    { method: "POST" }
+    { method: "POST" },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -597,18 +604,18 @@ export interface AssetStatus {
 
 export async function getAssetStatus(videoId: string): Promise<AssetStatus> {
   const res = await fetch(
-    `/api/crawl/videos/${encodeURIComponent(videoId)}/assets`
+    `/api/crawl/videos/${encodeURIComponent(videoId)}/assets`,
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function fetchAssets(
-  videoId: string
+  videoId: string,
 ): Promise<{ video_id: string; lores_fetched: number; hires_fetched: number }> {
   const res = await fetch(
     `/api/crawl/videos/${encodeURIComponent(videoId)}/fetch-assets`,
-    { method: "POST" }
+    { method: "POST" },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -618,7 +625,7 @@ export async function fetchAssets(
 
 export async function generateClips(
   sessionId: string,
-  clipId?: number
+  clipId?: number,
 ): Promise<GenerateClipsResponse> {
   const body: Record<string, unknown> = {};
   if (clipId !== undefined) body.clip_id = clipId;
@@ -633,8 +640,13 @@ export async function generateClips(
 
 export async function startGenerateClipsJob(
   sessionId: string,
-  clipId?: number
-): Promise<{ job_id: string; status: string; clips: GeneratedClip[]; error: string | null }> {
+  clipId?: number,
+): Promise<{
+  job_id: string;
+  status: string;
+  clips: GeneratedClip[];
+  error: string | null;
+}> {
   const body: Record<string, unknown> = {};
   if (clipId !== undefined) body.clip_id = clipId;
   const res = await fetch(`/api/video/${sessionId}/generate-clips/jobs`, {
@@ -648,15 +660,22 @@ export async function startGenerateClipsJob(
 
 export async function getGenerateClipsJobStatus(
   sessionId: string,
-  jobId: string
-): Promise<{ job_id: string; status: string; clips: GeneratedClip[]; error: string | null }> {
-  const res = await fetch(`/api/video/${sessionId}/generate-clips/jobs/${jobId}`);
+  jobId: string,
+): Promise<{
+  job_id: string;
+  status: string;
+  clips: GeneratedClip[];
+  error: string | null;
+}> {
+  const res = await fetch(
+    `/api/video/${sessionId}/generate-clips/jobs/${jobId}`,
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function listGeneratedClips(
-  sessionId: string
+  sessionId: string,
 ): Promise<{ clips: { filepath: string; filename: string }[] }> {
   const res = await fetch(`/api/video/${sessionId}/generated-clips`);
   if (!res.ok) throw new Error(await res.text());
@@ -665,7 +684,7 @@ export async function listGeneratedClips(
 
 export async function saveClipToTraining(
   sessionId: string,
-  filepath: string
+  filepath: string,
 ): Promise<{ saved: string }> {
   const res = await fetch(`/api/video/${sessionId}/generated-clips/save`, {
     method: "POST",
@@ -678,19 +697,17 @@ export async function saveClipToTraining(
 
 // ── Inspection ──────────────────────────────────────────────
 
-export async function inspectVideo(
-  videoId: string
-): Promise<InspectResult> {
+export async function inspectVideo(videoId: string): Promise<InspectResult> {
   const res = await fetch(
     `/api/crawl/videos/${encodeURIComponent(videoId)}/inspect`,
-    { method: "POST" }
+    { method: "POST" },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function batchInspectVideos(
-  videoIds: string[]
+  videoIds: string[],
 ): Promise<{ job_id: string }> {
   const res = await fetch("/api/crawl/videos/batch-inspect", {
     method: "POST",
@@ -702,10 +719,10 @@ export async function batchInspectVideos(
 }
 
 export async function getInspectJobStatus(
-  jobId: string
+  jobId: string,
 ): Promise<InspectJobStatus> {
   const res = await fetch(
-    `/api/crawl/videos/inspect-job/${encodeURIComponent(jobId)}`
+    `/api/crawl/videos/inspect-job/${encodeURIComponent(jobId)}`,
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -715,7 +732,7 @@ export async function getInspectJobStatus(
 
 export async function aiScreenBatch(
   videoIds: string[],
-  threshold?: number
+  threshold?: number,
 ): Promise<{ results: AiScreenResult[] }> {
   const body: Record<string, unknown> = { video_ids: videoIds };
   if (threshold !== undefined) body.threshold = threshold;
@@ -742,17 +759,15 @@ export interface ScreeningSession {
   evaluation_id?: number | null;
 }
 
-export async function createScreeningSession(
-  body: {
-    results: unknown[];
-    accuracy?: number | null;
-    sample_size?: number;
-    per_class?: Record<string, { correct: number; total: number }> | null;
-    model_version?: string | null;
-    pin_state?: Record<string, boolean>;
-    evaluation_id?: number | null;
-  }
-): Promise<{ session_id: string; created_at: string }> {
+export async function createScreeningSession(body: {
+  results: unknown[];
+  accuracy?: number | null;
+  sample_size?: number;
+  per_class?: Record<string, { correct: number; total: number }> | null;
+  model_version?: string | null;
+  pin_state?: Record<string, boolean>;
+  evaluation_id?: number | null;
+}): Promise<{ session_id: string; created_at: string }> {
   const res = await fetch("/api/models/ai-screening/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -762,13 +777,17 @@ export async function createScreeningSession(
   return res.json();
 }
 
-export async function getScreeningSession(sessionId: string): Promise<ScreeningSession> {
+export async function getScreeningSession(
+  sessionId: string,
+): Promise<ScreeningSession> {
   const res = await fetch(`/api/models/ai-screening/sessions/${sessionId}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-export async function listScreeningSessions(limit = 20): Promise<{ sessions: ScreeningSession[] }> {
+export async function listScreeningSessions(
+  limit = 20,
+): Promise<{ sessions: ScreeningSession[] }> {
   const res = await fetch(`/api/models/ai-screening/sessions?limit=${limit}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -776,13 +795,16 @@ export async function listScreeningSessions(limit = 20): Promise<{ sessions: Scr
 
 export async function updateSessionPins(
   sessionId: string,
-  pinState: Record<string, boolean>
+  pinState: Record<string, boolean>,
 ): Promise<{ pin_state: Record<string, boolean> }> {
-  const res = await fetch(`/api/models/ai-screening/sessions/${sessionId}/pins`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pin_state: pinState }),
-  });
+  const res = await fetch(
+    `/api/models/ai-screening/sessions/${sessionId}/pins`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin_state: pinState }),
+    },
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -819,19 +841,19 @@ export interface OverlayTestSession {
 
 export async function sampleOverlayBoards(
   limit: number,
-  exclude?: string[]
+  exclude?: string[],
 ): Promise<{ filenames: string[] }> {
   const excludeParam =
     exclude && exclude.length > 0 ? `&exclude=${exclude.join(",")}` : "";
   const res = await fetch(
-    `/api/models/overlay-test/sample?limit=${limit}${excludeParam}`
+    `/api/models/overlay-test/sample?limit=${limit}${excludeParam}`,
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function inspectOverlayBoard(
-  filename: string
+  filename: string,
 ): Promise<OverlayTestResult> {
   const res = await fetch("/api/models/overlay-test/inspect", {
     method: "POST",
@@ -860,7 +882,7 @@ export async function createOverlayTestSession(body: {
 }
 
 export async function getOverlayTestSession(
-  sessionId: string
+  sessionId: string,
 ): Promise<OverlayTestSession> {
   const res = await fetch(`/api/models/overlay-test/sessions/${sessionId}`);
   if (!res.ok) throw new Error(await res.text());
@@ -868,18 +890,16 @@ export async function getOverlayTestSession(
 }
 
 export async function listOverlayTestSessions(
-  limit = 20
+  limit = 20,
 ): Promise<{ sessions: OverlayTestSession[] }> {
-  const res = await fetch(
-    `/api/models/overlay-test/sessions?limit=${limit}`
-  );
+  const res = await fetch(`/api/models/overlay-test/sessions?limit=${limit}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function updateOverlaySessionPins(
   sessionId: string,
-  pinState: Record<string, boolean>
+  pinState: Record<string, boolean>,
 ): Promise<{ pin_state: Record<string, boolean> }> {
   const res = await fetch(
     `/api/models/overlay-test/sessions/${sessionId}/pins`,
@@ -887,7 +907,7 @@ export async function updateOverlaySessionPins(
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pin_state: pinState }),
-    }
+    },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -961,7 +981,7 @@ export async function createOverlayEvalSession(body: {
 }
 
 export async function getOverlayEvalSession(
-  sessionId: string
+  sessionId: string,
 ): Promise<OverlayEvalSession> {
   const res = await fetch(`/api/models/overlay-eval/sessions/${sessionId}`);
   if (!res.ok) throw new Error(await res.text());
@@ -969,18 +989,16 @@ export async function getOverlayEvalSession(
 }
 
 export async function listOverlayEvalSessions(
-  limit = 20
+  limit = 20,
 ): Promise<{ sessions: OverlayEvalSession[] }> {
-  const res = await fetch(
-    `/api/models/overlay-eval/sessions?limit=${limit}`
-  );
+  const res = await fetch(`/api/models/overlay-eval/sessions?limit=${limit}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function updateOverlayEvalPins(
   sessionId: string,
-  pinState: Record<string, boolean>
+  pinState: Record<string, boolean>,
 ): Promise<{ pin_state: Record<string, boolean> }> {
   const res = await fetch(
     `/api/models/overlay-eval/sessions/${sessionId}/pins`,
@@ -988,7 +1006,7 @@ export async function updateOverlayEvalPins(
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pin_state: pinState }),
-    }
+    },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -1003,11 +1021,14 @@ export async function updateOverlayEvalSessionResults(
   detection_rate: number | null;
   fen_success_rate: number | null;
 }> {
-  const res = await fetch(`/api/models/overlay-eval/sessions/${sessionId}/results`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ results }),
-  });
+  const res = await fetch(
+    `/api/models/overlay-eval/sessions/${sessionId}/results`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ results }),
+    },
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -1044,32 +1065,32 @@ export interface OverlayValidationResponse {
 }
 
 export async function validateOverlayDetection(
-  limit = 100
+  limit = 100,
 ): Promise<OverlayValidationResponse> {
   const res = await fetch(
     `/api/models/overlay-test/validate-real?limit=${limit}`,
-    { method: "POST" }
+    { method: "POST" },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-
 // ── Synthetic ────────────────────────────────────────────────
 
 export async function scanSyntheticDir(
   directory: string,
-  expectedClips?: number
+  expectedClips?: number,
 ): Promise<SyntheticScanResponse> {
   const params = new URLSearchParams({ directory });
-  if (expectedClips !== undefined) params.set("expected_clips", String(expectedClips));
+  if (expectedClips !== undefined)
+    params.set("expected_clips", String(expectedClips));
   const res = await fetch(`/api/synthetic/scan?${params}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getSyntheticStats(
-  directory: string
+  directory: string,
 ): Promise<SyntheticStatsResponse> {
   const params = new URLSearchParams({ directory });
   const res = await fetch(`/api/synthetic/stats?${params}`);
@@ -1078,7 +1099,7 @@ export async function getSyntheticStats(
 }
 
 export async function inspectSyntheticClip(
-  filepath: string
+  filepath: string,
 ): Promise<{ session_id: string }> {
   return loadClipFromPath(filepath);
 }
@@ -1162,7 +1183,9 @@ export async function stopRealVideoProcessing(): Promise<RealVideoProcessingStat
 
 // ── Model Versions ──────────────────────────────────────────
 
-export async function getModelVersions(): Promise<Record<string, string | null>> {
+export async function getModelVersions(): Promise<
+  Record<string, string | null>
+> {
   const res = await fetch("/api/models/model-versions");
   if (!res.ok) return {};
   return res.json();
@@ -1183,12 +1206,12 @@ export interface SegmentEvalSessionSummary {
 
 export async function sampleSegmentationVideos(
   limit: number,
-  exclude?: string[]
+  exclude?: string[],
 ): Promise<{ video_ids: string[] }> {
   const excludeParam =
     exclude && exclude.length > 0 ? `&exclude=${exclude.join(",")}` : "";
   const res = await fetch(
-    `/api/models/segmentation-eval/sample?limit=${limit}${excludeParam}`
+    `/api/models/segmentation-eval/sample?limit=${limit}${excludeParam}`,
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -1248,9 +1271,7 @@ function normalizeSegmentEvalResult(raw: any): any {
   };
 }
 
-export async function inspectSegmentation(
-  videoId: string
-): Promise<any> {
+export async function inspectSegmentation(videoId: string): Promise<any> {
   const res = await fetch("/api/models/segmentation-eval/inspect", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1299,20 +1320,20 @@ export async function createSegmentationEvalSession(body: {
 }
 
 export async function getSegmentationEvalSession(
-  sessionId: string
+  sessionId: string,
 ): Promise<any> {
   const res = await fetch(
-    `/api/models/segmentation-eval/sessions/${sessionId}`
+    `/api/models/segmentation-eval/sessions/${sessionId}`,
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function listSegmentationEvalSessions(
-  limit = 20
+  limit = 20,
 ): Promise<{ sessions: SegmentEvalSessionSummary[] }> {
   const res = await fetch(
-    `/api/models/segmentation-eval/sessions?limit=${limit}`
+    `/api/models/segmentation-eval/sessions?limit=${limit}`,
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -1320,7 +1341,7 @@ export async function listSegmentationEvalSessions(
 
 export async function updateSegmentationEvalPins(
   sessionId: string,
-  pinState: Record<string, boolean>
+  pinState: Record<string, boolean>,
 ): Promise<{ pin_state: Record<string, boolean> }> {
   const res = await fetch(
     `/api/models/segmentation-eval/sessions/${sessionId}/pins`,
@@ -1328,7 +1349,7 @@ export async function updateSegmentationEvalPins(
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pin_state: pinState }),
-    }
+    },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -1349,14 +1370,12 @@ export interface CalibrationEvalSessionSummary {
 
 export async function sampleCalibrationClips(
   limit: number,
-  exclude?: number[]
+  exclude?: number[],
 ): Promise<{ clips: any[] }> {
   const excludeParam =
-    exclude && exclude.length > 0
-      ? `&exclude=${exclude.join(",")}`
-      : "";
+    exclude && exclude.length > 0 ? `&exclude=${exclude.join(",")}` : "";
   const res = await fetch(
-    `/api/models/calibration-eval/sample?limit=${limit}${excludeParam}`
+    `/api/models/calibration-eval/sample?limit=${limit}${excludeParam}`,
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -1385,9 +1404,7 @@ function normalizeCalibrationResult(raw: any): any {
   };
 }
 
-export async function inspectCalibration(
-  clipId: number
-): Promise<any> {
+export async function inspectCalibration(clipId: number): Promise<any> {
   const res = await fetch("/api/models/calibration-eval/inspect", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1437,20 +1454,18 @@ export async function createCalibrationEvalSession(body: {
 }
 
 export async function getCalibrationEvalSession(
-  sessionId: string
+  sessionId: string,
 ): Promise<any> {
-  const res = await fetch(
-    `/api/models/calibration-eval/sessions/${sessionId}`
-  );
+  const res = await fetch(`/api/models/calibration-eval/sessions/${sessionId}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function listCalibrationEvalSessions(
-  limit = 20
+  limit = 20,
 ): Promise<{ sessions: CalibrationEvalSessionSummary[] }> {
   const res = await fetch(
-    `/api/models/calibration-eval/sessions?limit=${limit}`
+    `/api/models/calibration-eval/sessions?limit=${limit}`,
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -1458,7 +1473,7 @@ export async function listCalibrationEvalSessions(
 
 export async function updateCalibrationEvalPins(
   sessionId: string,
-  pinState: Record<string, boolean>
+  pinState: Record<string, boolean>,
 ): Promise<{ pin_state: Record<string, boolean> }> {
   const res = await fetch(
     `/api/models/calibration-eval/sessions/${sessionId}/pins`,
@@ -1466,7 +1481,7 @@ export async function updateCalibrationEvalPins(
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pin_state: pinState }),
-    }
+    },
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -1474,9 +1489,7 @@ export async function updateCalibrationEvalPins(
 
 // ── Auto-Calibration ────────────────────────────────────────
 
-export async function inspectAutoCalibration(
-  videoId: string
-): Promise<any> {
+export async function inspectAutoCalibration(videoId: string): Promise<any> {
   const res = await fetch("/api/models/auto-calibration/inspect", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1602,7 +1615,8 @@ export async function samplePhysicalRuntimeFrames(
   exclude?: string[],
   signal?: AbortSignal,
 ): Promise<{ frames: PhysicalRuntimeSampleFrame[] }> {
-  const excludeParam = exclude && exclude.length > 0 ? `&exclude=${exclude.join(",")}` : "";
+  const excludeParam =
+    exclude && exclude.length > 0 ? `&exclude=${exclude.join(",")}` : "";
   const res = await fetch(
     `/api/evaluate/physical-runtime/sample?limit=${limit}${excludeParam}`,
     { signal },
@@ -1711,7 +1725,9 @@ export async function createPhysicalRuntimeSession(body: {
 export async function getPhysicalRuntimeSession(
   sessionId: string,
 ): Promise<PhysicalRuntimeSession> {
-  const res = await fetch(`/api/evaluate/physical-runtime/sessions/${sessionId}`);
+  const res = await fetch(
+    `/api/evaluate/physical-runtime/sessions/${sessionId}`,
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -1719,7 +1735,9 @@ export async function getPhysicalRuntimeSession(
 export async function listPhysicalRuntimeSessions(
   limit = 20,
 ): Promise<{ sessions: PhysicalRuntimeSession[] }> {
-  const res = await fetch(`/api/evaluate/physical-runtime/sessions?limit=${limit}`);
+  const res = await fetch(
+    `/api/evaluate/physical-runtime/sessions?limit=${limit}`,
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -1728,16 +1746,22 @@ export async function updatePhysicalRuntimePins(
   sessionId: string,
   pinState: Record<string, boolean>,
 ): Promise<{ pin_state: Record<string, boolean> }> {
-  const res = await fetch(`/api/evaluate/physical-runtime/sessions/${sessionId}/pins`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pin_state: pinState }),
-  });
+  const res = await fetch(
+    `/api/evaluate/physical-runtime/sessions/${sessionId}/pins`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin_state: pinState }),
+    },
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-export function physicalRuntimeSessionImageUrl(sessionId: string, filename: string): string {
+export function physicalRuntimeSessionImageUrl(
+  sessionId: string,
+  filename: string,
+): string {
   return `/api/evaluate/physical-runtime/session-image/${sessionId}/${encodeURIComponent(filename)}`;
 }
 
@@ -1792,6 +1816,8 @@ export interface PhysicalFailureStudyFrame {
   clip_filename: string;
   frame_index: number;
   board_path?: string | null;
+  processed_image_path?: string | null;
+  raw_image_path?: string | null;
   source_video_id?: string | null;
   gt_fen: string;
   decoded_fen: string;
@@ -1896,7 +1922,9 @@ export async function getPhysicalFailureStudy(
   path: string,
 ): Promise<PhysicalFailureStudyDetail> {
   const params = new URLSearchParams({ path });
-  const res = await fetch(`/api/evaluate/physical-failures/study?${params.toString()}`);
+  const res = await fetch(
+    `/api/evaluate/physical-failures/study?${params.toString()}`,
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -1977,11 +2005,43 @@ export interface PhysicalEvalMoveCorrections {
   manual_move_frames: number[];
 }
 
+export interface PhysicalTransientMoveAnnotation {
+  move_index: number;
+  uci: string;
+  san: string | null;
+  move_frame_index: number;
+  side_to_move: "white" | "black" | null;
+  fen_before: string | null;
+  fen_after: string | null;
+  start_frame_index: number | null;
+  end_frame_index: number | null;
+  is_capture: boolean | null;
+}
+
+export interface PhysicalHandOcclusionSpan {
+  start_frame_index: number;
+  end_frame_index: number;
+}
+
+export interface PhysicalTransientAnnotation {
+  annotation_id: string;
+  clip_path: string;
+  source_video_id: string | null;
+  total_moves: number;
+  move_annotations: PhysicalTransientMoveAnnotation[];
+  hand_occlusion_spans: PhysicalHandOcclusionSpan[];
+  created_at: string;
+  updated_at: string;
+}
+
 export async function listPhysicalEvalClips(
   clipsDir: string = "data/argus/train_real",
   limit: number = 200,
 ): Promise<{ clips_dir: string; clips: PhysicalEvalClip[] }> {
-  const params = new URLSearchParams({ clips_dir: clipsDir, limit: String(limit) });
+  const params = new URLSearchParams({
+    clips_dir: clipsDir,
+    limit: String(limit),
+  });
   const res = await fetch(`/api/physical-eval/clips?${params}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -1998,9 +2058,13 @@ export async function getPhysicalEvalAnnotation(
   frameIndex: number,
   options?: { sessionId?: string; paddingPx?: number },
 ): Promise<PhysicalEvalAnnotation | null> {
-  const params = new URLSearchParams({ clip_path: clipPath, frame_index: String(frameIndex) });
+  const params = new URLSearchParams({
+    clip_path: clipPath,
+    frame_index: String(frameIndex),
+  });
   if (options?.sessionId) params.set("session_id", options.sessionId);
-  if (options?.paddingPx !== undefined) params.set("padding_px", String(options.paddingPx));
+  if (options?.paddingPx !== undefined)
+    params.set("padding_px", String(options.paddingPx));
   const res = await fetch(`/api/physical-eval/annotation?${params}`);
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
@@ -2011,8 +2075,13 @@ export async function deletePhysicalEvalAnnotation(
   clipPath: string,
   frameIndex: number,
 ): Promise<{ summary: PhysicalEvalSummary }> {
-  const params = new URLSearchParams({ clip_path: clipPath, frame_index: String(frameIndex) });
-  const res = await fetch(`/api/physical-eval/annotation?${params}`, { method: "DELETE" });
+  const params = new URLSearchParams({
+    clip_path: clipPath,
+    frame_index: String(frameIndex),
+  });
+  const res = await fetch(`/api/physical-eval/annotation?${params}`, {
+    method: "DELETE",
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -2021,7 +2090,10 @@ export async function getPhysicalEvalMoveCorrections(
   sessionId: string,
   clipPath: string,
 ): Promise<PhysicalEvalMoveCorrections> {
-  const params = new URLSearchParams({ session_id: sessionId, clip_path: clipPath });
+  const params = new URLSearchParams({
+    session_id: sessionId,
+    clip_path: clipPath,
+  });
   const res = await fetch(`/api/physical-eval/corrections?${params}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -2047,7 +2119,9 @@ export async function detectPhysicalEvalCorners(body: {
   session_id: string;
   frame_index: number;
   padding_px?: number;
-}): Promise<{ detection: { corners: number[][]; confidence: number; method: string } | null }> {
+}): Promise<{
+  detection: { corners: number[][]; confidence: number; method: string } | null;
+}> {
   const res = await fetch("/api/physical-eval/detect-corners", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2063,7 +2137,9 @@ export async function trackPhysicalEvalCorners(body: {
   target_frame_index: number;
   corners: number[][];
   padding_px?: number;
-}): Promise<{ tracking: { corners: number[][]; confidence: number; method: string } | null }> {
+}): Promise<{
+  tracking: { corners: number[][]; confidence: number; method: string } | null;
+}> {
   const res = await fetch("/api/physical-eval/track-corners", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2081,7 +2157,10 @@ export async function savePhysicalEvalAnnotation(body: {
   labels: Array<number | null>;
   output_size?: number;
   padding_px?: number;
-}): Promise<{ annotation: PhysicalEvalAnnotation; summary: PhysicalEvalSummary }> {
+}): Promise<{
+  annotation: PhysicalEvalAnnotation;
+  summary: PhysicalEvalSummary;
+}> {
   const res = await fetch("/api/physical-eval/save", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2091,11 +2170,49 @@ export async function savePhysicalEvalAnnotation(body: {
   return res.json();
 }
 
+export async function getPhysicalEvalTransientAnnotation(
+  clipPath: string,
+): Promise<PhysicalTransientAnnotation | null> {
+  const params = new URLSearchParams({ clip_path: clipPath });
+  const res = await fetch(`/api/physical-eval/transient-annotation?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.annotation ?? null;
+}
+
+export async function savePhysicalEvalTransientAnnotation(body: {
+  clip_path: string;
+  move_annotations: PhysicalTransientMoveAnnotation[];
+  hand_occlusion_spans: PhysicalHandOcclusionSpan[];
+}): Promise<{ annotation: PhysicalTransientAnnotation }> {
+  const res = await fetch("/api/physical-eval/save-transient-annotation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deletePhysicalEvalTransientAnnotation(
+  clipPath: string,
+): Promise<{ deleted: boolean }> {
+  const params = new URLSearchParams({ clip_path: clipPath });
+  const res = await fetch(`/api/physical-eval/transient-annotation?${params}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function listPhysicalTrainClips(
   clipsDir: string = "data/argus/train_real",
   limit: number = 200,
 ): Promise<{ clips_dir: string; clips: PhysicalEvalClip[] }> {
-  const params = new URLSearchParams({ clips_dir: clipsDir, limit: String(limit) });
+  const params = new URLSearchParams({
+    clips_dir: clipsDir,
+    limit: String(limit),
+  });
   const res = await fetch(`/api/physical-train/clips?${params}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -2112,9 +2229,13 @@ export async function getPhysicalTrainAnnotation(
   frameIndex: number,
   options?: { sessionId?: string; paddingPx?: number },
 ): Promise<PhysicalEvalAnnotation | null> {
-  const params = new URLSearchParams({ clip_path: clipPath, frame_index: String(frameIndex) });
+  const params = new URLSearchParams({
+    clip_path: clipPath,
+    frame_index: String(frameIndex),
+  });
   if (options?.sessionId) params.set("session_id", options.sessionId);
-  if (options?.paddingPx !== undefined) params.set("padding_px", String(options.paddingPx));
+  if (options?.paddingPx !== undefined)
+    params.set("padding_px", String(options.paddingPx));
   const res = await fetch(`/api/physical-train/annotation?${params}`);
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
@@ -2125,8 +2246,13 @@ export async function deletePhysicalTrainAnnotation(
   clipPath: string,
   frameIndex: number,
 ): Promise<{ summary: PhysicalEvalSummary }> {
-  const params = new URLSearchParams({ clip_path: clipPath, frame_index: String(frameIndex) });
-  const res = await fetch(`/api/physical-train/annotation?${params}`, { method: "DELETE" });
+  const params = new URLSearchParams({
+    clip_path: clipPath,
+    frame_index: String(frameIndex),
+  });
+  const res = await fetch(`/api/physical-train/annotation?${params}`, {
+    method: "DELETE",
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -2135,7 +2261,10 @@ export async function getPhysicalTrainMoveCorrections(
   sessionId: string,
   clipPath: string,
 ): Promise<PhysicalEvalMoveCorrections> {
-  const params = new URLSearchParams({ session_id: sessionId, clip_path: clipPath });
+  const params = new URLSearchParams({
+    session_id: sessionId,
+    clip_path: clipPath,
+  });
   const res = await fetch(`/api/physical-train/corrections?${params}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -2161,7 +2290,9 @@ export async function detectPhysicalTrainCorners(body: {
   session_id: string;
   frame_index: number;
   padding_px?: number;
-}): Promise<{ detection: { corners: number[][]; confidence: number; method: string } | null }> {
+}): Promise<{
+  detection: { corners: number[][]; confidence: number; method: string } | null;
+}> {
   const res = await fetch("/api/physical-train/detect-corners", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2177,7 +2308,9 @@ export async function trackPhysicalTrainCorners(body: {
   target_frame_index: number;
   corners: number[][];
   padding_px?: number;
-}): Promise<{ tracking: { corners: number[][]; confidence: number; method: string } | null }> {
+}): Promise<{
+  tracking: { corners: number[][]; confidence: number; method: string } | null;
+}> {
   const res = await fetch("/api/physical-train/track-corners", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2195,12 +2328,51 @@ export async function savePhysicalTrainAnnotation(body: {
   labels: Array<number | null>;
   output_size?: number;
   padding_px?: number;
-}): Promise<{ annotation: PhysicalEvalAnnotation; summary: PhysicalEvalSummary }> {
+}): Promise<{
+  annotation: PhysicalEvalAnnotation;
+  summary: PhysicalEvalSummary;
+}> {
   const res = await fetch("/api/physical-train/save", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPhysicalTrainTransientAnnotation(
+  clipPath: string,
+): Promise<PhysicalTransientAnnotation | null> {
+  const params = new URLSearchParams({ clip_path: clipPath });
+  const res = await fetch(`/api/physical-train/transient-annotation?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.annotation ?? null;
+}
+
+export async function savePhysicalTrainTransientAnnotation(body: {
+  clip_path: string;
+  move_annotations: PhysicalTransientMoveAnnotation[];
+  hand_occlusion_spans: PhysicalHandOcclusionSpan[];
+}): Promise<{ annotation: PhysicalTransientAnnotation }> {
+  const res = await fetch("/api/physical-train/save-transient-annotation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deletePhysicalTrainTransientAnnotation(
+  clipPath: string,
+): Promise<{ deleted: boolean }> {
+  const params = new URLSearchParams({ clip_path: clipPath });
+  const res = await fetch(
+    `/api/physical-train/transient-annotation?${params}`,
+    { method: "DELETE" },
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

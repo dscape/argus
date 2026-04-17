@@ -7,7 +7,8 @@ import argparse
 import json
 import math
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -158,6 +159,57 @@ def resolve_output_dir(output_dir: Path | None) -> Path:
     return _DEFAULT_OUTPUT_ROOT.resolve()
 
 
+def side_to_move_from_fen(fen: str) -> str | None:
+    parts = fen.strip().split()
+    if len(parts) >= 2 and parts[1] in {"w", "b"}:
+        return parts[1]
+    return None
+
+
+def toggle_side_to_move(side_to_move: str | None) -> str | None:
+    if side_to_move == "w":
+        return "b"
+    if side_to_move == "b":
+        return "w"
+    return None
+
+
+def attach_previous_context_to_sequence_records(
+    records: list[DirectBoardRecord],
+    *,
+    initial_context_by_clip: dict[str, tuple[tuple[int, ...] | None, str | None]],
+) -> list[DirectBoardRecord]:
+    records_by_clip: dict[str, list[DirectBoardRecord]] = defaultdict(list)
+    for record in records:
+        records_by_clip[record.clip_path or record.example_id].append(record)
+
+    updated_records: list[DirectBoardRecord] = []
+    for clip_key, clip_records in records_by_clip.items():
+        clip_records.sort(
+            key=lambda record: (
+                -1 if record.frame_index is None else int(record.frame_index),
+                record.annotation_id or record.example_id,
+            )
+        )
+        previous_labels, previous_side_to_move = initial_context_by_clip.get(clip_key, (None, None))
+        for record in clip_records:
+            updated_records.append(
+                replace(
+                    record,
+                    previous_labels=previous_labels,
+                    previous_board_available=previous_labels is not None,
+                    previous_side_to_move=previous_side_to_move,
+                )
+            )
+            current_labels = tuple(int(value) for value in record.labels)
+            if previous_labels is not None and current_labels != previous_labels:
+                previous_side_to_move = toggle_side_to_move(previous_side_to_move)
+            previous_labels = current_labels
+
+    updated_records.sort(key=lambda record: record.example_id)
+    return updated_records
+
+
 def build_chessred_corner_lookup(
     payload: dict[str, Any],
 ) -> dict[int, tuple[tuple[float, float], ...]]:
@@ -234,8 +286,30 @@ def build_physical_records(
 ) -> list[DirectBoardRecord]:
     rows = load_fully_labeled_physical_annotations(annotation_root)
     exported: list[DirectBoardRecord] = []
+    initial_context_by_clip: dict[str, tuple[tuple[int, ...] | None, str | None]] = {}
     for row in rows:
         x, y, w, h = [int(value) for value in row["native_image_bbox"]]
+        clip_path = str(row["clip_path"])
+        if clip_path not in initial_context_by_clip:
+            clip_payload = torch.load(
+                _PROJECT_ROOT / clip_path,
+                map_location="cpu",
+                weights_only=False,
+            )
+            initial_board_fen = (
+                clip_payload.get("initial_board_fen") if isinstance(clip_payload, dict) else None
+            )
+            initial_side_to_move = (
+                clip_payload.get("initial_side_to_move") if isinstance(clip_payload, dict) else None
+            )
+            initial_context_by_clip[clip_path] = (
+                None
+                if not isinstance(initial_board_fen, str)
+                else tuple(
+                    int(value) for value in fen_to_square_targets(initial_board_fen).tolist()
+                ),
+                initial_side_to_move if isinstance(initial_side_to_move, str) else None,
+            )
         exported.append(
             DirectBoardRecord(
                 example_id=f"physical:{row['annotation_id']}",
@@ -246,7 +320,7 @@ def build_physical_records(
                 height=h,
                 sample_weight=sample_weight,
                 annotation_id=str(row["annotation_id"]),
-                clip_path=str(row["clip_path"]),
+                clip_path=clip_path,
                 frame_index=int(row["frame_index"]),
                 source_video_id=str(row["source_video_id"]),
                 source_frame_index=int(row["source_frame_index"]),
@@ -254,8 +328,10 @@ def build_physical_records(
                 corners=tuple((float(px), float(py)) for px, py in row["native_corners"]),
             )
         )
-    exported.sort(key=lambda record: record.example_id)
-    return exported
+    return attach_previous_context_to_sequence_records(
+        exported,
+        initial_context_by_clip=initial_context_by_clip,
+    )
 
 
 def build_synthetic_records_from_clips(
@@ -277,6 +353,19 @@ def build_synthetic_records_from_clips(
             continue
         board_flipped = bool(clip.get("board_flipped", False))
         frame_count = min(int(frames.shape[0]), len(fens))
+        initial_board_fen = clip.get("initial_board_fen")
+        previous_labels: tuple[int, ...] | None = None
+        if isinstance(initial_board_fen, str) and initial_board_fen:
+            previous_labels = tuple(
+                int(value)
+                for value in fen_to_square_targets(
+                    initial_board_fen,
+                    board_flipped=board_flipped,
+                ).tolist()
+            )
+        previous_side_to_move = (
+            side_to_move_from_fen(initial_board_fen) if isinstance(initial_board_fen, str) else None
+        )
         for frame_index in range(frame_count):
             fen = fens[frame_index]
             if not isinstance(fen, str) or not fen:
@@ -292,20 +381,28 @@ def build_synthetic_records_from_clips(
                 width = int(frame.shape[1])
             else:
                 continue
-            labels = fen_to_square_targets(fen, board_flipped=board_flipped)
+            labels = tuple(
+                int(value)
+                for value in fen_to_square_targets(fen, board_flipped=board_flipped).tolist()
+            )
             rows.append(
                 DirectBoardRecord(
                     example_id=f"synthetic:{clip_path.stem}:{frame_index:04d}",
                     domain="synthetic",
                     split=split_name,
-                    labels=tuple(int(value) for value in labels.tolist()),
+                    labels=labels,
                     width=width,
                     height=height,
                     sample_weight=sample_weight,
                     clip_path=str(clip_path.resolve().relative_to(_PROJECT_ROOT.resolve())),
                     frame_index=frame_index,
+                    previous_labels=previous_labels,
+                    previous_board_available=previous_labels is not None,
+                    previous_side_to_move=previous_side_to_move,
                 )
             )
+            previous_labels = labels
+            previous_side_to_move = side_to_move_from_fen(fen)
             if max_frames > 0 and len(rows) >= max_frames:
                 return rows
     return rows
@@ -476,6 +573,8 @@ def review_manifest_entry(row: DirectBoardRecord) -> dict[str, Any]:
         "source_frame_index": row.source_frame_index,
         "native_image_bbox": row.native_image_bbox,
         "annotation_id": row.annotation_id,
+        "previous_board_available": row.previous_board_available,
+        "previous_side_to_move": row.previous_side_to_move,
     }
     return entry
 

@@ -80,6 +80,9 @@ def test_direct_board_record_json_round_trip() -> None:
         corners=((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
         native_image_bbox=(1, 2, 3, 4),
         source_frame_index=9,
+        previous_labels=tuple([1] * 64),
+        previous_board_available=True,
+        previous_side_to_move="b",
     )
 
     restored = DirectBoardRecord.from_json(json.loads(json.dumps(record.to_json())))
@@ -122,13 +125,16 @@ def test_manifest_dataset_reads_synthetic_clip_records(tmp_path) -> None:
     data_module._PROJECT_ROOT = project_root
     try:
         dataset = DirectBoardManifestDataset(manifest_path=manifest_path, image_size=32)
-        image, labels, weight = dataset[0]
+        sample = dataset[0]
     finally:
         data_module._PROJECT_ROOT = original_root
 
-    assert image.shape == (3, 32, 32)
-    assert labels.shape == (64,)
-    assert float(weight.item()) == 1.0
+    assert sample["image"].shape == (3, 32, 32)
+    assert sample["labels"].shape == (64,)
+    assert float(sample["sample_weight"].item()) == 1.0
+    assert sample["previous_labels"].shape == (64,)
+    assert bool(sample["previous_board_available"].item()) is False
+    assert int(sample["previous_side_to_move"].item()) == 0
 
 
 def test_image_loader_reads_native_video_crop(tmp_path) -> None:

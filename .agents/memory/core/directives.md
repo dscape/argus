@@ -1,6 +1,14 @@
 - Goal from `outputs/plan.md`: push `board_exact` as close to 90% as current data/architecture support on the target split.
-- Diagnosis-first loop: always state current baseline, rerun failure study on the current best eval report, review/tag failures, then choose experiments only from dominant buckets.
-- Avoid architecture sweeps without failure-mode justification; abandon low-return directions; use oracle checks when results contradict hypotheses or failure data is ambiguous.
-- Keep repo changes focused/minimal; prefer shrinking plan text rather than expanding it.
+- Diagnosis-first loop: baseline -> rerun failure study on current best eval -> review/tag failures -> choose experiments only from dominant buckets.
+- Keep repo changes minimal; prefer shrinking plan text rather than expanding it.
 - Do not commit local `.agents/memory/*` changes.
 - Preserve explicit invalidates/supersedes links when future memory replaces prior conclusions.
+- In `authresearch/`, inspect `results.tsv`, `run.log`, `best_train.py`, and `train.py` each loop; edit only `authresearch/train.py`; do not run it unless explicitly told by the outer controller; do not inspect `overnight.log`/`.pid`.
+- Keep `authresearch/` focused on decoder-only temporal ambiguity; one small, reviewable change per loop; if `train.py` is risky/runaway, restore toward `best_train.py` first.
+- Do not run `authresearch/controller.sh` and `authresearch/controller_slow.sh` simultaneously because they share `authresearch/train.py`.
+- `authresearch` cheap-lane caps: target under ~30s, hard limit 120s; `beam_size <= 8`, `top_move_candidates <= 16`, `top_board_candidates <= 4`, `max_event_proposals <= 24`, `event_window_radius <= 2`, `state_aware_proposal_passes <= 1`, `min_event_separation >= 2`; avoid `state_aware_proposal_passes=1` and other runtime-spiking hybrids.
+- Whole-board lane supports optional previous-board conditioning, but default `authresearch_wholeboard/train.py` baseline remains `PREVIOUS_BOARD_CONDITIONING = "none"` unless a stronger kept local result supersedes it.
+- For `authresearch_wholeboard/`, inspect `results.tsv`, `run.log`, `best_train.py`, and `train.py` each loop; edit only `authresearch_wholeboard/train.py`; do not run it unless explicitly told by the outer controller.
+- Keep `authresearch_wholeboard/` on raw native board-neighborhood crops; do not switch to rectified-board or square-crop pipelines; do not assume red lines, board quads, or other annotations are present in model input.
+- `authresearch_wholeboard` experiments should be small and hypothesis-driven, usually one or two knob changes; target under ~20 minutes, hard budget 30 minutes; if `train.py` is risky/runaway, restore toward `best_train.py` first.
+- In shell calculations, use `python3`, not `python`, for midpoint arithmetic.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import cv2
 import numpy as np
@@ -31,6 +31,17 @@ _CHESSRED_CATEGORY_TO_LABEL = {
     11: 12,  # black king -> k
     12: 0,  # empty
 }
+_PREVIOUS_CONTEXT_EMPTY_LABELS = (0,) * 64
+_OVERRIDE_UNSET = object()
+
+
+class DirectBoardSample(TypedDict):
+    image: torch.Tensor
+    labels: torch.Tensor
+    sample_weight: torch.Tensor
+    previous_labels: torch.Tensor
+    previous_board_available: torch.Tensor
+    previous_side_to_move: torch.Tensor
 
 
 @dataclass(frozen=True)
@@ -50,6 +61,9 @@ class DirectBoardRecord:
     source_frame_index: int | None = None
     native_image_bbox: tuple[int, int, int, int] | None = None
     corners: tuple[tuple[float, float], ...] | None = None
+    previous_labels: tuple[int, ...] | None = None
+    previous_board_available: bool = False
+    previous_side_to_move: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -60,6 +74,11 @@ class DirectBoardRecord:
         payload["native_image_bbox"] = (
             None if self.native_image_bbox is None else list(self.native_image_bbox)
         )
+        payload["previous_labels"] = (
+            None if self.previous_labels is None else list(self.previous_labels)
+        )
+        payload["previous_board_available"] = bool(self.previous_board_available)
+        payload["previous_side_to_move"] = self.previous_side_to_move
         return payload
 
     @classmethod
@@ -75,6 +94,10 @@ class DirectBoardRecord:
         native_image_bbox = None
         if isinstance(raw_bbox, list) and len(raw_bbox) == 4:
             native_image_bbox = tuple(int(value) for value in raw_bbox)
+        raw_previous_labels = payload.get("previous_labels")
+        previous_labels = None
+        if isinstance(raw_previous_labels, list) and len(raw_previous_labels) == 64:
+            previous_labels = tuple(int(value) for value in raw_previous_labels)
         raw_image_path = payload.get("image_path")
         return cls(
             example_id=str(payload["example_id"]),
@@ -104,6 +127,16 @@ class DirectBoardRecord:
             ),
             native_image_bbox=native_image_bbox,
             corners=corners,
+            previous_labels=previous_labels,
+            previous_board_available=bool(
+                payload.get("previous_board_available", previous_labels is not None)
+            )
+            and previous_labels is not None,
+            previous_side_to_move=(
+                None
+                if payload.get("previous_side_to_move") not in {"w", "b"}
+                else str(payload["previous_side_to_move"])
+            ),
         )
 
 
@@ -182,7 +215,15 @@ class DirectBoardImageLoader:
         return crop
 
 
-class DirectBoardManifestDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
+def encode_previous_side_to_move(side_to_move: str | None) -> int:
+    if side_to_move == "w":
+        return 1
+    if side_to_move == "b":
+        return 2
+    return 0
+
+
+class DirectBoardManifestDataset(Dataset[DirectBoardSample]):
     def __init__(
         self,
         *,
@@ -197,13 +238,51 @@ class DirectBoardManifestDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch
     def __len__(self) -> int:
         return len(self.rows)
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        row = self.rows[index]
+    def __getitem__(self, index: int) -> DirectBoardSample:
+        return self.sample_from_row(self.rows[index])
+
+    def sample_from_row(
+        self,
+        row: DirectBoardRecord,
+        *,
+        previous_labels: tuple[int, ...] | None | object = _OVERRIDE_UNSET,
+        previous_board_available: bool | object = _OVERRIDE_UNSET,
+        previous_side_to_move: str | None | object = _OVERRIDE_UNSET,
+    ) -> DirectBoardSample:
         image = self._image_loader.load_bgr(row)
         image_tensor = preprocess_full_board_image(image, size=self.image_size)
         labels = torch.tensor(row.labels, dtype=torch.long)
         weight = torch.tensor(row.sample_weight, dtype=torch.float32)
-        return image_tensor, labels, weight
+
+        resolved_previous_labels = row.previous_labels
+        if previous_labels is not _OVERRIDE_UNSET:
+            resolved_previous_labels = previous_labels
+        resolved_previous_available = row.previous_board_available and resolved_previous_labels is not None
+        if previous_board_available is not _OVERRIDE_UNSET:
+            resolved_previous_available = bool(previous_board_available)
+        resolved_previous_side = row.previous_side_to_move
+        if previous_side_to_move is not _OVERRIDE_UNSET:
+            resolved_previous_side = previous_side_to_move
+
+        previous_label_values = (
+            _PREVIOUS_CONTEXT_EMPTY_LABELS
+            if resolved_previous_labels is None
+            else tuple(int(value) for value in resolved_previous_labels)
+        )
+        previous_labels_tensor = torch.tensor(previous_label_values, dtype=torch.long)
+        previous_available_tensor = torch.tensor(resolved_previous_available, dtype=torch.bool)
+        previous_side_tensor = torch.tensor(
+            encode_previous_side_to_move(resolved_previous_side),
+            dtype=torch.long,
+        )
+        return {
+            "image": image_tensor,
+            "labels": labels,
+            "sample_weight": weight,
+            "previous_labels": previous_labels_tensor,
+            "previous_board_available": previous_available_tensor,
+            "previous_side_to_move": previous_side_tensor,
+        }
 
 
 def square_name_to_index(square_name: str) -> int:

@@ -31,6 +31,16 @@ def test_save_board_annotation_writes_manifest_and_crops(tmp_path, monkeypatch) 
     monkeypatch.setattr(eval_dataset, "BOARDS_DIR", dataset_root / "boards")
     monkeypatch.setattr(eval_dataset, "SQUARES_DIR", dataset_root / "squares")
     monkeypatch.setattr(
+        eval_dataset.splits,
+        "ensure_annotation_layout_migrated",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        eval_dataset.splits,
+        "assign_source_video_split",
+        lambda _source_video_id, _split: _split,
+    )
+    monkeypatch.setattr(
         eval_dataset,
         "BOARD_ANNOTATIONS_PATH",
         dataset_root / "board_annotations.jsonl",
@@ -85,3 +95,75 @@ def test_save_board_annotation_writes_manifest_and_crops(tmp_path, monkeypatch) 
     assert summary["square_crop_count"] == 2
     assert summary["class_counts"]["R"] == 1
     assert summary["class_counts"]["r"] == 1
+
+
+def test_save_transient_annotation_writes_manifest(tmp_path, monkeypatch) -> None:
+    dataset_root = tmp_path / "data" / "physical" / "eval"
+    monkeypatch.setattr(eval_dataset, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(eval_dataset, "DATASET_ROOT", dataset_root)
+    monkeypatch.setattr(
+        eval_dataset.splits,
+        "ensure_annotation_layout_migrated",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        eval_dataset.splits,
+        "assign_source_video_split",
+        lambda _source_video_id, _split: _split,
+    )
+    monkeypatch.setattr(
+        eval_dataset,
+        "TRANSIENT_ANNOTATIONS_PATH",
+        dataset_root / "transient_annotations.jsonl",
+    )
+
+    record = eval_dataset.save_transient_annotation(
+        clip_path="data/argus/train_real/clip_overlay_demo_clip1_0.pt",
+        source_video_id="demo",
+        move_annotations=[
+            {
+                "move_index": 0,
+                "uci": "e2e4",
+                "san": "e4",
+                "move_frame_index": 12,
+                "side_to_move": "white",
+                "fen_before": "start",
+                "fen_after": "after",
+                "start_frame_index": 8,
+                "end_frame_index": 13,
+                "is_capture": False,
+            }
+        ],
+        hand_occlusion_spans=[
+            {"start_frame_index": 7, "end_frame_index": 10},
+            {"start_frame_index": 11, "end_frame_index": 12},
+        ],
+    )
+
+    assert record["annotation_id"] == "clip_overlay_demo_clip1_0_transient"
+    assert record["total_moves"] == 1
+    assert record["move_annotations"][0]["start_frame_index"] == 8
+    assert record["hand_occlusion_spans"][0] == {"start_frame_index": 7, "end_frame_index": 10}
+
+    manifest_rows = [
+        json.loads(line)
+        for line in (dataset_root / "transient_annotations.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(manifest_rows) == 1
+
+    loaded = eval_dataset.load_transient_annotation(
+        "data/argus/train_real/clip_overlay_demo_clip1_0.pt"
+    )
+    assert loaded == record
+
+    assert (
+        eval_dataset.delete_transient_annotation(
+            "data/argus/train_real/clip_overlay_demo_clip1_0.pt"
+        )
+        is True
+    )
+    assert (
+        eval_dataset.load_transient_annotation("data/argus/train_real/clip_overlay_demo_clip1_0.pt")
+        is None
+    )

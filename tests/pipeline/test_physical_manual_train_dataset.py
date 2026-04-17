@@ -42,6 +42,11 @@ def test_save_board_annotation_writes_manual_train_manifest_and_crops(
         "SQUARE_MANIFEST_PATH",
         dataset_root / "square_manifest.jsonl",
     )
+    monkeypatch.setattr(
+        manual_train_dataset,
+        "TRANSIENT_ANNOTATIONS_PATH",
+        dataset_root / "transient_annotations.jsonl",
+    )
 
     labels = [None] * 64
     labels[0] = 4
@@ -86,3 +91,69 @@ def test_save_board_annotation_writes_manual_train_manifest_and_crops(
     assert summary["dataset_root"] == "data/physical/train"
     assert summary["board_annotation_count"] == 1
     assert summary["square_crop_count"] == 2
+
+
+def test_save_transient_annotation_writes_manual_train_manifest(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    dataset_root = tmp_path / "data" / "physical" / "train"
+    monkeypatch.setattr(manual_train_dataset, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        manual_train_dataset.splits,
+        "ensure_annotation_layout_migrated",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        manual_train_dataset.splits,
+        "assign_source_video_split",
+        lambda _source_video_id, _split: _split,
+    )
+    monkeypatch.setattr(
+        manual_train_dataset,
+        "TRANSIENT_ANNOTATIONS_PATH",
+        dataset_root / "transient_annotations.jsonl",
+    )
+
+    record = manual_train_dataset.save_transient_annotation(
+        clip_path="data/argus/train_real/clip_overlay_demo_clip1_0.pt",
+        source_video_id="demo",
+        move_annotations=[
+            {
+                "move_index": 0,
+                "uci": "e7e5",
+                "san": "e5",
+                "move_frame_index": 15,
+                "side_to_move": "black",
+                "fen_before": "before",
+                "fen_after": "after",
+                "start_frame_index": 11,
+                "end_frame_index": 16,
+                "is_capture": False,
+            }
+        ],
+        hand_occlusion_spans=[{"start_frame_index": 10, "end_frame_index": 14}],
+    )
+
+    assert record["annotation_id"] == "clip_overlay_demo_clip1_0_transient"
+    assert record["total_moves"] == 1
+    assert record["move_annotations"][0]["move_frame_index"] == 15
+    assert record["hand_occlusion_spans"] == [{"start_frame_index": 10, "end_frame_index": 14}]
+
+    loaded = manual_train_dataset.load_transient_annotation(
+        "data/argus/train_real/clip_overlay_demo_clip1_0.pt"
+    )
+    assert loaded == record
+
+    assert (
+        manual_train_dataset.delete_transient_annotation(
+            "data/argus/train_real/clip_overlay_demo_clip1_0.pt"
+        )
+        is True
+    )
+    assert (
+        manual_train_dataset.load_transient_annotation(
+            "data/argus/train_real/clip_overlay_demo_clip1_0.pt"
+        )
+        is None
+    )

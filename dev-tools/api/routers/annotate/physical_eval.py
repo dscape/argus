@@ -27,6 +27,30 @@ class SaveAnnotationRequest(BaseModel):
     padding_px: int = 0
 
 
+class SaveTransientMoveAnnotationRequest(BaseModel):
+    move_index: int = Field(ge=0)
+    uci: str
+    san: str | None = None
+    move_frame_index: int = Field(ge=0)
+    side_to_move: str | None = None
+    fen_before: str | None = None
+    fen_after: str | None = None
+    start_frame_index: int | None = Field(default=None, ge=0)
+    end_frame_index: int | None = Field(default=None, ge=0)
+    is_capture: bool | None = None
+
+
+class HandOcclusionSpanRequest(BaseModel):
+    start_frame_index: int = Field(ge=0)
+    end_frame_index: int = Field(ge=0)
+
+
+class SaveTransientAnnotationRequest(BaseModel):
+    clip_path: str
+    move_annotations: list[SaveTransientMoveAnnotationRequest] = Field(default_factory=list)
+    hand_occlusion_spans: list[HandOcclusionSpanRequest] = Field(default_factory=list)
+
+
 @router.get("/clips")
 async def list_clip_files(clips_dir: str = "data/argus/train_real", limit: int = 200):
     return await run_in_threadpool(
@@ -71,6 +95,16 @@ async def get_move_corrections(session_id: str, clip_path: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.get("/transient-annotation")
+async def get_transient_annotation(clip_path: str):
+    return {
+        "annotation": await run_in_threadpool(
+            physical_eval_service.get_transient_annotation,
+            clip_path,
+        )
+    }
+
+
 @router.delete("/annotation")
 async def delete_annotation(clip_path: str, frame_index: int):
     summary = await run_in_threadpool(
@@ -81,6 +115,17 @@ async def delete_annotation(clip_path: str, frame_index: int):
     if summary is None:
         raise HTTPException(status_code=404, detail="Annotation not found")
     return {"summary": summary}
+
+
+@router.delete("/transient-annotation")
+async def delete_transient_annotation(clip_path: str):
+    deleted = await run_in_threadpool(
+        physical_eval_service.delete_transient_annotation,
+        clip_path,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Transient annotation not found")
+    return {"deleted": True}
 
 
 class DetectCornersRequest(BaseModel):
@@ -150,4 +195,14 @@ async def save_annotation(body: SaveAnnotationRequest):
         body.labels,
         output_size=body.output_size,
         padding_px=body.padding_px,
+    )
+
+
+@router.post("/save-transient-annotation")
+async def save_transient_annotation(body: SaveTransientAnnotationRequest):
+    return await run_in_threadpool(
+        physical_eval_service.save_transient_annotation,
+        body.clip_path,
+        [move.model_dump() for move in body.move_annotations],
+        [span.model_dump() for span in body.hand_occlusion_spans],
     )

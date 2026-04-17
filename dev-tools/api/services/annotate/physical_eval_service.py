@@ -72,8 +72,16 @@ def get_move_corrections(session_id: str, clip_path: str) -> dict[str, Any]:
     return _get_move_corrections(eval_dataset, session_id, clip_path)
 
 
+def get_transient_annotation(clip_path: str) -> dict[str, Any] | None:
+    return _get_transient_annotation(eval_dataset, clip_path)
+
+
 def delete_annotation(clip_path: str, frame_index: int) -> dict[str, Any] | None:
     return _delete_annotation(eval_dataset, clip_path, frame_index)
+
+
+def delete_transient_annotation(clip_path: str) -> bool:
+    return _delete_transient_annotation(eval_dataset, clip_path)
 
 
 def rectify_frame(
@@ -161,6 +169,19 @@ def save_annotation(
         labels,
         output_size=output_size,
         padding_px=padding_px,
+    )
+
+
+def save_transient_annotation(
+    clip_path: str,
+    move_annotations: list[dict[str, Any]],
+    hand_occlusion_spans: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return _save_transient_annotation(
+        eval_dataset,
+        clip_path,
+        move_annotations,
+        hand_occlusion_spans,
     )
 
 
@@ -270,6 +291,40 @@ def _delete_annotation(
     if not deleted:
         return None
     return dataset_module.get_annotation_summary()
+
+
+def _get_transient_annotation(
+    dataset_module: Any,
+    clip_path: str,
+) -> dict[str, Any] | None:
+    resolved = _resolve_within_project(clip_path)
+    return dataset_module.load_transient_annotation(str(resolved.relative_to(_PROJECT_ROOT)))
+
+
+def _delete_transient_annotation(
+    dataset_module: Any,
+    clip_path: str,
+) -> bool:
+    resolved = _resolve_within_project(clip_path)
+    return dataset_module.delete_transient_annotation(str(resolved.relative_to(_PROJECT_ROOT)))
+
+
+def _save_transient_annotation(
+    dataset_module: Any,
+    clip_path: str,
+    move_annotations: list[dict[str, Any]],
+    hand_occlusion_spans: list[dict[str, Any]],
+) -> dict[str, Any]:
+    resolved_clip_path = _resolve_within_project(clip_path)
+    relative_clip_path = str(resolved_clip_path.relative_to(_PROJECT_ROOT))
+    source_video_id = _source_video_id_from_path(resolved_clip_path)
+    annotation = dataset_module.save_transient_annotation(
+        clip_path=relative_clip_path,
+        source_video_id=source_video_id,
+        move_annotations=move_annotations,
+        hand_occlusion_spans=hand_occlusion_spans,
+    )
+    return {"annotation": annotation}
 
 
 def _annotation_projection_context_from_session(
