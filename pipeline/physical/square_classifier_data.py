@@ -66,9 +66,10 @@ class SquareSampleIndex:
 
 _AUGMENTATION_PIPELINE = T.Compose(
     [
-        T.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.15, hue=0.02),
-        T.RandomAffine(degrees=5, translate=(0.03, 0.03), scale=(0.95, 1.05)),
-        T.GaussianBlur(kernel_size=3, sigma=(0.1, 0.8)),
+        T.ColorJitter(brightness=0.35, contrast=0.35, saturation=0.25, hue=0.03),
+        T.RandomAffine(degrees=8, translate=(0.05, 0.05), scale=(0.92, 1.08)),
+        T.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),
+        T.RandomErasing(p=0.25, scale=(0.02, 0.12), ratio=(0.5, 2.0), value=0),
     ]
 )
 

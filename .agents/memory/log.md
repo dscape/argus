@@ -150,3 +150,11 @@ Reworked the physical transient-label UI so it no longer uses a separate full pa
 ## 2026-04-17T10:08:20.187Z | decision | high | Autosave physical touch and occlusion labels
 
 Removed the manual save button from the physical transient-label flow and switched touch/occlusion edits to autosave. The client now persists changes automatically after each valid edit, serializes saves to avoid out-of-order overwrites, and suppresses infinite retry loops for unchanged failing payloads. UI keeps only a minimal `Saving…` indicator while autosave is in flight.
+
+## 2026-04-17T14:50:44.912Z | plan | high | Audit physical reader families and projected-crop migration constraints
+
+Repo audit found that the current production physical runtime is still the board-probe path in `pipeline/physical/square_classifier.py` (despite the module name), used by analysis/dev-tools/tracker eval. The projection-based crop work currently feeds only the two-stage occupancy/piece dataset path in `pipeline/physical/square_classifier_data.py`; its runtime `pipeline/physical/two_stage_board_reader.py` still uses legacy `square_crop.py`, so that lane has a train/runtime geometry mismatch. README is materially stale for the physical stack: it omits `pipeline/physical`, board-probe/direct-board/autoresearch workspaces, and does not explain which paths are active vs experimental. Cleanup planning should therefore distinguish whole-board readers from square-crop readers instead of assuming piece-projection crops can be dropped into every model family.
+
+## 2026-04-17T15:05:51.713Z | decision | medium | Transient autosave waits for baseline sync before saving local edits
+
+Investigated `/annotate/physical` autosave misbehavior on `clip_overlay_h2WrtkfwRl8_clip8_6.pt`. Root cause was `usePhysicalTransientAnnotations` firing autosave from intermediate draft state while saved annotation / corrected move baseline was still being hydrated, and then firing a duplicate save immediately after successful saves. Fix in `dev-tools/hooks/usePhysicalTransientAnnotations.ts`: track local-dirty state separately from raw draft-vs-baseline diffs, merge occlusion toggles against refreshed baselines, block autosave while a baseline-sync draft update is pending, and clear dirty state immediately on successful save acknowledgement.

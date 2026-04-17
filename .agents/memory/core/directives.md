@@ -1,5 +1,5 @@
-- Goal from `outputs/plan.md`: push `board_exact` as close to 90% as current data/architecture support on the target split.
-- Diagnosis-first loop: baseline -> rerun failure study on current best eval -> review/tag failures -> choose experiments only from dominant buckets.
+- Goal from `outputs/plan.md`: push `board_exact` toward 90% on the target split.
+- Diagnosis-first loop: baseline -> rerun failure study on current best eval -> review/tag failures -> choose experiments from dominant buckets.
 - Keep repo changes minimal; prefer shrinking plan text rather than expanding it.
 - Do not commit local `.agents/memory/*` changes.
 - Preserve explicit invalidates/supersedes links when future memory replaces prior conclusions.
@@ -13,3 +13,4 @@
 - `authresearch_wholeboard` experiments should be tiny and hypothesis-driven, usually one or two knob changes; target under ~20 minutes, hard budget 30 minutes; if `train.py` is risky/runaway, restore toward `best_train.py` first.
 - In shell calculations, use `python3`, not `python`, for midpoint arithmetic.
 - Physical transient-label UX directives: use the existing move list as the primary labeling surface; do not revive a separate transient panel. Do not ask annotators to label capture/check manually; infer from replay/board state. Moves show `!` until both touch start/end are set, then `fstart > freplay > fend`; controls are `Touch start` and `Touch end`; resets are per-marker `×`; hand occlusion is edited directly on the frame; edits autosave.
+- For physical crop/geometry cleanup, treat legacy crop paths as invalid for active square-based physical models; distinguish square-based readers from whole-board readers rather than assuming projected piece crops apply to every family.

@@ -538,6 +538,49 @@ function AnnotationContent({
     return null;
   }, [effectiveMoves, selectedFrame]);
 
+  const stepFrameBackward = useCallback(() => {
+    setSelectedFrame((frame) => Math.max(0, frame - 1));
+  }, []);
+
+  const stepFrameForward = useCallback(() => {
+    setSelectedFrame((frame) => Math.min(frameCount - 1, frame + 1));
+  }, [frameCount]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target instanceof HTMLButtonElement ||
+        target instanceof HTMLVideoElement ||
+        target instanceof HTMLAnchorElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        stepFrameBackward();
+        return;
+      }
+
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        stepFrameForward();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [stepFrameBackward, stepFrameForward]);
+
   const rawMetadata = clipInfo.metadata as Record<string, unknown> | undefined;
   const metadataCameraBbox = asNumberList(rawMetadata?.camera_bbox, 4);
   const metadataRefResolution = asNumberList(rawMetadata?.ref_resolution, 2);
@@ -1169,8 +1212,8 @@ function AnnotationContent({
               type="button"
               className={NAV_STEP_BUTTON_CLASS}
               disabled={selectedFrame <= 0}
-              onClick={() => setSelectedFrame((f) => Math.max(0, f - 1))}
-              title="Step back"
+              onClick={stepFrameBackward}
+              title="Step back (←)"
             >
               &lt;
             </button>
@@ -1181,10 +1224,8 @@ function AnnotationContent({
               type="button"
               className={NAV_STEP_BUTTON_CLASS}
               disabled={selectedFrame >= frameCount - 1}
-              onClick={() =>
-                setSelectedFrame((f) => Math.min(frameCount - 1, f + 1))
-              }
-              title="Step forward"
+              onClick={stepFrameForward}
+              title="Step forward (→)"
             >
               &gt;
             </button>

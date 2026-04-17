@@ -20,6 +20,10 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+from pipeline.physical.piece_projection import (
+    extract_projected_occupancy_crop,
+    extract_projected_piece_crop,
+)
 from pipeline.physical.square_classifier_data import preprocess_square_crop
 from pipeline.physical.square_classifiers import (
     SquareClassifier,
@@ -28,8 +32,6 @@ from pipeline.physical.square_classifiers import (
 from pipeline.physical.square_crop import (
     DEFAULT_OCCUPANCY_CROP_SIZE,
     DEFAULT_PIECE_CROP_SIZE,
-    extract_all_occupancy_crops,
-    extract_all_piece_crops,
 )
 
 _EMPTY_CLASS_ID = 0
@@ -53,9 +55,12 @@ def read_board(
     device: torch.device | str = "cpu",
 ) -> TwoStageBoardReaderResult:
     """Run the two-stage reader on one frame and return per-square class ids."""
-    occupancy_crops = extract_all_occupancy_crops(
-        frame_bgr, corners, output_size=occupancy_crop_size
-    )
+    occupancy_crops = [
+        extract_projected_occupancy_crop(
+            frame_bgr, corners, row=i // 8, col=i % 8, output_size=occupancy_crop_size
+        )
+        for i in range(64)
+    ]
     occupancy_tensor = torch.stack(
         [preprocess_square_crop(crop, size=occupancy_crop_size) for crop in occupancy_crops],
         dim=0,
@@ -75,13 +80,20 @@ def read_board(
             class_ids = [_EMPTY_CLASS_ID] * 64
             occupied_indices = torch.nonzero(occupied_mask, as_tuple=False).flatten().tolist()
             if occupied_indices:
-                piece_crops = extract_all_piece_crops(
-                    frame_bgr, corners, output_size=piece_crop_size
-                )
+                piece_crops = [
+                    extract_projected_piece_crop(
+                        frame_bgr,
+                        corners,
+                        row=idx // 8,
+                        col=idx % 8,
+                        output_size=piece_crop_size,
+                    )
+                    for idx in occupied_indices
+                ]
                 piece_tensor = torch.stack(
                     [
-                        preprocess_square_crop(piece_crops[idx], size=piece_crop_size)
-                        for idx in occupied_indices
+                        preprocess_square_crop(crop, size=piece_crop_size)
+                        for crop in piece_crops
                     ],
                     dim=0,
                 ).to(device)
