@@ -1966,6 +1966,10 @@ export interface PhysicalEvalClip {
   annotated_frame_count: number;
   num_frames: number | null;
   fully_annotated: boolean;
+  has_transient_annotation: boolean;
+  touch_annotated_move_count: number;
+  total_move_count: number | null;
+  transient_annotation_complete: boolean;
   assigned_split: "train" | "val" | null;
 }
 

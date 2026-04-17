@@ -1,16 +1,17 @@
-"""Chesscog-style per-square crops for occupancy and piece classifiers.
+"""Per-square crops for occupancy and piece classifiers.
 
-The whole-board rectification clips piece tops that physically stand above the
-playing surface. This module instead extracts per-square crops directly from
-the original oblique frame using the board-to-image homography, extending the
-crop in board space so piece tops remain inside the tile. Geometry mirrors
-``chesscog`` (MIT, github.com/georg-wolflein/chesscog):
+Two extraction modes share this module:
 
-- occupancy crop: symmetric ``OCCUPANCY_PAD`` square-widths on all sides,
-  resized to a single square canvas.
-- piece crop: asymmetric, row-dependent top extension and column-dependent
-  outward extension toward the nearest image edge, with left-half columns
-  horizontally mirrored so the classifier sees one consistent chirality.
+- ``extract_occupancy_crop`` / ``extract_piece_crop`` (original chesscog-geometry
+  fallback). Board-coord extension with fixed constants; doesn't adapt to
+  camera angle and produces mostly-background crops for near-top-down cameras.
+- ``extract_projected_piece_crop`` (re-exported from ``piece_projection``).
+  Recovers the camera pose from the 4 board corners via ``cv2.solvePnP`` and
+  projects a 1x1x``piece_height`` 3D piece box through ``K[R|t]``. Adapts per
+  frame to the actual camera setup.
+
+The projected extractor is the default in new datasets; the chesscog fallback
+stays here so older tests and ad-hoc debugging tools keep working.
 """
 
 from __future__ import annotations
@@ -20,8 +21,8 @@ import numpy as np
 
 from pipeline.physical.oblique_square_context import board_to_image_transform
 
-DEFAULT_OCCUPANCY_CROP_SIZE = 96
-DEFAULT_PIECE_CROP_SIZE = 192
+DEFAULT_OCCUPANCY_CROP_SIZE = 112
+DEFAULT_PIECE_CROP_SIZE = 224
 
 OCCUPANCY_PAD = 0.5
 

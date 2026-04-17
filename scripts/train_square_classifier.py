@@ -38,7 +38,7 @@ from argus.device import resolve_device
 from argus.model.vision_encoder import VisionEncoder, default_model_name_for_encoder_type
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "square_classifier"
+_DEFAULT_OUTPUT_ROOT = _PROJECT_ROOT / "weights" / "physical" / "square_classifier"
 
 
 def main() -> None:
@@ -57,6 +57,7 @@ def main() -> None:
         train_rows=train_rows,
         val_rows=val_rows,
         input_size_override=args.input_size,
+        augment_train=args.augment,
     )
 
     model_name = args.model_name or default_model_name_for_encoder_type(args.encoder_type)
@@ -65,13 +66,18 @@ def main() -> None:
         model_name=model_name,
         frozen=args.freeze_encoder,
     )
+    if args.unfreeze_last_n > 0:
+        encoder.unfreeze_last_n_layers(args.unfreeze_last_n)
     classifier = SquareClassifier(
         vision_encoder=encoder,
         config=SquareClassifierConfig(num_classes=num_classes, dropout=args.dropout),
     ).to(device)
 
-    class_weights = _class_weights(train_dataset, num_classes=num_classes).to(device)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    if args.class_weighting:
+        class_weights = _class_weights(train_dataset, num_classes=num_classes).to(device)
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+    else:
+        criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(
         classifier.parameters(), lr=args.lr, weight_decay=args.weight_decay
     )
@@ -179,15 +185,20 @@ def _build_datasets(
     train_rows,
     val_rows,
     input_size_override: int | None,
+    augment_train: bool,
 ):
     if task == "occupancy":
         input_size = input_size_override or DEFAULT_OCCUPANCY_CROP_SIZE
-        train_dataset = OccupancySquareDataset(rows=train_rows, input_size=input_size)
+        train_dataset = OccupancySquareDataset(
+            rows=train_rows, input_size=input_size, augment=augment_train
+        )
         val_dataset = OccupancySquareDataset(rows=val_rows, input_size=input_size)
         return OCCUPANCY_NUM_CLASSES, input_size, train_dataset, val_dataset
     if task == "piece":
         input_size = input_size_override or DEFAULT_PIECE_CROP_SIZE
-        train_dataset = PieceSquareDataset(rows=train_rows, input_size=input_size)
+        train_dataset = PieceSquareDataset(
+            rows=train_rows, input_size=input_size, augment=augment_train
+        )
         val_dataset = PieceSquareDataset(rows=val_rows, input_size=input_size)
         return PIECE_NUM_CLASSES, input_size, train_dataset, val_dataset
     raise ValueError(f"unknown task: {task}")
@@ -240,6 +251,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--encoder-type", choices=("dinov2", "siglip2"), default="dinov2")
     parser.add_argument("--model-name", type=str, default=None)
     parser.add_argument("--freeze-encoder", action="store_true", default=True)
+    parser.add_argument(
+        "--unfreeze-last-n",
+        type=int,
+        default=0,
+        help="Unfreeze the last N transformer blocks of the encoder for fine-tuning.",
+    )
     parser.add_argument("--input-size", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=8)
@@ -247,6 +264,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument(
+        "--class-weighting",
+        action="store_true",
+        default=False,
+        help="Apply inverse-frequency class weighting in the loss (can hurt majority classes).",
+    )
+    parser.add_argument(
+        "--augment",
+        action="store_true",
+        default=False,
+        help="Enable color/affine/blur augmentation on the training set (not val).",
+    )
     return parser
 
 

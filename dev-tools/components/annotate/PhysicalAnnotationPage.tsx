@@ -5,8 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ChessBoard } from "@/components/ChessBoard";
 import { chessPieceSvg } from "@/components/chess-pieces";
-import { PhysicalTransientAnnotationPanel } from "@/components/annotate/PhysicalTransientAnnotationPanel";
 import { Badge } from "@/components/ui/badge";
+import { usePhysicalTransientAnnotations } from "@/hooks/usePhysicalTransientAnnotations";
 import {
   clipCameraFrameUrl,
   clipFrameUrl,
@@ -94,12 +94,6 @@ function cornerLabel(idx: number): string {
   return ["a8", "h8", "h1", "a1"][idx] ?? String(idx + 1);
 }
 
-function labelToken(label: number | null): string {
-  if (label == null) return "";
-  if (label === 0) return "\u00B7";
-  return SQUARE_CLASS_NAMES[label];
-}
-
 function emptyLabels(): Array<number | null> {
   return Array.from({ length: 64 }, () => null);
 }
@@ -153,6 +147,15 @@ function cycleLabel(current: number | null): number | null {
 
 function moveLabel(index: number, move: DetectedMove): string {
   return `#${index + 1} ${move.san || move.uci}`;
+}
+
+function moveTouchAnnotationComplete(annotation: {
+  start_frame_index: number | null;
+  end_frame_index: number | null;
+}): boolean {
+  return (
+    annotation.start_frame_index !== null && annotation.end_frame_index !== null
+  );
 }
 
 function normalizeAnnotationLabels(
@@ -423,6 +426,23 @@ function AnnotationContent({
   const effectiveMoves = moveCorrections?.moves ?? clipInfo.moves;
   const effectiveTotalMoves =
     moveCorrections?.total_moves ?? clipInfo.total_moves;
+  const [activeMoveIndex, setActiveMoveIndex] = useState<number | null>(null);
+  const {
+    saving: transientSaving,
+    hasInvalidMoveLabels: hasInvalidTransientMoveLabels,
+    moveAnnotations,
+    setMoveStartFrame,
+    setMoveEndFrame,
+    clearMoveStartFrame,
+    clearMoveEndFrame,
+    isFrameOccluded,
+    toggleFrameOccluded,
+  } = usePhysicalTransientAnnotations({
+    split,
+    clipPath,
+    effectiveMoves,
+    frameCount,
+  });
   const replayFen = effectiveFrameReplayFens[selectedFrame] ?? null;
 
   // Load source video
@@ -464,6 +484,23 @@ function AnnotationContent({
   );
   const selectedMove =
     selectedMoveIndex >= 0 ? effectiveMoves[selectedMoveIndex] : null;
+  const currentFrameOccluded = isFrameOccluded(selectedFrame);
+
+  useEffect(() => {
+    if (effectiveMoves.length === 0) {
+      setActiveMoveIndex(null);
+      return;
+    }
+    if (selectedMoveIndex >= 0) {
+      setActiveMoveIndex(selectedMoveIndex);
+      return;
+    }
+    setActiveMoveIndex((current) => {
+      if (current === null) return 0;
+      return Math.min(current, effectiveMoves.length - 1);
+    });
+  }, [effectiveMoves.length, selectedMoveIndex]);
+
   const displayedReplayFen = selectedMove?.fen_after ?? replayFen;
   const previousFrameDisplayedFen = useMemo(() => {
     if (selectedFrame <= 0) return null;
@@ -1245,6 +1282,16 @@ function AnnotationContent({
             )}
           </div>
           <div className="relative overflow-hidden rounded border">
+            <button
+              type="button"
+              onClick={() => toggleFrameOccluded(selectedFrame)}
+              className={`absolute right-2 top-2 z-20 rounded border px-2 py-1 text-[10px] font-medium shadow ${currentFrameOccluded ? "border-amber-500/60 bg-amber-500/90 text-black" : "border-black/30 bg-black/60 text-white hover:bg-black/70"}`}
+            >
+              {currentFrameOccluded ? "Hand occluded" : "Mark hand occluded"}
+            </button>
+            {currentFrameOccluded && (
+              <div className="pointer-events-none absolute inset-0 z-10 border-2 border-amber-500/80" />
+            )}
             <img
               ref={imageRef}
               src={frameUrl}
@@ -1390,32 +1437,150 @@ function AnnotationContent({
               </div>
             </div>
           )}
-          {effectiveMoves.length > 0 && (
-            <div className="flex min-h-0 flex-1 flex-col space-y-1">
-              <div className="shrink-0 text-[10px] font-medium">Moves</div>
-              <div className="min-h-0 flex-1 overflow-y-auto space-y-0.5 rounded border p-1">
-                {effectiveMoves.map((move, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => setSelectedFrame(move.frame_index)}
-                    className={`w-full text-left rounded px-1.5 py-0.5 text-[11px] ${move.frame_index === selectedFrame ? "bg-primary/10 font-medium" : "hover:bg-muted/50"}`}
-                  >
-                    #{i + 1}{" "}
-                    <span className="font-medium">{move.san || move.uci}</span>
-                    {move.is_manual && (
-                      <span className="ml-1 text-[10px] text-amber-600">
-                        manual
-                      </span>
-                    )}{" "}
-                    <span className="text-muted-foreground">
-                      f{move.frame_index}
-                    </span>
-                  </button>
-                ))}
+          <div className="flex min-h-0 flex-1 flex-col space-y-1">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded border p-2">
+              {hasInvalidTransientMoveLabels && (
+                <span className="text-[10px] text-amber-700 dark:text-amber-300">
+                  Invalid touch range
+                </span>
+              )}
+              <div className="ml-auto flex flex-wrap items-center gap-1">
+                {transientSaving && (
+                  <span className="px-1 text-[10px] text-muted-foreground">
+                    Saving…
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    activeMoveIndex !== null &&
+                    setMoveStartFrame(activeMoveIndex, selectedFrame)
+                  }
+                  disabled={activeMoveIndex === null}
+                  className="inline-flex h-7 items-center justify-center rounded border px-2 text-[11px] disabled:opacity-40"
+                >
+                  Touch start
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    activeMoveIndex !== null &&
+                    setMoveEndFrame(activeMoveIndex, selectedFrame)
+                  }
+                  disabled={activeMoveIndex === null}
+                  className="inline-flex h-7 items-center justify-center rounded border px-2 text-[11px] disabled:opacity-40"
+                >
+                  Touch end
+                </button>
               </div>
             </div>
-          )}
+
+            <div className="min-h-0 flex-1 overflow-y-auto space-y-0.5 rounded border p-1">
+              {effectiveMoves.length === 0 ? (
+                <div className="px-1.5 py-2 text-[11px] text-muted-foreground">
+                  No replay moves available for this clip.
+                </div>
+              ) : (
+                effectiveMoves.map((move, i) => {
+                  const annotation = moveAnnotations[i];
+                  const moveComplete = annotation
+                    ? moveTouchAnnotationComplete(annotation)
+                    : false;
+                  return (
+                    <div
+                      key={i}
+                      onClick={() => {
+                        setActiveMoveIndex(i);
+                        setSelectedFrame(move.frame_index);
+                      }}
+                      className={`flex items-center justify-between gap-2 rounded px-1.5 py-1 text-[11px] ${activeMoveIndex === i ? "bg-primary/10 font-medium" : "hover:bg-muted/50"}`}
+                    >
+                      <span className="min-w-0">
+                        #{i + 1}{" "}
+                        <span className="font-medium">
+                          {move.san || move.uci}
+                        </span>
+                        {move.is_manual && (
+                          <span className="ml-1 text-[10px] text-amber-600">
+                            manual
+                          </span>
+                        )}
+                      </span>
+                      <div className="flex shrink-0 items-center gap-1 font-mono text-[10px]">
+                        {!moveComplete && (
+                          <span className="text-amber-600">!</span>
+                        )}
+                        {annotation &&
+                          annotation.start_frame_index !== null && (
+                            <div className="relative pr-1">
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedFrame(
+                                    annotation.start_frame_index!,
+                                  );
+                                }}
+                                className="rounded border px-1.5 py-0.5 text-muted-foreground hover:bg-muted"
+                              >
+                                f{annotation.start_frame_index}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  clearMoveStartFrame(i);
+                                }}
+                                className="absolute -right-1 -top-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border bg-background text-[9px] leading-none text-muted-foreground hover:text-foreground"
+                                title="Clear touch start"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          )}
+                        {moveComplete && (
+                          <span className="text-muted-foreground">&gt;</span>
+                        )}
+                        {moveComplete && (
+                          <span className="text-muted-foreground">
+                            f{annotation?.move_frame_index}
+                          </span>
+                        )}
+                        {moveComplete && (
+                          <span className="text-muted-foreground">&gt;</span>
+                        )}
+                        {annotation && annotation.end_frame_index !== null && (
+                          <div className="relative pr-1">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setSelectedFrame(annotation.end_frame_index!);
+                              }}
+                              className="rounded border px-1.5 py-0.5 text-muted-foreground hover:bg-muted"
+                            >
+                              f{annotation.end_frame_index}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                clearMoveEndFrame(i);
+                              }}
+                              className="absolute -right-1 -top-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border bg-background text-[9px] leading-none text-muted-foreground hover:text-foreground"
+                              title="Clear touch end"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Right: Physical board annotation */}
@@ -1572,15 +1737,6 @@ function AnnotationContent({
           </div>
         </div>
       </div>
-
-      <PhysicalTransientAnnotationPanel
-        split={split}
-        clipPath={clipPath}
-        effectiveMoves={effectiveMoves}
-        selectedFrame={selectedFrame}
-        setSelectedFrame={setSelectedFrame}
-        frameCount={frameCount}
-      />
 
       {/* Frame slider */}
       <div className="flex items-center gap-2">

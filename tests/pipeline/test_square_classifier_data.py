@@ -43,7 +43,7 @@ def test_occupancy_dataset_yields_64_samples_per_board(tmp_path: Path) -> None:
     try:
         from pipeline.physical.square_classifier_data import load_occupancy_dataset
 
-        dataset = load_occupancy_dataset(annotation_root, input_size=32)
+        dataset = load_occupancy_dataset(annotation_root, input_size=32, use_native_frames=False)
         assert len(dataset) == 64
         image, label = dataset[0]
         assert image.shape == (3, 32, 32)
@@ -69,7 +69,7 @@ def test_piece_dataset_skips_empty_squares_and_emits_12_class_labels(tmp_path: P
     try:
         from pipeline.physical.square_classifier_data import load_piece_dataset
 
-        dataset = load_piece_dataset(annotation_root, input_size=32)
+        dataset = load_piece_dataset(annotation_root, input_size=32, use_native_frames=False)
         assert len(dataset) == 3
         piece_labels = sorted(int(dataset[i][1].item()) for i in range(3))
         assert piece_labels == [0, 5, 11]
@@ -90,7 +90,7 @@ def test_occupancy_dataset_class_counts_match_label_distribution(tmp_path: Path)
     try:
         from pipeline.physical.square_classifier_data import load_occupancy_dataset
 
-        dataset = load_occupancy_dataset(annotation_root, input_size=32)
+        dataset = load_occupancy_dataset(annotation_root, input_size=32, use_native_frames=False)
     finally:
         oblique_context._PROJECT_ROOT = original_root
 

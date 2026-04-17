@@ -26,8 +26,14 @@ def test_list_clip_files_excludes_held_out_videos(tmp_path, monkeypatch) -> None
         "get_saved_frame_counts_by_clip",
         lambda: {},
     )
+    monkeypatch.setattr(
+        physical_train_service.manual_train_dataset,
+        "load_transient_annotation",
+        lambda _clip_path: None,
+    )
 
     result = physical_train_service.list_clip_files("data/argus/train_real")
 
     assert [clip["source_video_id"] for clip in result["clips"]] == ["demo"]
     assert result["clips"][0]["clip_path"] == "data/argus/train_real/clip_overlay_demo_clip12_0.pt"
+    assert result["clips"][0]["transient_annotation_complete"] is False

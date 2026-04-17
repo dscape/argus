@@ -142,3 +142,11 @@ User diagnosis: dominant error is temporal move-execution ambiguity and the trac
 ## 2026-04-17T07:28:47.681Z | decision | high | Add transient physical clip labels to annotation tool
 
 Extended the physical annotation flow to persist clip-level transient labels per split in `data/physical/{train,val}/transient_annotations.jsonl`. Added API endpoints to load/save/delete per-clip transient annotations, dataset helpers for move timing and hand-occlusion spans, a new `PhysicalTransientAnnotationPanel` in the physical annotation UI, and tests covering transient save/load/delete for eval and manual-train datasets. Labels cover per-move start frame, settled frame, capture flag, and hand-occluded spans.
+
+## 2026-04-17T09:16:44.890Z | decision | high | Simplify physical transient labeling UX around move list
+
+Reworked the physical transient-label UI so it no longer uses a separate full panel or manual capture labeling. The existing move list is now the primary labeling surface: each move shows `!` until both touch start and touch end are set, then displays `fstart > freplay > fend`. Two buttons set touch start/end for the active move at the current frame. Hand occlusion is toggled directly on the source frame image, while persistence still uses split-local `transient_annotations.jsonl`. The clip index checkmark now reflects completed transient move coverage instead of frame-annotation completeness.
+
+## 2026-04-17T10:08:20.187Z | decision | high | Autosave physical touch and occlusion labels
+
+Removed the manual save button from the physical transient-label flow and switched touch/occlusion edits to autosave. The client now persists changes automatically after each valid edit, serializes saves to avoid out-of-order overwrites, and suppresses infinite retry loops for unchanged failing payloads. UI keeps only a minimal `Saving…` indicator while autosave is in flight.
