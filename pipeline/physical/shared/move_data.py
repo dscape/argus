@@ -16,10 +16,10 @@ from argus.chess.constraint_mask import get_legal_mask
 from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
 from pipeline.overlay.overlay_move_detector import find_move_between_positions
 from pipeline.physical.shared import splits
-from pipeline.physical.board_probe.board_data import prepare_board_neighborhood_image
-from pipeline.physical.shared.annotation_rows import (
-    _load_clip_frame_bgr,
-    load_annotated_oblique_rows,
+from pipeline.physical.board_probe.board_data import (
+    load_annotated_board_frame_bgr,
+    load_annotated_board_rows,
+    prepare_board_neighborhood_image,
 )
 from pipeline.physical.shared.real_board_data import (
     _build_replay_board,
@@ -266,7 +266,7 @@ def load_eval_move_sequences(
     if observation_mode != _OBSERVATION_MODE:
         raise ValueError(f"Unsupported observation_mode: {observation_mode}")
 
-    rows = load_annotated_oblique_rows(annotation_root)
+    rows = load_annotated_board_rows(annotation_root)
     rows_by_clip: dict[str, list[Any]] = defaultdict(list)
     for row in rows:
         rows_by_clip[row.clip_path].append(row)
@@ -287,7 +287,7 @@ def load_eval_move_sequences(
         frame_indices = []
         board_corners = []
         for row in clip_rows:
-            image_bgr = _load_clip_frame_bgr(row, clip_cache=clip_cache)
+            image_bgr = load_annotated_board_frame_bgr(row, clip_cache=clip_cache)
             board_image, scaled_corners = _prepare_projected_board_frame(
                 image_bgr,
                 row.corners,

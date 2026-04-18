@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,8 +15,13 @@ import torch
 from torch.utils.data import Dataset
 
 from argus.chess.board_state import fen_to_square_targets
-from pipeline.physical.piece_projection import extract_board_neighborhood_crop
+from pipeline.physical.piece_projection import (
+    extract_board_neighborhood_crop,
+    project_piece_bboxes,
+    transform_projected_bboxes_to_crop_space,
+)
 from pipeline.physical.shared import splits
+from pipeline.physical.shared.source_video_paths import resolve_source_video_path
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 INPUT_SIZE = 224
@@ -38,6 +44,10 @@ class PhysicalEvalBoardRow:
     corners: tuple[tuple[float, float], ...]
     clip_path: str | None = None
     frame_index: int | None = None
+    source_frame_index: int | None = None
+    native_corners: tuple[tuple[float, float], ...] | None = None
+    native_image_bbox: tuple[int, int, int, int] | None = None
+    clip_frame_size: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -96,7 +106,7 @@ class PhysicalSyntheticClipBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor
 
 
 class PhysicalAnnotatedBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
-    """Annotated real boards loaded from original clip frames plus annotation corners."""
+    """Annotated real boards with projected piece-box geometry in board-crop space."""
 
     def __init__(
         self,
@@ -118,14 +128,14 @@ class PhysicalAnnotatedBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor, to
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         row = self.rows[index]
         image_bgr = load_annotated_board_frame_bgr(row, clip_cache=self._clip_cache)
-        image, corners = preprocess_board_neighborhood_image(
+        image, _scaled_corners, piece_bboxes = preprocess_board_neighborhood_geometry(
             image_bgr,
             row.corners,
             size=self.image_size,
             crop_margin=self.crop_margin,
         )
         targets = torch.tensor(row.labels, dtype=torch.long)
-        return image, targets, corners
+        return image, targets, piece_bboxes
 
 
 class PhysicalValBoardDataset(PhysicalAnnotatedBoardDataset):
@@ -193,19 +203,46 @@ def load_annotated_board_rows(annotation_root: str | Path) -> list[PhysicalEvalB
             continue
         if payload.get("clip_path") is None or payload.get("frame_index") is None:
             continue
+        source_video_id = (
+            str(payload["source_video_id"])
+            if payload.get("source_video_id") is not None
+            else None
+        )
+        native_corners = None
+        raw_native_corners = payload.get("native_corners")
+        if isinstance(raw_native_corners, list) and len(raw_native_corners) == 4:
+            native_corners = tuple((float(x), float(y)) for x, y in raw_native_corners)
+        native_image_bbox = None
+        raw_native_image_bbox = payload.get("native_image_bbox")
+        if isinstance(raw_native_image_bbox, list) and len(raw_native_image_bbox) == 4:
+            native_image_bbox = tuple(int(value) for value in raw_native_image_bbox)
+        clip_frame_size = None
+        raw_clip_frame_size = payload.get("clip_frame_size")
+        if isinstance(raw_clip_frame_size, list) and len(raw_clip_frame_size) == 2:
+            clip_frame_size = (int(raw_clip_frame_size[0]), int(raw_clip_frame_size[1]))
+
+        corners = tuple((float(x), float(y)) for x, y in raw_corners)
+        if native_corners is not None and native_image_bbox is not None:
+            x_off, y_off, _width, _height = native_image_bbox
+            corners = tuple((float(x + x_off), float(y + y_off)) for x, y in native_corners)
+
         rows.append(
             PhysicalEvalBoardRow(
                 annotation_id=str(payload["annotation_id"]),
                 board_path=str(payload["rectified_board_path"]),
                 labels=tuple(int(label) for label in raw_labels),
-                source_video_id=(
-                    str(payload["source_video_id"])
-                    if payload.get("source_video_id") is not None
-                    else None
-                ),
-                corners=tuple((float(x), float(y)) for x, y in raw_corners),
+                source_video_id=source_video_id,
+                corners=corners,
                 clip_path=str(payload["clip_path"]),
                 frame_index=int(payload["frame_index"]),
+                source_frame_index=(
+                    int(payload["source_frame_index"])
+                    if payload.get("source_frame_index") is not None
+                    else None
+                ),
+                native_corners=native_corners,
+                native_image_bbox=native_image_bbox,
+                clip_frame_size=clip_frame_size,
             )
         )
     return rows
@@ -283,13 +320,13 @@ def preprocess_board_image(image_bgr: np.ndarray, *, size: int = INPUT_SIZE) -> 
     return normalize_rgb_tensor(tensor)
 
 
-def prepare_board_neighborhood_image(
+def prepare_board_neighborhood_geometry(
     image_bgr: np.ndarray,
     corners: tuple[tuple[float, float], ...] | list[list[float]],
     *,
     size: int = INPUT_SIZE,
     crop_margin: float = _DEFAULT_BOARD_CROP_MARGIN,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     crop = extract_board_neighborhood_crop(image_bgr, corners, crop_margin=crop_margin)
     rgb = cv2.cvtColor(crop.image_bgr, cv2.COLOR_BGR2RGB)
     interpolation = cv2.INTER_AREA if min(rgb.shape[:2]) >= size else cv2.INTER_LINEAR
@@ -300,7 +337,34 @@ def prepare_board_neighborhood_image(
     scaled_corners = crop.corners.copy()
     scaled_corners[:, 0] *= float(size) / max(float(width), 1.0)
     scaled_corners[:, 1] *= float(size) / max(float(height), 1.0)
-    return tensor, torch.from_numpy(scaled_corners.astype(np.float32))
+
+    piece_bboxes = project_piece_bboxes(corners, frame_shape=image_bgr.shape)
+    scaled_piece_bboxes = transform_projected_bboxes_to_crop_space(
+        piece_bboxes,
+        crop,
+        output_shape=size,
+    )
+    return (
+        tensor,
+        torch.from_numpy(scaled_corners.astype(np.float32)),
+        torch.from_numpy(scaled_piece_bboxes.astype(np.float32)),
+    )
+
+
+def prepare_board_neighborhood_image(
+    image_bgr: np.ndarray,
+    corners: tuple[tuple[float, float], ...] | list[list[float]],
+    *,
+    size: int = INPUT_SIZE,
+    crop_margin: float = _DEFAULT_BOARD_CROP_MARGIN,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    tensor, scaled_corners, _scaled_piece_bboxes = prepare_board_neighborhood_geometry(
+        image_bgr,
+        corners,
+        size=size,
+        crop_margin=crop_margin,
+    )
+    return tensor, scaled_corners
 
 
 def preprocess_board_neighborhood_image(
@@ -317,6 +381,22 @@ def preprocess_board_neighborhood_image(
         crop_margin=crop_margin,
     )
     return normalize_rgb_tensor(tensor), scaled_corners
+
+
+def preprocess_board_neighborhood_geometry(
+    image_bgr: np.ndarray,
+    corners: tuple[tuple[float, float], ...] | list[list[float]],
+    *,
+    size: int = INPUT_SIZE,
+    crop_margin: float = _DEFAULT_BOARD_CROP_MARGIN,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    tensor, scaled_corners, scaled_piece_bboxes = prepare_board_neighborhood_geometry(
+        image_bgr,
+        corners,
+        size=size,
+        crop_margin=crop_margin,
+    )
+    return normalize_rgb_tensor(tensor), scaled_corners, scaled_piece_bboxes
 
 
 def normalize_rgb_tensor(tensor: torch.Tensor) -> torch.Tensor:
@@ -354,14 +434,51 @@ def _scaled_full_frame_corners(frame_bgr: np.ndarray, *, size: int) -> torch.Ten
     )
 
 
+class _NativeFrameLoader:
+    def __init__(self, *, capacity: int = 64) -> None:
+        self._capacity = capacity
+        self._frames: OrderedDict[tuple[Path, int], np.ndarray] = OrderedDict()
+        self._captures: dict[Path, cv2.VideoCapture] = {}
+
+    def load(self, *, source_video_id: str, source_frame_index: int) -> np.ndarray:
+        video_path = resolve_source_video_path(source_video_id)
+        key = (video_path, int(source_frame_index))
+        cached = self._frames.get(key)
+        if cached is not None:
+            self._frames.move_to_end(key)
+            return cached
+        capture = self._captures.get(video_path)
+        if capture is None:
+            capture = cv2.VideoCapture(str(video_path))
+            if not capture.isOpened():
+                raise ValueError(f"Failed to open video {video_path}")
+            self._captures[video_path] = capture
+        capture.set(cv2.CAP_PROP_POS_FRAMES, int(source_frame_index))
+        ok, frame = capture.read()
+        if not ok or frame is None:
+            raise ValueError(f"Failed to read frame {source_frame_index} from {video_path}")
+        self._frames[key] = frame
+        if len(self._frames) > self._capacity:
+            self._frames.popitem(last=False)
+        return frame
+
+
+_NATIVE_FRAME_LOADER = _NativeFrameLoader()
+
+
 def load_annotated_board_frame_bgr(
     row: PhysicalEvalBoardRow,
     *,
     clip_cache: dict[Path, dict[str, Any]],
 ) -> np.ndarray:
+    if row.source_video_id is not None and row.source_frame_index is not None:
+        return _NATIVE_FRAME_LOADER.load(
+            source_video_id=row.source_video_id,
+            source_frame_index=row.source_frame_index,
+        )
     if row.clip_path is None or row.frame_index is None:
         raise ValueError(
-            "Annotated board rows require clip_path and frame_index for piece-projection inputs"
+            "Annotated board rows require clip_path/frame_index or source-video metadata"
         )
     return _load_clip_frame_bgr(row, clip_cache=clip_cache)
 

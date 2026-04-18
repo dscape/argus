@@ -25,11 +25,14 @@ def _visualized_frame(row: PhysicalEvalBoardRow) -> VisualizedRuntimeFrame:
     labels = tuple(int(value) for value in row.labels)
     confidences = (0.5,) * 64
     no_changes = (False,) * 64
+    empty_quads = tuple(((0.0, 0.0),) * 4 for _ in range(64))
+    empty_bboxes = tuple((0.0, 0.0, 0.0, 0.0) for _ in range(64))
     return VisualizedRuntimeFrame(
         frame_index=int(row.frame_index or 0),
         annotation_id=row.annotation_id,
         board_path=row.board_path,
         crop_rgb=np.zeros((8, 8, 3), dtype=np.uint8),
+        source_rgb=np.zeros((8, 8, 3), dtype=np.uint8),
         gt_class_ids=labels,
         stateless_class_ids=labels,
         temporal_class_ids=labels,
@@ -43,6 +46,10 @@ def _visualized_frame(row: PhysicalEvalBoardRow) -> VisualizedRuntimeFrame:
         gt_changed_mask=no_changes,
         stateless_changed_mask=no_changes,
         temporal_changed_mask=no_changes,
+        square_quads=empty_quads,
+        piece_bboxes=empty_bboxes,
+        source_square_quads=empty_quads,
+        source_piece_bboxes=empty_bboxes,
     )
 
 
@@ -99,3 +106,7 @@ def test_inspect_runtime_frames_groups_by_clip_and_preserves_input_order(monkeyp
         ("data/argus/train_real/clip_a.pt", {1, 2}),
     ]
     assert all(result["temporal_exact_match"] for result in results)
+    assert all(result["geometry_space"] == "source_frame_normalized" for result in results)
+    assert all(result.get("image_b64") for result in results)
+    assert all(result["image_render_mode"] == "source_frame_raw" for result in results)
+    assert all(result["image_width"] == 8 and result["image_height"] == 8 for result in results)

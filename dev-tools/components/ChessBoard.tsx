@@ -28,6 +28,7 @@ interface Props {
   highlightedSquares?: string[];
   arrows?: ChessArrow[];
   squareStyles?: Record<string, SquareStyle>;
+  onSquareHover?: (square: string | null) => void;
 }
 
 type Square = {
@@ -48,6 +49,7 @@ export function ChessBoard({
   highlightedSquares = [],
   arrows = [],
   squareStyles = {},
+  onSquareHover,
 }: Props) {
   const sqSize = size / 8;
   const boardFen = fen.split(" ")[0] ?? fen;
@@ -73,7 +75,13 @@ export function ChessBoard({
   const highlightSet = new Set(highlightedSquares);
 
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="border rounded">
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      className={`border rounded ${onSquareHover ? "cursor-crosshair" : ""}`}
+      onMouseLeave={() => onSquareHover?.(null)}
+    >
       {squares.map(({ row, col }) => {
         const { x, y } = squareTopLeft(row, col, sqSize, flipped);
         const isLight = (row + col) % 2 === 0;
@@ -156,6 +164,23 @@ export function ChessBoard({
           </g>
         );
       })}
+
+      {onSquareHover &&
+        squares.map(({ row, col }) => {
+          const { x, y } = squareTopLeft(row, col, sqSize, flipped);
+          const squareName = boardCoordsToSquare(row, col);
+          return (
+            <rect
+              key={`hover-${row}-${col}`}
+              x={x}
+              y={y}
+              width={sqSize}
+              height={sqSize}
+              fill="transparent"
+              onMouseEnter={() => onSquareHover(squareName)}
+            />
+          );
+        })}
     </svg>
   );
 }

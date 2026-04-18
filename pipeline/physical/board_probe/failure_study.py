@@ -36,6 +36,11 @@ from pipeline.physical.board_probe.runtime import (
     board_observation_from_logits,
     read_board_logits_batch_from_frames,
 )
+from pipeline.physical.piece_projection import (
+    camera_pose_from_corners,
+    default_camera_matrix,
+    project_piece_box,
+)
 from pipeline.shared import (
     SQUARE_CLASS_NAMES,
     BoardTrackerResult,
@@ -260,7 +265,8 @@ def create_tracker_failure_study(
             )
             rendered = _render_failure_frame(
                 frame_payload.payload,
-                crop_rgb=cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB),
+                image_bgr=image_bgr,
+                corners=frame_payload.row.corners,
                 panel_size=panel_size,
                 annotation_suffix=annotation_suffix,
             )
@@ -922,7 +928,8 @@ def _load_row_image(
 def _render_failure_frame(
     payload: dict[str, Any],
     *,
-    crop_rgb: np.ndarray,
+    image_bgr: np.ndarray,
+    corners: tuple[tuple[float, float], ...] | list[list[float]] | None,
     panel_size: int,
     annotation_suffix: str | None = None,
 ) -> Image.Image:
@@ -966,7 +973,7 @@ def _render_failure_frame(
 
     top = margin + header_height + panel_labels_height
     lefts = [margin + (panel_size + panel_gap) * index for index in range(4)]
-    labels = ["crop", "ground truth", "stateless", "decoded"]
+    labels = ["geometry", "ground truth", "stateless", "decoded"]
     gt_class_ids = tuple(_fen_to_class_ids(str(payload["gt_fen"])))
     stateless_class_ids = tuple(_fen_to_class_ids(str(payload["stateless_fen"])))
     decoded_class_ids = tuple(_fen_to_class_ids(str(payload["decoded_fen"])))
@@ -975,8 +982,9 @@ def _render_failure_frame(
     decoded_changed_mask = _square_mask(payload.get("decoded_changed_squares"))
 
     panels = [
-        _render_crop_panel(
-            crop_rgb,
+        _render_geometry_panel(
+            image_bgr,
+            corners=corners,
             panel_size=panel_size,
             gt_class_ids=gt_class_ids,
             decoded_class_ids=decoded_class_ids,
@@ -1017,9 +1025,10 @@ def _render_failure_frame(
     return image
 
 
-def _render_crop_panel(
-    crop_rgb: np.ndarray,
+def _render_geometry_panel(
+    image_bgr: np.ndarray,
     *,
+    corners: tuple[tuple[float, float], ...] | list[list[float]] | None,
     panel_size: int,
     gt_class_ids: tuple[int, ...],
     decoded_class_ids: tuple[int, ...],
@@ -1027,41 +1036,109 @@ def _render_crop_panel(
     gt_changed_mask: tuple[bool, ...],
     decoded_changed_mask: tuple[bool, ...],
 ) -> Image.Image:
-    image = Image.fromarray(crop_rgb).resize(
-        (panel_size, panel_size),
-        Image.Resampling.BILINEAR,
-    )
-    overlay = Image.new("RGBA", (panel_size, panel_size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-    cell = panel_size / 8.0
+    del decoded_confidences
+    if corners is None:
+        return _fit_rgb_panel(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB), panel_size=panel_size)
 
-    for square_index, (target, predicted, confidence) in enumerate(
-        zip(gt_class_ids, decoded_class_ids, decoded_confidences)
-    ):
+    overlay_bgr = _render_piece_projection_overlay(
+        frame=image_bgr,
+        corners=corners,
+        labels=gt_class_ids,
+    )
+    _draw_projection_highlights(
+        overlay_bgr,
+        corners=corners,
+        gt_class_ids=gt_class_ids,
+        decoded_class_ids=decoded_class_ids,
+        gt_changed_mask=gt_changed_mask,
+        decoded_changed_mask=decoded_changed_mask,
+    )
+    return _fit_rgb_panel(cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB), panel_size=panel_size)
+
+
+def _render_piece_projection_overlay(
+    *,
+    frame: np.ndarray,
+    corners: tuple[tuple[float, float], ...] | list[list[float]],
+    labels: tuple[int, ...],
+) -> np.ndarray:
+    overlay = frame.copy()
+    pose = camera_pose_from_corners(corners, K=default_camera_matrix(frame.shape))
+
+    for square_index in range(64):
         row = square_index // 8
         col = square_index % 8
-        x0 = int(round(col * cell))
-        y0 = int(round(row * cell))
-        x1 = int(round((col + 1) * cell))
-        y1 = int(round((row + 1) * cell))
+        box = project_piece_box(pose, row=row, col=col, piece_height=2.0, corners=corners)
+        xs, ys = box[:, 0], box[:, 1]
+        bbox = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
+        class_id = int(labels[square_index])
+        color = (180, 180, 180) if class_id == 0 else (40, 180, 240)
+        cv2.rectangle(overlay, bbox[:2], bbox[2:], color, 1)
+        base = box[:4].astype(np.int32)
+        cv2.polylines(overlay, [base], isClosed=True, color=(60, 200, 60), thickness=1)
+        center = base.mean(axis=0).astype(int)
+        square_name = f"{chr(ord('a') + col)}{8 - row}"
+        cv2.putText(
+            overlay,
+            square_name,
+            (center[0] - 10, center[1] + 3),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            (220, 40, 40),
+            1,
+            cv2.LINE_AA,
+        )
 
+    for index, (x, y) in enumerate(corners):
+        cv2.circle(overlay, (int(x), int(y)), 5, (255, 255, 255), -1)
+        cv2.putText(
+            overlay,
+            f"c{index}",
+            (int(x) + 6, int(y) - 4),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+    return overlay
+
+
+def _draw_projection_highlights(
+    image_bgr: np.ndarray,
+    *,
+    corners: tuple[tuple[float, float], ...] | list[list[float]],
+    gt_class_ids: tuple[int, ...],
+    decoded_class_ids: tuple[int, ...],
+    gt_changed_mask: tuple[bool, ...],
+    decoded_changed_mask: tuple[bool, ...],
+) -> None:
+    pose = camera_pose_from_corners(corners, K=default_camera_matrix(image_bgr.shape))
+    for square_index, (target, predicted) in enumerate(zip(gt_class_ids, decoded_class_ids)):
+        row = square_index // 8
+        col = square_index % 8
+        box = project_piece_box(pose, row=row, col=col, piece_height=2.0, corners=corners)
+        base = box[:4].astype(np.int32)
         if target != predicted:
-            alpha = 40 + int(110 * float(confidence))
-            draw.rectangle((x0, y0, x1, y1), fill=(*_ERROR_COLOR, alpha))
-
+            cv2.polylines(image_bgr, [base], isClosed=True, color=_ERROR_COLOR, thickness=2)
         if gt_changed_mask[square_index]:
-            draw.rectangle((x0 + 1, y0 + 1, x1 - 1, y1 - 1), outline=_GT_CHANGED_BORDER, width=3)
+            cv2.polylines(image_bgr, [base], isClosed=True, color=_GT_CHANGED_BORDER, thickness=3)
         elif decoded_changed_mask[square_index]:
-            draw.rectangle((x0 + 1, y0 + 1, x1 - 1, y1 - 1), outline=_PRED_CHANGED_BORDER, width=2)
+            cv2.polylines(image_bgr, [base], isClosed=True, color=_PRED_CHANGED_BORDER, thickness=2)
 
-    grid_draw = ImageDraw.Draw(overlay)
-    for line_index in range(9):
-        x = int(round(line_index * cell))
-        y = int(round(line_index * cell))
-        grid_draw.line((x, 0, x, panel_size), fill=(*_GRID_COLOR, 180), width=1)
-        grid_draw.line((0, y, panel_size, y), fill=(*_GRID_COLOR, 180), width=1)
 
-    return Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
+def _fit_rgb_panel(rgb: np.ndarray, *, panel_size: int) -> Image.Image:
+    height, width = rgb.shape[:2]
+    scale = min(float(panel_size) / max(float(width), 1.0), float(panel_size) / max(float(height), 1.0))
+    new_width = max(1, int(round(width * scale)))
+    new_height = max(1, int(round(height * scale)))
+    interpolation = cv2.INTER_AREA if max(width, height) >= panel_size else cv2.INTER_LINEAR
+    resized = cv2.resize(rgb, (new_width, new_height), interpolation=interpolation)
+    canvas = np.full((panel_size, panel_size, 3), 255, dtype=np.uint8)
+    x_offset = (panel_size - new_width) // 2
+    y_offset = (panel_size - new_height) // 2
+    canvas[y_offset : y_offset + new_height, x_offset : x_offset + new_width] = resized
+    return Image.fromarray(canvas)
 
 
 def _render_board_panel(

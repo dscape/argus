@@ -525,6 +525,22 @@ def _runtime_result_from_frame(
         "temporal_mean_confidence": round(frame.temporal_mean_confidence, 4),
         "elapsed_ms": elapsed_ms,
         "thumbnail_b64": _image_to_base64(Image.fromarray(frame.crop_rgb)),
+        "image_b64": _image_to_base64(Image.fromarray(frame.source_rgb)),
+        "image_render_mode": "source_frame_raw",
+        "image_width": int(frame.source_rgb.shape[1]),
+        "image_height": int(frame.source_rgb.shape[0]),
+        "geometry_space": "source_frame_normalized",
+        "geometry_square_quads": {
+            _square_name(index): [
+                [round(float(point[0]), 6), round(float(point[1]), 6)]
+                for point in quad
+            ]
+            for index, quad in enumerate(frame.source_square_quads)
+        },
+        "geometry_piece_bboxes": {
+            _square_name(index): [round(float(value), 6) for value in bbox]
+            for index, bbox in enumerate(frame.source_piece_bboxes)
+        },
     }
 
 

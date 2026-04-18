@@ -144,6 +144,12 @@ def test_load_eval_move_sequences_supports_piece_projection_board(
     annotation_root = tmp_path / "physical_val"
     annotation_root.mkdir(parents=True)
     labels = board_to_class_ids(board)
+    raw_corners = [[0, 0], [9, 0], [9, 9], [0, 9]]
+    native_corners = [[1, 2], [18, 2], [18, 17], [1, 17]]
+    native_bbox = [10, 20, 20, 20]
+    expected_full_corners = tuple(
+        (float(x + native_bbox[0]), float(y + native_bbox[1])) for x, y in native_corners
+    )
     (annotation_root / "board_annotations.jsonl").write_text(
         json.dumps(
             {
@@ -151,33 +157,57 @@ def test_load_eval_move_sequences_supports_piece_projection_board(
                 "clip_path": "unused_clip.pt",
                 "frame_index": 0,
                 "source_video_id": "video123",
-                "corners": [[0, 0], [19, 0], [19, 19], [0, 19]],
+                "corners": raw_corners,
                 "labels": labels,
+                "rectified_board_path": "data/physical/val/boards/clip_frame0000.jpg",
                 "corner_space": "clip_frame",
                 "clip_frame_size": [20, 20],
-                "native_corners": [[0, 0], [19, 0], [19, 19], [0, 19]],
-                "native_image_bbox": [0, 0, 20, 20],
+                "native_corners": native_corners,
+                "native_image_bbox": native_bbox,
                 "source_frame_index": 0,
             }
         )
         + "\n"
     )
 
-    clip_path = tmp_path / "unused_clip.pt"
-    torch.save(
-        {"frames": torch.full((1, 3, 20, 20), 180, dtype=torch.uint8)},
-        clip_path,
-    )
+    video_path = tmp_path / "video.avi"
+    _write_test_video(video_path, [np.full((40, 60, 3), 180, dtype=np.uint8)])
 
-    import pipeline.physical.shared.annotation_rows as annotation_rows
+    import pipeline.physical.board_probe.board_data as board_data
     import pipeline.physical.shared.move_data as move_data
 
-    monkeypatch.setattr(move_data, "_PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(annotation_rows, "_PROJECT_ROOT", tmp_path)
+    captured: list[tuple[np.ndarray, tuple[tuple[float, float], ...], int, float]] = []
+
+    def fake_prepare_board_neighborhood_image(
+        image_bgr: np.ndarray,
+        corners: tuple[tuple[float, float], ...] | list[list[float]],
+        *,
+        size: int,
+        crop_margin: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        captured.append(
+            (
+                image_bgr,
+                tuple((float(x), float(y)) for x, y in corners),
+                size,
+                crop_margin,
+            )
+        )
+        return (
+            torch.zeros((3, size, size), dtype=torch.float32),
+            torch.tensor(corners, dtype=torch.float32),
+        )
+
     monkeypatch.setattr(
         move_data,
         "_initial_board_state_for_clip",
         lambda clip_path: (chess.STARTING_BOARD_FEN, "w"),
+    )
+    monkeypatch.setattr(board_data, "resolve_source_video_path", lambda _video_id: video_path)
+    monkeypatch.setattr(
+        move_data,
+        "prepare_board_neighborhood_image",
+        fake_prepare_board_neighborhood_image,
     )
 
     sequences = load_eval_move_sequences(
@@ -188,12 +218,17 @@ def test_load_eval_move_sequences_supports_piece_projection_board(
     )
 
     assert len(sequences) == 1
+    assert len(captured) == 1
+    captured_image, captured_corners, captured_size, captured_margin = captured[0]
+    assert captured_image.shape == (40, 60, 3)
+    assert captured_corners == expected_full_corners
+    assert captured_size == 16
+    assert captured_margin == 0.0
+
     sequence = sequences[0]
     assert sequence.frames.shape == (1, 3, 16, 16)
     assert sequence.board_corners is not None
-    assert sequence.board_corners.shape == (1, 4, 2)
-    assert torch.all(sequence.board_corners >= 0)
-    assert torch.all(sequence.board_corners <= 16)
+    assert torch.equal(sequence.board_corners[0], torch.tensor(expected_full_corners))
 
 
 def test_slice_move_windows_can_repeat_positive_windows() -> None:

@@ -4,8 +4,17 @@
 - Verify current physical transient-annotation UI in browser at `/annotate/physical` and a clip page; confirm no current checkmarks, desired minimal move-row UX, per-marker clear behavior, usable frame-occlusion toggling, and autosave semantics.
 - If needed, tighten the meaning of `transient_annotation_complete` so clip-index completion matches the user’s intended “all moves covered + latent states annotations.”
 - Optional cleanup after UX verification: remove any now-unused fields/logic in `usePhysicalTransientAnnotations.ts` and `PhysicalAnnotationPage.tsx`.
-- Repo audit follow-up: README/docs should stay aligned with the active physical stack if future reader-family changes land.
+- Repo audit follow-up: README/docs should stay aligned with the active physical stack if future reader-family changes land; if desired, update lingering references that still imply rectified-board eval/runtime inputs instead of `piece_projection_board` / native-frame piece-projection inputs.
 - Environment warning remains noted but unblocked: duplicate `AVFFrameReceiver` / `AVFAudioReceiver` implementations from `cv2` and `av` may cause spurious casting failures/crashes.
 - Reconcile dev-tools route expectations after refactor: determine whether missing `/evaluate/physical-runtime` and `/annotate/physical-eval` routes are intentional supersessions or regressions needing fixes/redirects.
-- Debug the stuck `/evaluate/physical` inspect flow (`Sample & Inspect` hangs at `0/8`) by tracing the physical runtime API/service path and fixing any backend failure/blocker before final signoff.
-- After resolving the runtime/route gap, rerun final validation (`make lint`, `make typecheck`, `make test`) and then call `signal_loop_success` if all gates are met.
+- Native autoresearch cache rebuild is done via `autoresearch/prepare.py`; next decide whether to archive/reset stale `autoresearch/results.tsv` and `autoresearch/best_train.py` before the corrected-native resweep.
+- Revisit board-probe checkpoint selection/training after the contract fix: 2026-04-18 piece-box pooling sweeps (`outputs/2026-04-18/piecebox_manual_selection_sweep/summary.json`, `outputs/2026-04-18/piecebox_mixed_manual_selection_sweep/summary.json`) improved geometry fidelity but did not produce a promotable checkpoint.
+- Re-evaluate training/selection strategy before promoting new weights: current promoted `weights/physical/best.pt` under piece-box pooling (`outputs/2026-04-18/runtime_eval_piecebox_best_off.json`) is weak, and quick retrains were worse overall.
+- Remaining core open question: explain the gap between corrected native-frame board-probe eval (`board_exact ≈ 0.05917`) and the stale rectified/autoresearch surface (`0.25444`), including how much is decoder-only vs stale weights trained/selected on the wrong signature.
+- Debug the current `/evaluate/physical` rendering report that the new geometry is not visible after reload; check for stale frontend bundle/session hydration, SVG/CSS/aspect issues, or overlays being present but visually subtle.
+- Confirm the intended displayed image contract for runtime inspection after the latest user feedback: raw full source frame vs board-focused crop with padding, while keeping overlay geometry faithful and inspectable.
+- Open UX question: whether the hover preview should remain a projected bbox crop or be upgraded to a true perspective-warped projected crop.
+- Optional follow-up: make `scripts/eval_two_stage_board_reader.py` accept `--device auto` instead of requiring `--device cpu`.
+- Full-data two-stage retraining on the exported no-augment corpus was not completed in the CPU-only environment; resume only if that experiment is still desired.
+- After resolving the remaining geometry/route gap, rerun final validation (`make lint`, `make typecheck`, `make test`) and then call `signal_loop_success` if all gates are met.
+- Optional follow-up: run a fresh `/review` after the geometry migration if additional confirmation is desired.

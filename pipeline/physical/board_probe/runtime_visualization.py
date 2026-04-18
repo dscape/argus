@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,15 @@ from pipeline.physical.board_probe.runtime import (
     board_observation_from_logits,
     read_board_logits_batch_from_frames,
 )
+from pipeline.physical.piece_projection import (
+    camera_pose_from_corners,
+    default_camera_matrix,
+    extract_board_neighborhood_crop,
+    project_piece_bboxes,
+    project_piece_box,
+    project_square_base_quad,
+    transform_projected_bboxes_to_crop_space,
+)
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -38,6 +47,7 @@ _HEADER_BG = (248, 248, 248)
 _PANEL_BG = (255, 255, 255)
 _CONTACT_SHEET_BG = (245, 245, 245)
 _INFERENCE_BATCH_SIZE = 16
+_GEOMETRY_PREVIEW_SIZE = 512
 _ANNOTATED_CLIP_CACHE: dict[Path, dict[str, Any]] = {}
 
 _CLASS_ID_TO_SYMBOL = {
@@ -52,6 +62,7 @@ class VisualizedRuntimeFrame:
     annotation_id: str
     board_path: str
     crop_rgb: np.ndarray
+    source_rgb: np.ndarray
     gt_class_ids: tuple[int, ...]
     stateless_class_ids: tuple[int, ...]
     temporal_class_ids: tuple[int, ...]
@@ -65,6 +76,18 @@ class VisualizedRuntimeFrame:
     gt_changed_mask: tuple[bool, ...]
     stateless_changed_mask: tuple[bool, ...]
     temporal_changed_mask: tuple[bool, ...]
+    square_quads: tuple[tuple[tuple[float, float], ...], ...] = field(
+        default_factory=lambda: tuple(((0.0, 0.0),) * 4 for _ in range(64))
+    )
+    piece_bboxes: tuple[tuple[float, float, float, float], ...] = field(
+        default_factory=lambda: tuple((0.0, 0.0, 0.0, 0.0) for _ in range(64))
+    )
+    source_square_quads: tuple[tuple[tuple[float, float], ...], ...] = field(
+        default_factory=lambda: tuple(((0.0, 0.0),) * 4 for _ in range(64))
+    )
+    source_piece_bboxes: tuple[tuple[float, float, float, float], ...] = field(
+        default_factory=lambda: tuple((0.0, 0.0, 0.0, 0.0) for _ in range(64))
+    )
 
     @property
     def stateless_mean_confidence(self) -> float:
@@ -172,7 +195,7 @@ def render_visualized_runtime_frame(
 
     top = margin + header_height + panel_labels_height
     lefts = [margin + (panel_size + panel_gap) * index for index in range(4)]
-    labels = ["crop + temporal errors", "ground truth", "stateless", "temporal"]
+    labels = ["geometry + temporal errors", "ground truth", "stateless", "temporal"]
     panels = [
         _render_crop_panel(
             frame,
@@ -239,7 +262,7 @@ def render_contact_sheet(
         (12, 40),
         (
             f"frames {frame_start}..{frame_start + frame_count - 1} | "
-            "crop: red=temporal error, yellow=GT changed, blue=temporal-only flip | "
+            "geometry: red=temporal error, yellow=GT changed, blue=temporal-only flip | "
             "pred boards: green=correct, red=wrong"
         ),
         fill=_TEXT_COLOR,
@@ -356,13 +379,27 @@ def _collect_visualized_frames_for_indices(
             temporal_class_ids = tuple(_fen_to_class_ids(temporal_observation.fen))
 
             if row.frame_index in selected_frame_indices:
-                crop_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+                crop_rgb, square_quads, piece_bboxes = _runtime_geometry_preview(
+                    image_bgr,
+                    corners=row.corners,
+                    preview_size=_GEOMETRY_PREVIEW_SIZE,
+                )
+                source_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+                source_square_quads, source_piece_bboxes = _runtime_source_geometry(
+                    image_bgr,
+                    corners=row.corners,
+                )
                 visualized_frames.append(
                     VisualizedRuntimeFrame(
                         frame_index=int(row.frame_index or 0),
                         annotation_id=row.annotation_id,
                         board_path=row.board_path,
                         crop_rgb=crop_rgb,
+                        source_rgb=source_rgb,
+                        square_quads=square_quads,
+                        piece_bboxes=piece_bboxes,
+                        source_square_quads=source_square_quads,
+                        source_piece_bboxes=source_piece_bboxes,
                         gt_class_ids=gt_class_ids,
                         stateless_class_ids=stateless_class_ids,
                         temporal_class_ids=temporal_class_ids,
@@ -417,38 +454,36 @@ def _render_crop_panel(
     )
     overlay = Image.new("RGBA", (panel_size, panel_size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    cell = panel_size / 8.0
 
     if gt_changed_mask is None:
         gt_changed_mask = (False,) * 64
     if temporal_changed_mask is None:
         temporal_changed_mask = (False,) * 64
 
+    for quad in frame.square_quads:
+        _draw_closed_polyline(
+            draw,
+            _panel_quad_points(quad, panel_size=panel_size),
+            color=(60, 200, 60, 180),
+            width=1,
+        )
+
     for square_index, (target, predicted, confidence) in enumerate(
         zip(frame.gt_class_ids, frame.temporal_class_ids, frame.temporal_confidences)
     ):
-        row = square_index // 8
-        col = square_index % 8
-        x0 = int(round(col * cell))
-        y0 = int(round(row * cell))
-        x1 = int(round((col + 1) * cell))
-        y1 = int(round((row + 1) * cell))
+        x0, y0, x1, y1 = _panel_bbox(frame.piece_bboxes[square_index], panel_size=panel_size)
+        bbox_outline = (180, 180, 180, 180) if target == _EMPTY_CLASS_ID else (240, 180, 40, 200)
+        if x1 > x0 and y1 > y0:
+            draw.rectangle((x0, y0, x1, y1), outline=bbox_outline, width=1)
 
         if target != predicted:
             alpha = 40 + int(110 * float(confidence))
             draw.rectangle((x0, y0, x1, y1), fill=(*_ERROR_COLOR, alpha))
 
         if gt_changed_mask[square_index]:
-            draw.rectangle((x0 + 1, y0 + 1, x1 - 1, y1 - 1), outline=_GT_CHANGED_BORDER, width=3)
+            draw.rectangle((x0, y0, x1, y1), outline=_GT_CHANGED_BORDER, width=3)
         elif temporal_changed_mask[square_index]:
-            draw.rectangle((x0 + 1, y0 + 1, x1 - 1, y1 - 1), outline=_PRED_CHANGED_BORDER, width=2)
-
-    draw_grid = ImageDraw.Draw(overlay)
-    for line_index in range(9):
-        x = int(round(line_index * cell))
-        y = int(round(line_index * cell))
-        draw_grid.line((x, 0, x, panel_size), fill=(*_GRID_COLOR, 180), width=1)
-        draw_grid.line((0, y, panel_size, y), fill=(*_GRID_COLOR, 180), width=1)
+            draw.rectangle((x0, y0, x1, y1), outline=_PRED_CHANGED_BORDER, width=2)
 
     return Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
 
@@ -544,6 +579,268 @@ def _select_clip_path(
 
 def _load_board_image(row: PhysicalEvalBoardRow) -> np.ndarray:
     return load_annotated_board_frame_bgr(row, clip_cache=_ANNOTATED_CLIP_CACHE)
+
+
+def _runtime_geometry_preview(
+    image_bgr: np.ndarray,
+    *,
+    corners: tuple[tuple[float, float], ...] | list[list[float]] | None,
+    preview_size: int,
+) -> tuple[
+    np.ndarray,
+    tuple[tuple[tuple[float, float], ...], ...],
+    tuple[tuple[float, float, float, float], ...],
+]:
+    direct_pooling = _use_direct_square_pooling(image_bgr, corners)
+    if direct_pooling:
+        preview_rgb = _resize_rgb_square(
+            cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB),
+            size=preview_size,
+        )
+        preview_corners = (
+            (0.0, 0.0),
+            (float(preview_size), 0.0),
+            (float(preview_size), float(preview_size)),
+            (0.0, float(preview_size)),
+        )
+    else:
+        neighborhood = extract_board_neighborhood_crop(image_bgr, corners)
+        preview_rgb = _resize_rgb_square(
+            cv2.cvtColor(neighborhood.image_bgr, cv2.COLOR_BGR2RGB),
+            size=preview_size,
+        )
+        height, width = neighborhood.image_bgr.shape[:2]
+        preview_corners = tuple(
+            (
+                float(point[0]) * float(preview_size) / max(float(width), 1.0),
+                float(point[1]) * float(preview_size) / max(float(height), 1.0),
+            )
+            for point in neighborhood.corners.tolist()
+        )
+
+    square_quads = tuple(
+        tuple(
+            (
+                _clamp_unit(float(point[0]) / float(preview_size)),
+                _clamp_unit(float(point[1]) / float(preview_size)),
+            )
+            for point in project_square_base_quad(preview_corners, row=index // 8, col=index % 8)
+        )
+        for index in range(64)
+    )
+    if direct_pooling:
+        preview_piece_bboxes = project_piece_bboxes(
+            preview_corners,
+            frame_shape=(preview_size, preview_size),
+        )
+    else:
+        source_piece_bboxes = project_piece_bboxes(
+            _runtime_projection_corners(image_bgr, corners),
+            frame_shape=image_bgr.shape,
+        )
+        preview_piece_bboxes = transform_projected_bboxes_to_crop_space(
+            source_piece_bboxes,
+            neighborhood,
+            output_shape=preview_size,
+        )
+    piece_bboxes = tuple(
+        (
+            _clamp_unit(float(bbox[0]) / float(preview_size)),
+            _clamp_unit(float(bbox[1]) / float(preview_size)),
+            _clamp_unit(float(bbox[2]) / float(preview_size)),
+            _clamp_unit(float(bbox[3]) / float(preview_size)),
+        )
+        for bbox in preview_piece_bboxes
+    )
+    return preview_rgb, square_quads, piece_bboxes
+
+
+def _runtime_source_geometry(
+    image_bgr: np.ndarray,
+    *,
+    corners: tuple[tuple[float, float], ...] | list[list[float]] | None,
+) -> tuple[
+    tuple[tuple[tuple[float, float], ...], ...],
+    tuple[tuple[float, float, float, float], ...],
+]:
+    height, width = image_bgr.shape[:2]
+    geometry_corners = _runtime_projection_corners(image_bgr, corners)
+    width_denom = max(float(width - 1), 1.0)
+    height_denom = max(float(height - 1), 1.0)
+
+    square_quads = tuple(
+        tuple(
+            (
+                _clamp_unit(float(point[0]) / width_denom),
+                _clamp_unit(float(point[1]) / height_denom),
+            )
+            for point in project_square_base_quad(geometry_corners, row=index // 8, col=index % 8)
+        )
+        for index in range(64)
+    )
+    piece_bboxes = tuple(
+        (
+            _clamp_unit(float(bbox[0]) / width_denom),
+            _clamp_unit(float(bbox[1]) / height_denom),
+            _clamp_unit(float(bbox[2]) / width_denom),
+            _clamp_unit(float(bbox[3]) / height_denom),
+        )
+        for bbox in project_piece_bboxes(
+            geometry_corners,
+            frame_shape=image_bgr.shape,
+        )
+    )
+    return square_quads, piece_bboxes
+
+
+def _render_piece_projection_overlay(
+    image_bgr: np.ndarray,
+    *,
+    corners: tuple[tuple[float, float], ...] | list[list[float]] | None,
+    gt_class_ids: tuple[int, ...],
+) -> np.ndarray:
+    geometry_corners = _runtime_projection_corners(image_bgr, corners)
+    overlay_bgr = image_bgr.copy()
+    pose = camera_pose_from_corners(geometry_corners, K=default_camera_matrix(image_bgr.shape))
+
+    for square_index in range(64):
+        row = square_index // 8
+        col = square_index % 8
+        box = project_piece_box(
+            pose,
+            row=row,
+            col=col,
+            piece_height=2.0,
+            corners=geometry_corners,
+        )
+        xs, ys = box[:, 0], box[:, 1]
+        bbox = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
+        target_class_id = gt_class_ids[square_index]
+        color = (180, 180, 180) if target_class_id == _EMPTY_CLASS_ID else (40, 180, 240)
+        cv2.rectangle(overlay_bgr, bbox[:2], bbox[2:], color, 1)
+        base = box[:4].astype(np.int32)
+        cv2.polylines(overlay_bgr, [base], isClosed=True, color=(60, 200, 60), thickness=1)
+        center = base.mean(axis=0).astype(int)
+        cv2.putText(
+            overlay_bgr,
+            _square_name(square_index),
+            (center[0] - 10, center[1] + 3),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            (220, 40, 40),
+            1,
+            cv2.LINE_AA,
+        )
+
+    for index, (x, y) in enumerate(geometry_corners):
+        cv2.circle(overlay_bgr, (int(x), int(y)), 5, (255, 255, 255), -1)
+        cv2.putText(
+            overlay_bgr,
+            f"c{index}",
+            (int(x) + 6, int(y) - 4),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+    return cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB)
+
+
+def _runtime_projection_corners(
+    image_bgr: np.ndarray,
+    corners: tuple[tuple[float, float], ...] | list[list[float]] | None,
+) -> tuple[tuple[float, float], ...]:
+    if corners is None:
+        height, width = image_bgr.shape[:2]
+        return (
+            (0.0, 0.0),
+            (float(width - 1), 0.0),
+            (float(width - 1), float(height - 1)),
+            (0.0, float(height - 1)),
+        )
+    points = np.asarray(corners, dtype=np.float32)
+    if points.shape != (4, 2):
+        raise ValueError(f"corners must have shape (4, 2), got {points.shape}")
+    return tuple((float(x), float(y)) for x, y in points.tolist())
+
+
+def _use_direct_square_pooling(
+    image_bgr: np.ndarray,
+    corners: tuple[tuple[float, float], ...] | list[list[float]] | None,
+) -> bool:
+    if corners is None:
+        return True
+    points = np.asarray(corners, dtype=np.float32)
+    if points.shape != (4, 2):
+        return False
+    height, width = image_bgr.shape[:2]
+    full_frame_corners = np.asarray(
+        [
+            [0.0, 0.0],
+            [float(width - 1), 0.0],
+            [float(width - 1), float(height - 1)],
+            [0.0, float(height - 1)],
+        ],
+        dtype=np.float32,
+    )
+    return np.allclose(points, full_frame_corners, atol=1e-3)
+
+
+def _resize_rgb_square(rgb: np.ndarray, *, size: int) -> np.ndarray:
+    interpolation = cv2.INTER_AREA if min(rgb.shape[:2]) >= size else cv2.INTER_LINEAR
+    return cv2.resize(rgb, (size, size), interpolation=interpolation)
+
+
+def _clamp_unit(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def _square_name(square_index: int) -> str:
+    file = chr(ord("a") + (square_index % 8))
+    rank = 8 - square_index // 8
+    return f"{file}{rank}"
+
+
+def _panel_quad_points(
+    quad: tuple[tuple[float, float], ...],
+    *,
+    panel_size: int,
+) -> list[tuple[int, int]]:
+    max_index = max(panel_size - 1, 0)
+    return [
+        (
+            min(int(round(point[0] * panel_size)), max_index),
+            min(int(round(point[1] * panel_size)), max_index),
+        )
+        for point in quad
+    ]
+
+
+def _panel_bbox(
+    bbox: tuple[float, float, float, float],
+    *,
+    panel_size: int,
+) -> tuple[int, int, int, int]:
+    max_index = max(panel_size - 1, 0)
+    return (
+        max(0, min(int(round(bbox[0] * panel_size)), max_index)),
+        max(0, min(int(round(bbox[1] * panel_size)), max_index)),
+        max(0, min(int(round(bbox[2] * panel_size)), max_index)),
+        max(0, min(int(round(bbox[3] * panel_size)), max_index)),
+    )
+
+
+def _draw_closed_polyline(
+    draw: ImageDraw.ImageDraw,
+    points: list[tuple[int, int]],
+    *,
+    color: tuple[int, int, int] | tuple[int, int, int, int],
+    width: int,
+) -> None:
+    if not points:
+        return
+    draw.line(points + [points[0]], fill=color, width=width)
 
 
 def _fen_to_class_ids(fen: str) -> list[int]:

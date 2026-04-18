@@ -18,7 +18,7 @@ from torch.utils.data import Dataset
 from argus.chess.board_state import fen_to_square_targets
 from pipeline.physical.board_probe.board_data import (
     INPUT_SIZE,
-    preprocess_board_neighborhood_image,
+    preprocess_board_neighborhood_geometry,
 )
 from pipeline.physical.shared import splits
 from pipeline.physical.shared.eval_dataset import (
@@ -44,7 +44,7 @@ class PhysicalRealBoardRow:
 
 
 class PhysicalRealBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
-    """Replay-derived board neighborhoods with piece-projection geometry."""
+    """Replay-derived board neighborhoods with projected piece-box geometry."""
 
     def __init__(
         self,
@@ -82,13 +82,13 @@ class PhysicalRealBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.T
             raise ValueError(f"Clip has no frames tensor: {row.clip_path}")
         frame = frames[row.frame_index]
         image_bgr = cv2.cvtColor(_frame_tensor_to_rgb(frame), cv2.COLOR_RGB2BGR)
-        image, corners = preprocess_board_neighborhood_image(
+        image, _scaled_corners, piece_bboxes = preprocess_board_neighborhood_geometry(
             image_bgr,
             row.corners,
             size=self.image_size,
         )
         targets = torch.tensor(row.labels, dtype=torch.long)
-        return image, targets, corners
+        return image, targets, piece_bboxes
 
     def _load_clip(self, clip_path: Path) -> dict[str, Any]:
         cached = self._clip_cache.get(clip_path)

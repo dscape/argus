@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+from pipeline.physical.board_probe import probe as board_probe_module
 from pipeline.physical.board_probe.probe import (
     PhysicalBoardStateProbe,
     board_probe_config_from_checkpoint,
@@ -74,12 +75,57 @@ def test_sample_projected_square_tokens_from_constant_patch_grid_stays_constant(
 
     square_tokens = sample_projected_square_tokens_from_patch_tokens(
         patch_tokens,
-        corners=corners,
+        geometry=corners,
         image_size=16,
     )
 
     assert square_tokens.shape == (1, 64, 3)
     assert torch.allclose(square_tokens, torch.ones_like(square_tokens))
+
+
+def test_sample_projected_square_tokens_uses_piece_box_bboxes(monkeypatch) -> None:
+    patch_tokens = torch.arange(16, dtype=torch.float32).reshape(1, 16, 1)
+    corners = torch.tensor(
+        [[[0.0, 0.0], [15.0, 0.0], [15.0, 15.0], [0.0, 15.0]]],
+        dtype=torch.float32,
+    )
+
+    fake_bboxes = torch.tensor(
+        [[[4.0, 4.0, 12.0, 12.0]] + [[0.0, 0.0, 0.0, 0.0] for _ in range(63)]],
+        dtype=torch.float32,
+    )
+
+    monkeypatch.setattr(
+        board_probe_module,
+        "_project_piece_bboxes_from_corners",
+        lambda corners, *, image_size, piece_height: fake_bboxes,
+    )
+
+    square_tokens = sample_projected_square_tokens_from_patch_tokens(
+        patch_tokens,
+        geometry=corners,
+        image_size=16,
+    )
+
+    assert square_tokens.shape == (1, 64, 1)
+    assert square_tokens[0, 0, 0].item() == pytest.approx((5.0 + 6.0 + 9.0 + 10.0) / 4.0)
+
+
+def test_sample_projected_square_tokens_accepts_precomputed_piece_bboxes() -> None:
+    patch_tokens = torch.arange(16, dtype=torch.float32).reshape(1, 16, 1)
+    piece_bboxes = torch.tensor(
+        [[[4.0, 4.0, 12.0, 12.0]] + [[0.0, 0.0, 0.0, 0.0] for _ in range(63)]],
+        dtype=torch.float32,
+    )
+
+    square_tokens = sample_projected_square_tokens_from_patch_tokens(
+        patch_tokens,
+        geometry=piece_bboxes,
+        image_size=16,
+    )
+
+    assert square_tokens.shape == (1, 64, 1)
+    assert square_tokens[0, 0, 0].item() == pytest.approx((5.0 + 6.0 + 9.0 + 10.0) / 4.0)
 
 
 def test_extract_square_token_features_accepts_pre_cropped_square_batches() -> None:

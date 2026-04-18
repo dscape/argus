@@ -1531,6 +1531,15 @@ export interface PhysicalRuntimeSampleFrame {
   frame_index: number | null;
 }
 
+export type PhysicalRuntimeGeometryQuad = [
+  [number, number],
+  [number, number],
+  [number, number],
+  [number, number],
+];
+
+export type PhysicalRuntimeGeometryBbox = [number, number, number, number];
+
 export interface PhysicalRuntimeEvalResult {
   annotation_id: string;
   clip_path: string | null;
@@ -1565,6 +1574,12 @@ export interface PhysicalRuntimeEvalResult {
   stateless_mean_confidence: number;
   temporal_mean_confidence: number;
   elapsed_ms: number;
+  geometry_space?: string;
+  image_render_mode?: string;
+  image_width?: number;
+  image_height?: number;
+  geometry_square_quads?: Record<string, PhysicalRuntimeGeometryQuad>;
+  geometry_piece_bboxes?: Record<string, PhysicalRuntimeGeometryBbox>;
   thumbnail_b64?: string;
   thumbnail_filename?: string;
   image_b64?: string;

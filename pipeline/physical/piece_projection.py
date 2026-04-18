@@ -55,6 +55,8 @@ class BoardNeighborhoodCrop:
 
     image_bgr: np.ndarray
     corners: np.ndarray
+    x1: int
+    y1: int
 
 
 def default_camera_matrix(frame_shape: tuple[int, int] | tuple[int, int, int]) -> np.ndarray:
@@ -126,7 +128,7 @@ def extract_board_neighborhood_crop(
 
     cropped = image_bgr[y1:y2, x1:x2].copy()
     relative_corners = points - np.array([x1, y1], dtype=np.float32)
-    return BoardNeighborhoodCrop(image_bgr=cropped, corners=relative_corners)
+    return BoardNeighborhoodCrop(image_bgr=cropped, corners=relative_corners, x1=x1, y1=y1)
 
 
 def project_square_base_quad(
@@ -318,6 +320,63 @@ def piece_bbox_from_projection(projected_quad: np.ndarray) -> tuple[float, float
     xs = projected_quad[:, 0]
     ys = projected_quad[:, 1]
     return float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())
+
+
+def transform_projected_bboxes_to_crop_space(
+    projected_bboxes: np.ndarray,
+    crop: BoardNeighborhoodCrop,
+    *,
+    output_shape: tuple[int, int] | int,
+) -> np.ndarray:
+    """Map full-frame projected piece boxes into a cropped/resized board view."""
+    if projected_bboxes.ndim != 2 or projected_bboxes.shape[1] != 4:
+        raise ValueError(
+            f"projected_bboxes must have shape (N, 4), got {projected_bboxes.shape}"
+        )
+    if isinstance(output_shape, int):
+        output_height = output_width = int(output_shape)
+    else:
+        output_height = int(output_shape[0])
+        output_width = int(output_shape[1])
+
+    crop_height, crop_width = crop.image_bgr.shape[:2]
+    scale_x = float(output_width) / max(float(crop_width), 1.0)
+    scale_y = float(output_height) / max(float(crop_height), 1.0)
+
+    transformed = projected_bboxes.astype(np.float64, copy=True)
+    transformed[:, [0, 2]] -= float(crop.x1)
+    transformed[:, [1, 3]] -= float(crop.y1)
+    transformed[:, [0, 2]] *= scale_x
+    transformed[:, [1, 3]] *= scale_y
+    return transformed
+
+
+def project_piece_bboxes(
+    corners: tuple[tuple[float, float], ...] | list[list[float]],
+    *,
+    frame_shape: tuple[int, int] | tuple[int, int, int],
+    piece_height: float = DEFAULT_PIECE_HEIGHT,
+    K: np.ndarray | None = None,
+) -> np.ndarray:
+    """Project all 64 piece boxes and return their axis-aligned image bboxes.
+
+    Output shape is ``(64, 4)`` in row-major square order with columns
+    ``(xmin, ymin, xmax, ymax)``.
+    """
+    if K is None:
+        K = default_camera_matrix(frame_shape)
+    pose = camera_pose_from_corners(corners, K=K)
+    bboxes = np.empty((64, 4), dtype=np.float64)
+    for square_index in range(64):
+        projected = project_piece_box(
+            pose,
+            row=square_index // 8,
+            col=square_index % 8,
+            piece_height=piece_height,
+            corners=corners,
+        )
+        bboxes[square_index] = piece_bbox_from_projection(projected)
+    return bboxes
 
 
 def _validate_row_col(row: int, col: int) -> None:

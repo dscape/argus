@@ -5,12 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 
 from argus.model.vision_encoder import VisionEncoder
 from pipeline.physical.board_probe.square_probe import ProbeMetrics, evaluate_probe
+from pipeline.physical.piece_projection import DEFAULT_PIECE_HEIGHT, project_piece_bboxes
 from pipeline.shared import NUM_SQUARE_CLASSES
 
 _DEFAULT_HEAD_TYPE = "linear"
@@ -202,72 +204,27 @@ def _tokens_and_grid_size_from_patch_tokens(
     )
 
 
-def _board_to_image_homographies(corners: torch.Tensor) -> torch.Tensor:
-    batch_size = corners.shape[0]
-    board_points = corners.new_tensor(
+def _project_piece_bboxes_from_corners(
+    corners: torch.Tensor,
+    *,
+    image_size: int,
+    piece_height: float,
+) -> torch.Tensor:
+    if corners.ndim != 3 or corners.shape[1:] != (4, 2):
+        raise ValueError(f"Expected corners shaped (B, 4, 2), got {tuple(corners.shape)}")
+
+    bboxes = np.stack(
         [
-            [0.0, 0.0],
-            [8.0, 0.0],
-            [8.0, 8.0],
-            [0.0, 8.0],
+            project_piece_bboxes(
+                sample_corners.tolist(),
+                frame_shape=(image_size, image_size),
+                piece_height=piece_height,
+            )
+            for sample_corners in corners.detach().cpu().numpy()
         ],
-        dtype=torch.float32,
-    ).unsqueeze(0).expand(batch_size, -1, -1)
-    x = board_points[..., 0]
-    y = board_points[..., 1]
-    u = corners[..., 0]
-    v = corners[..., 1]
-    zeros = torch.zeros_like(x)
-    ones = torch.ones_like(x)
-
-    row_u = torch.stack([x, y, ones, zeros, zeros, zeros, -u * x, -u * y], dim=-1)
-    row_v = torch.stack([zeros, zeros, zeros, x, y, ones, -v * x, -v * y], dim=-1)
-    system = torch.stack([row_u, row_v], dim=2).reshape(batch_size, 8, 8)
-    targets = torch.stack([u, v], dim=2).reshape(batch_size, 8)
-    solution = torch.linalg.solve(system, targets.unsqueeze(-1)).squeeze(-1)
-    trailing = torch.ones((batch_size, 1), device=corners.device, dtype=solution.dtype)
-    return torch.cat([solution, trailing], dim=1).reshape(batch_size, 3, 3)
-
-
-def _project_square_bboxes_from_corners(corners: torch.Tensor) -> torch.Tensor:
-    batch_size = corners.shape[0]
-    homographies = _board_to_image_homographies(corners)
-    axis = torch.arange(9, device=corners.device, dtype=homographies.dtype)
-    grid_x, grid_y = torch.meshgrid(axis, axis, indexing="xy")
-    board_grid = torch.stack(
-        [
-            grid_x.reshape(-1),
-            grid_y.reshape(-1),
-            torch.ones(81, device=corners.device, dtype=homographies.dtype),
-        ],
-        dim=-1,
+        axis=0,
     )
-    projected = homographies @ board_grid.T
-    projected = projected.transpose(1, 2)
-    denom = projected[..., 2:]
-    denom_sign = torch.sign(denom)
-    denom_sign = torch.where(denom_sign == 0, torch.ones_like(denom_sign), denom_sign)
-    denom = torch.where(denom.abs() < 1e-8, denom_sign * 1e-8, denom)
-    xy = projected[..., :2] / denom
-    grid = xy.reshape(batch_size, 9, 9, 2)
-
-    top_left = grid[:, :-1, :-1, :]
-    top_right = grid[:, :-1, 1:, :]
-    bottom_right = grid[:, 1:, 1:, :]
-    bottom_left = grid[:, 1:, :-1, :]
-    quads = torch.stack([top_left, top_right, bottom_right, bottom_left], dim=3)
-    x_coords = quads[..., 0]
-    y_coords = quads[..., 1]
-    bboxes = torch.stack(
-        [
-            x_coords.amin(dim=-1),
-            y_coords.amin(dim=-1),
-            x_coords.amax(dim=-1),
-            y_coords.amax(dim=-1),
-        ],
-        dim=-1,
-    )
-    return bboxes.reshape(batch_size, 64, 4)
+    return torch.as_tensor(bboxes, device=corners.device, dtype=torch.float32)
 
 
 def _patch_centers(
@@ -285,19 +242,26 @@ def _patch_centers(
 def sample_projected_square_tokens_from_patch_tokens(
     patch_tokens: torch.Tensor,
     *,
-    corners: torch.Tensor,
+    geometry: torch.Tensor,
     image_size: int,
+    piece_height: float = DEFAULT_PIECE_HEIGHT,
 ) -> torch.Tensor:
-    """Pool patch tokens inside piece-projected square regions."""
+    """Pool patch tokens inside projected piece-box bboxes."""
     tokens, grid_size = _tokens_and_grid_size_from_patch_tokens(patch_tokens)
     batch_size, patch_count, _embed_dim = tokens.shape
-    if corners.shape != (batch_size, 4, 2):
+    if geometry.shape == (batch_size, 4, 2):
+        bboxes = _project_piece_bboxes_from_corners(
+            geometry.to(device=tokens.device, dtype=torch.float32),
+            image_size=image_size,
+            piece_height=piece_height,
+        ).to(device=tokens.device, dtype=tokens.dtype)
+    elif geometry.shape == (batch_size, 64, 4):
+        bboxes = geometry.to(device=tokens.device, dtype=tokens.dtype)
+    else:
         raise ValueError(
-            f"Expected corners with shape ({batch_size}, 4, 2), got {tuple(corners.shape)}"
+            "Expected geometry with shape "
+            f"({batch_size}, 4, 2) or ({batch_size}, 64, 4), got {tuple(geometry.shape)}"
         )
-
-    geometry_corners = corners.to(device=tokens.device, dtype=torch.float32)
-    bboxes = _project_square_bboxes_from_corners(geometry_corners)
     patch_centers = _patch_centers(
         grid_size=grid_size,
         image_size=image_size,
@@ -348,13 +312,13 @@ def extract_square_token_features(
     encoder.eval()
     with torch.no_grad():
         for batch in loader:
-            corners: torch.Tensor | None = None
+            geometry: torch.Tensor | None = None
             if not isinstance(batch, (tuple, list)):
                 raise ValueError("Expected dataloader batch to be a tuple or list")
             if len(batch) == 2:
                 images, labels = batch
             elif len(batch) == 3:
-                images, labels, corners = batch
+                images, labels, geometry = batch
             else:
                 raise ValueError(f"Unsupported dataset batch shape: {len(batch)} items")
 
@@ -370,12 +334,12 @@ def extract_square_token_features(
                 square_tokens = square_embeddings.reshape(batch_size_actual, square_count, -1).cpu()
             else:
                 patch_tokens = encoder.forward_patches(images.to(device))
-                if corners is None:
+                if geometry is None:
                     square_tokens = dino_patches_to_square_tokens(patch_tokens)
                 else:
                     square_tokens = sample_projected_square_tokens_from_patch_tokens(
                         patch_tokens,
-                        corners=corners.to(device),
+                        geometry=geometry.to(device),
                         image_size=images.shape[-1],
                     )
                 square_tokens = square_tokens.cpu()

@@ -278,7 +278,18 @@ export default function PhysicalRuntimeInspector({
 
   useEffect(() => {
     if (!initialSession?.id || initialSession.results.length === 0) return;
-    if (initialSession.results.every((result) => result.gt_fen)) return;
+    const needsHydration = initialSession.results.some(
+      (result) =>
+        !result.gt_fen ||
+        !result.geometry_square_quads ||
+        Object.keys(result.geometry_square_quads).length === 0 ||
+        !result.geometry_piece_bboxes ||
+        Object.keys(result.geometry_piece_bboxes).length === 0 ||
+        result.geometry_space !== "source_frame_normalized" ||
+        result.image_render_mode !== "source_frame_raw" ||
+        (!result.image_b64 && !result.image_filename),
+    );
+    if (!needsHydration) return;
 
     let cancelled = false;
     setHydratingLegacySession(true);
@@ -510,7 +521,7 @@ export default function PhysicalRuntimeInspector({
       <div className="flex gap-2 items-center flex-wrap">
         <span className="text-sm text-muted-foreground">
           Sample from held-out physical validation frames:
-          <InfoIcon tip="Samples rectified held-out physical board annotations and compares both stateless and deployed temporal runtime predictions against ground truth one frame at a time." />
+          <InfoIcon tip="Samples held-out physical board annotations, renders the oblique board-neighborhood input used by the board-probe runtime, and overlays both the board-surface grid and the projected piece-box pooling regions. Hover any board square to inspect the projected piece region used for token pooling." />
         </span>
         <input
           type="number"
@@ -622,7 +633,7 @@ export default function PhysicalRuntimeInspector({
 
       {hydratingLegacySession && (
         <div className="border rounded-lg px-3 py-2 text-sm text-muted-foreground">
-          Refreshing legacy session boards with the selected model...
+          Refreshing legacy session geometry with the selected model...
         </div>
       )}
 

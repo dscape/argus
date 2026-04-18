@@ -9,10 +9,12 @@ from pipeline.physical.piece_projection import (
     default_camera_matrix,
     extract_board_neighborhood_crop,
     piece_bbox_from_projection,
+    project_piece_bboxes,
     project_piece_box,
     project_points,
     project_square_base_quad,
     square_bbox_from_corners,
+    transform_projected_bboxes_to_crop_space,
 )
 
 _FRAME_SHAPE = (1080, 1920, 3)
@@ -189,6 +191,19 @@ def test_oblique_vs_top_down_produces_very_different_top_extensions() -> None:
     assert oblique > closer_to_top_down + 1.5
 
 
+def test_project_piece_bboxes_returns_row_major_piece_regions() -> None:
+    rvec = np.array([np.radians(-45.0), 0.0, 0.0], dtype=np.float32)
+    tvec = np.array([-4.0, -4.0, 10.0], dtype=np.float32)
+    corners = _synth_corners(rvec, tvec)
+
+    bboxes = project_piece_bboxes(corners, frame_shape=_FRAME_SHAPE)
+
+    assert bboxes.shape == (64, 4)
+    square_bbox = square_bbox_from_corners(corners, row=0, col=0)
+    piece_bbox = bboxes[0]
+    assert piece_bbox[3] - piece_bbox[1] > square_bbox[3] - square_bbox[1]
+
+
 def test_extract_board_neighborhood_crop_returns_relative_corners() -> None:
     image = np.zeros((100, 120, 3), dtype=np.uint8)
     corners = ((20.0, 10.0), (100.0, 10.0), (100.0, 90.0), (20.0, 90.0))
@@ -200,6 +215,28 @@ def test_extract_board_neighborhood_crop_returns_relative_corners() -> None:
         crop.corners,
         np.array([[20.0, 10.0], [100.0, 10.0], [100.0, 90.0], [20.0, 90.0]], dtype=np.float32),
     )
+
+
+def test_transform_projected_bboxes_to_crop_space_differs_from_reprojecting_in_crop_space() -> None:
+    rvec = np.array([np.radians(-45.0), 0.0, 0.0], dtype=np.float32)
+    tvec = np.array([-4.0, -4.0, 10.0], dtype=np.float32)
+    corners = _synth_corners(rvec, tvec)
+    image = np.zeros(_FRAME_SHAPE, dtype=np.uint8)
+
+    crop = extract_board_neighborhood_crop(image, corners, crop_margin=0.18)
+    transformed_bboxes = transform_projected_bboxes_to_crop_space(
+        project_piece_bboxes(corners, frame_shape=image.shape),
+        crop,
+        output_shape=224,
+    )
+
+    scaled_corners = crop.corners.copy()
+    scaled_corners[:, 0] *= 224.0 / crop.image_bgr.shape[1]
+    scaled_corners[:, 1] *= 224.0 / crop.image_bgr.shape[0]
+    reprojected_bboxes = project_piece_bboxes(scaled_corners.tolist(), frame_shape=(224, 224, 3))
+
+    c8_index = 2
+    assert not np.allclose(transformed_bboxes[c8_index], reprojected_bboxes[c8_index], atol=1e-3)
 
 
 def test_project_square_base_quad_matches_axis_aligned_board_geometry() -> None:

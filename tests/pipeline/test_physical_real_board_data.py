@@ -139,11 +139,11 @@ def test_physical_real_board_dataset_loads_board_neighborhood_frame(tmp_path) ->
     original_root = real_board_data._PROJECT_ROOT
     real_board_data._PROJECT_ROOT = project_root
     try:
-        image, targets, corners = dataset[0]
+        image, targets, piece_bboxes = dataset[0]
     finally:
         real_board_data._PROJECT_ROOT = original_root
 
     assert image.shape == (3, 32, 32)
     assert targets.shape == (64,)
-    assert corners.shape == (4, 2)
+    assert piece_bboxes.shape == (64, 4)
     assert np.isfinite(image.numpy()).all()

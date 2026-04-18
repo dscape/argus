@@ -14,7 +14,7 @@ from argus.model.vision_encoder import VisionEncoder
 from pipeline.physical.board_probe.board_data import (
     INPUT_SIZE,
     preprocess_board_image,
-    preprocess_board_neighborhood_image,
+    preprocess_board_neighborhood_geometry,
 )
 from pipeline.physical.board_probe.probe import (
     PhysicalBoardStateEnsembleProbe,
@@ -380,7 +380,7 @@ def _predict_board_logits(
         patch_tokens = encoder.forward_patches(board_tensor.unsqueeze(0).to(probe_device))
         square_tokens = _pool_square_tokens_batch(
             patch_tokens,
-            corners_list=[corners_tensor],
+            geometry_list=[corners_tensor],
             image_size=input_size,
         )
         return probe(square_tokens).squeeze(0).cpu()
@@ -425,19 +425,19 @@ def _predict_board_logits_batch(
         )
         for board_crop, corners in zip(board_crops, corners_per_board)
     ]
-    tensors = [board_tensor for board_tensor, _corners in prepared]
-    prepared_corners = [corners_tensor for _board_tensor, corners_tensor in prepared]
+    tensors = [board_tensor for board_tensor, _geometry in prepared]
+    prepared_geometry = [geometry_tensor for _board_tensor, geometry_tensor in prepared]
 
     logits_list: list[torch.Tensor] = []
     with torch.no_grad():
         for start in range(0, len(tensors), batch_size):
             batch_tensors = tensors[start : start + batch_size]
-            batch_corners = prepared_corners[start : start + batch_size]
+            batch_geometry = prepared_geometry[start : start + batch_size]
             batch = torch.stack(batch_tensors, dim=0).to(probe_device)
             patch_tokens = encoder.forward_patches(batch)
             square_tokens = _pool_square_tokens_batch(
                 patch_tokens,
-                corners_list=batch_corners,
+                geometry_list=batch_geometry,
                 image_size=input_size,
             )
             logits_batch = probe(square_tokens).cpu()
@@ -453,24 +453,24 @@ def _prepare_runtime_board_input(
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     if _should_use_direct_square_pooling(board_crop, corners):
         return preprocess_board_image(board_crop, size=input_size), None
-    board_tensor, corners_tensor = preprocess_board_neighborhood_image(
+    board_tensor, _scaled_corners, piece_bboxes = preprocess_board_neighborhood_geometry(
         board_crop,
         _runtime_corners(board_crop, corners),
         size=input_size,
     )
-    return board_tensor, corners_tensor
+    return board_tensor, piece_bboxes
 
 
 def _pool_square_tokens_batch(
     patch_tokens: torch.Tensor,
     *,
-    corners_list: list[torch.Tensor | None],
+    geometry_list: list[torch.Tensor | None],
     image_size: int,
 ) -> torch.Tensor:
     batch_size = patch_tokens.shape[0]
-    if len(corners_list) != batch_size:
+    if len(geometry_list) != batch_size:
         raise ValueError(
-            f"corners_list length {len(corners_list)} must match batch size {batch_size}"
+            f"geometry_list length {len(geometry_list)} must match batch size {batch_size}"
         )
 
     square_tokens = torch.empty(
@@ -479,7 +479,7 @@ def _pool_square_tokens_batch(
         dtype=patch_tokens.dtype,
     )
 
-    direct_indices = [index for index, corners in enumerate(corners_list) if corners is None]
+    direct_indices = [index for index, geometry in enumerate(geometry_list) if geometry is None]
     if direct_indices:
         direct_index_tensor = torch.tensor(
             direct_indices,
@@ -491,20 +491,20 @@ def _pool_square_tokens_batch(
         )
         square_tokens.index_copy_(0, direct_index_tensor, direct_square_tokens)
 
-    projected_indices = [index for index, corners in enumerate(corners_list) if corners is not None]
+    projected_indices = [index for index, geometry in enumerate(geometry_list) if geometry is not None]
     if projected_indices:
         projected_index_tensor = torch.tensor(
             projected_indices,
             device=patch_tokens.device,
             dtype=torch.long,
         )
-        projected_corners = torch.stack(
-            [corners for corners in corners_list if corners is not None],
+        projected_geometry = torch.stack(
+            [geometry for geometry in geometry_list if geometry is not None],
             dim=0,
         ).to(patch_tokens.device)
         projected_square_tokens = sample_projected_square_tokens_from_patch_tokens(
             patch_tokens.index_select(0, projected_index_tensor),
-            corners=projected_corners,
+            geometry=projected_geometry,
             image_size=image_size,
         )
         square_tokens.index_copy_(0, projected_index_tensor, projected_square_tokens)
