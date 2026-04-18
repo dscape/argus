@@ -8,7 +8,7 @@ import json
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import cv2
 import torch
@@ -16,7 +16,10 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.overlay.replay import build_replay_board
-from pipeline.physical.board_probe.board_data import PhysicalEvalBoardDataset
+from pipeline.physical.board_probe.board_data import (
+    PhysicalEvalBoardDataset,
+    load_annotated_board_frame_bgr,
+)
 from pipeline.physical.board_probe.decoder import (
     PRODUCTION_DECODER_ID,
     decode_sequence_with_production_decoder,
@@ -112,7 +115,7 @@ def main() -> None:
     square_predictions: list[int] = []
     square_targets: list[int] = []
     board_annotation_ids: list[str] = []
-    clip_cache: dict[Path, dict[str, object]] = {}
+    clip_cache: dict[Path, dict[str, Any]] = {}
     missing_predictions = 0
 
     rows_by_clip: dict[str, list[object]] = defaultdict(list)
@@ -140,11 +143,12 @@ def main() -> None:
             if logits_reader is None:
                 logits = read_board_logits_from_frame(
                     image,
+                    corners=row.corners,
                     device=args.device,
                     weights_path=args.weights_path,
                 )
             else:
-                logits = logits_reader.read_board_logits_from_frame(image)
+                logits = logits_reader.read_board_logits_from_frame(image, corners=row.corners)
             if logits is None:
                 missing_predictions += 1
                 continue
@@ -235,16 +239,13 @@ def main() -> None:
 
 
 def _load_row_image(
-    row: object,
+    row: Any,
     *,
     observation_input: str,
-    clip_cache: dict[Path, dict[str, object]],
+    clip_cache: dict[Path, dict[str, Any]],
 ) -> cv2.typing.MatLike:
-    del observation_input, clip_cache
-    image = cv2.imread(str(_PROJECT_ROOT / row.board_path), cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError(f"Failed to load board image: {row.board_path}")
-    return image
+    del observation_input
+    return load_annotated_board_frame_bgr(row, clip_cache=clip_cache)
 
 
 def _initial_board_state_for_row(row: object) -> tuple[str, str | None]:

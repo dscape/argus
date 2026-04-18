@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import cv2
 import numpy as np
@@ -128,9 +128,10 @@ class HybridFrameReader(OverlayFrameReader):
             self._physical_reader.reset()
             return FrameReadResult(fen=None, method=None)
 
+        segment_config = replace(self.config, use_piece_classifier=False)
         state = detect_pieces(
             segment.cropped_board,
-            self.config,
+            segment_config,
             segmenter_method=segment.method,
             physical_sequence_reader=self._physical_reader,
         )

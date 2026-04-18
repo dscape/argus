@@ -25,7 +25,11 @@ import torch
 from PIL import Image, ImageDraw, ImageFont
 
 from pipeline.paths import PROJECT_ROOT
-from pipeline.physical.board_probe.board_data import PhysicalEvalBoardDataset, PhysicalEvalBoardRow
+from pipeline.physical.board_probe.board_data import (
+    PhysicalEvalBoardDataset,
+    PhysicalEvalBoardRow,
+    load_annotated_board_frame_bgr,
+)
 from pipeline.physical.board_probe.decoder import decode_sequence_with_production_decoder
 from pipeline.physical.board_probe.runtime import (
     PhysicalBoardLogitsSequenceReader,
@@ -682,7 +686,7 @@ def _read_clip_logits(
         ]
         chunk_logits = read_board_logits_batch_from_frames(
             chunk_images,
-            corners_list=None,
+            corners_list=[row.corners for row in chunk_rows],
             device=device,
             weights_path=weights_path,
             batch_size=_INFERENCE_BATCH_SIZE,
@@ -911,14 +915,8 @@ def _load_row_image(
     observation_input: ObservationInput,
     clip_cache: dict[Path, dict[str, Any]],
 ) -> np.ndarray:
-    del observation_input, clip_cache
-    board_path = getattr(row, "board_path", None)
-    if not isinstance(board_path, str):
-        raise ValueError(f"Board row is missing board_path: {row.annotation_id}")
-    image = cv2.imread(str(PROJECT_ROOT / board_path), cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError(f"Failed to load board image: {board_path}")
-    return image
+    del observation_input
+    return load_annotated_board_frame_bgr(row, clip_cache=clip_cache)
 
 
 def _render_failure_frame(

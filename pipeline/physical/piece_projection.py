@@ -399,30 +399,12 @@ def extract_projected_occupancy_crop(
     K: np.ndarray | None = None,
     pad_ratio: float = 0.3,
 ) -> np.ndarray:
-    """Occupancy crop: just the square's base quad plus a small symmetric pad.
-
-    Unlike the piece crop, the occupancy crop doesn't need to capture the full
-    piece height — it just needs to answer "is something here". We project the
-    square's base corners and expand the axis-aligned bbox symmetrically.
-    """
-    if K is None:
-        K = default_camera_matrix(image_bgr.shape)
-    pose = camera_pose_from_corners(corners, K=K)
-    base = np.array(
-        [
-            [col, row, 0.0],
-            [col + 1, row, 0.0],
-            [col + 1, row + 1, 0.0],
-            [col, row + 1, 0.0],
-        ],
-        dtype=np.float64,
+    """Occupancy crop: just the square's base quad plus a small symmetric pad."""
+    del K
+    bbox = square_bbox_from_corners(
+        corners,
+        row=row,
+        col=col,
+        pad_ratio=pad_ratio,
     )
-    projected = project_points_with_base_homography(pose, corners, base)
-    xmin = float(projected[:, 0].min())
-    ymin = float(projected[:, 1].min())
-    xmax = float(projected[:, 0].max())
-    ymax = float(projected[:, 1].max())
-    pad_x = (xmax - xmin) * pad_ratio
-    pad_y = (ymax - ymin) * pad_ratio
-    bbox = (xmin - pad_x, ymin - pad_y, xmax + pad_x, ymax + pad_y)
     return _axis_aligned_crop(image_bgr, bbox, output_size=output_size, flip_horizontally=False)

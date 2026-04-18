@@ -5,13 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 
 from argus.model.vision_encoder import VisionEncoder
-from pipeline.physical.piece_projection import square_bbox_from_corners
 from pipeline.physical.board_probe.square_probe import ProbeMetrics, evaluate_probe
 from pipeline.shared import NUM_SQUARE_CLASSES
 
@@ -204,6 +202,86 @@ def _tokens_and_grid_size_from_patch_tokens(
     )
 
 
+def _board_to_image_homographies(corners: torch.Tensor) -> torch.Tensor:
+    batch_size = corners.shape[0]
+    board_points = corners.new_tensor(
+        [
+            [0.0, 0.0],
+            [8.0, 0.0],
+            [8.0, 8.0],
+            [0.0, 8.0],
+        ],
+        dtype=torch.float32,
+    ).unsqueeze(0).expand(batch_size, -1, -1)
+    x = board_points[..., 0]
+    y = board_points[..., 1]
+    u = corners[..., 0]
+    v = corners[..., 1]
+    zeros = torch.zeros_like(x)
+    ones = torch.ones_like(x)
+
+    row_u = torch.stack([x, y, ones, zeros, zeros, zeros, -u * x, -u * y], dim=-1)
+    row_v = torch.stack([zeros, zeros, zeros, x, y, ones, -v * x, -v * y], dim=-1)
+    system = torch.stack([row_u, row_v], dim=2).reshape(batch_size, 8, 8)
+    targets = torch.stack([u, v], dim=2).reshape(batch_size, 8)
+    solution = torch.linalg.solve(system, targets.unsqueeze(-1)).squeeze(-1)
+    trailing = torch.ones((batch_size, 1), device=corners.device, dtype=solution.dtype)
+    return torch.cat([solution, trailing], dim=1).reshape(batch_size, 3, 3)
+
+
+def _project_square_bboxes_from_corners(corners: torch.Tensor) -> torch.Tensor:
+    batch_size = corners.shape[0]
+    homographies = _board_to_image_homographies(corners)
+    axis = torch.arange(9, device=corners.device, dtype=homographies.dtype)
+    grid_x, grid_y = torch.meshgrid(axis, axis, indexing="xy")
+    board_grid = torch.stack(
+        [
+            grid_x.reshape(-1),
+            grid_y.reshape(-1),
+            torch.ones(81, device=corners.device, dtype=homographies.dtype),
+        ],
+        dim=-1,
+    )
+    projected = homographies @ board_grid.T
+    projected = projected.transpose(1, 2)
+    denom = projected[..., 2:]
+    denom_sign = torch.sign(denom)
+    denom_sign = torch.where(denom_sign == 0, torch.ones_like(denom_sign), denom_sign)
+    denom = torch.where(denom.abs() < 1e-8, denom_sign * 1e-8, denom)
+    xy = projected[..., :2] / denom
+    grid = xy.reshape(batch_size, 9, 9, 2)
+
+    top_left = grid[:, :-1, :-1, :]
+    top_right = grid[:, :-1, 1:, :]
+    bottom_right = grid[:, 1:, 1:, :]
+    bottom_left = grid[:, 1:, :-1, :]
+    quads = torch.stack([top_left, top_right, bottom_right, bottom_left], dim=3)
+    x_coords = quads[..., 0]
+    y_coords = quads[..., 1]
+    bboxes = torch.stack(
+        [
+            x_coords.amin(dim=-1),
+            y_coords.amin(dim=-1),
+            x_coords.amax(dim=-1),
+            y_coords.amax(dim=-1),
+        ],
+        dim=-1,
+    )
+    return bboxes.reshape(batch_size, 64, 4)
+
+
+def _patch_centers(
+    *,
+    grid_size: int,
+    image_size: int,
+    device: torch.device,
+) -> torch.Tensor:
+    patch_step = float(image_size) / float(grid_size)
+    axis = (torch.arange(grid_size, device=device, dtype=torch.float32) + 0.5) * patch_step
+    center_x, center_y = torch.meshgrid(axis, axis, indexing="xy")
+    return torch.stack([center_x.reshape(-1), center_y.reshape(-1)], dim=-1)
+
+
 def sample_projected_square_tokens_from_patch_tokens(
     patch_tokens: torch.Tensor,
     *,
@@ -218,53 +296,43 @@ def sample_projected_square_tokens_from_patch_tokens(
             f"Expected corners with shape ({batch_size}, 4, 2), got {tuple(corners.shape)}"
         )
 
-    patch_step = float(image_size) / float(grid_size)
-    patch_centers = np.stack(
-        np.meshgrid(
-            (np.arange(grid_size, dtype=np.float32) + 0.5) * patch_step,
-            (np.arange(grid_size, dtype=np.float32) + 0.5) * patch_step,
-            indexing="xy",
-        ),
-        axis=-1,
-    ).reshape(patch_count, 2)
+    geometry_corners = corners.to(device=tokens.device, dtype=torch.float32)
+    bboxes = _project_square_bboxes_from_corners(geometry_corners)
+    patch_centers = _patch_centers(
+        grid_size=grid_size,
+        image_size=image_size,
+        device=tokens.device,
+    )
+    patch_x = patch_centers[:, 0].view(1, 1, patch_count)
+    patch_y = patch_centers[:, 1].view(1, 1, patch_count)
 
-    square_token_batches: list[torch.Tensor] = []
-    for sample_index, sample_corners in enumerate(corners.detach().cpu().numpy()):
-        sample_tokens = tokens[sample_index]
-        sample_square_tokens: list[torch.Tensor] = []
-        for row in range(8):
-            for col in range(8):
-                xmin, ymin, xmax, ymax = square_bbox_from_corners(
-                    sample_corners,
-                    row=row,
-                    col=col,
-                )
-                region_mask = (
-                    (patch_centers[:, 0] >= xmin)
-                    & (patch_centers[:, 0] <= xmax)
-                    & (patch_centers[:, 1] >= ymin)
-                    & (patch_centers[:, 1] <= ymax)
-                )
-                region_indices = np.flatnonzero(region_mask)
-                if len(region_indices) == 0:
-                    center = np.array(
-                        [(xmin + xmax) / 2.0, (ymin + ymax) / 2.0],
-                        dtype=np.float32,
-                    )
-                    nearest_index = int(
-                        np.argmin(np.sum((patch_centers - center[None, :]) ** 2, axis=1))
-                    )
-                    sample_square_tokens.append(sample_tokens[nearest_index])
-                    continue
-                index_tensor = torch.tensor(
-                    region_indices.tolist(),
-                    dtype=torch.long,
-                    device=sample_tokens.device,
-                )
-                sample_square_tokens.append(sample_tokens.index_select(0, index_tensor).mean(dim=0))
-        square_token_batches.append(torch.stack(sample_square_tokens, dim=0))
+    xmin = bboxes[..., 0].unsqueeze(-1)
+    ymin = bboxes[..., 1].unsqueeze(-1)
+    xmax = bboxes[..., 2].unsqueeze(-1)
+    ymax = bboxes[..., 3].unsqueeze(-1)
+    region_mask = (patch_x >= xmin) & (patch_x <= xmax) & (patch_y >= ymin) & (patch_y <= ymax)
 
-    return torch.stack(square_token_batches, dim=0)
+    weights = region_mask.to(dtype=tokens.dtype)
+    empty_regions = weights.sum(dim=-1) == 0
+    if empty_regions.any():
+        centers = torch.stack(
+            [
+                (bboxes[..., 0] + bboxes[..., 2]) / 2.0,
+                (bboxes[..., 1] + bboxes[..., 3]) / 2.0,
+            ],
+            dim=-1,
+        )
+        distances = torch.sum(
+            (patch_centers.view(1, 1, patch_count, 2) - centers.unsqueeze(2)) ** 2,
+            dim=-1,
+        )
+        nearest_patch_index = distances.argmin(dim=-1)
+        fallback_weights = torch.zeros_like(weights)
+        fallback_weights.scatter_(-1, nearest_patch_index.unsqueeze(-1), 1.0)
+        weights = torch.where(empty_regions.unsqueeze(-1), fallback_weights, weights)
+
+    normalized_weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1.0)
+    return torch.einsum("bsp,bpd->bsd", normalized_weights, tokens)
 
 
 def extract_square_token_features(
@@ -298,18 +366,19 @@ def extract_square_token_features(
                     height,
                     width,
                 )
-                square_embeddings = encoder.forward_pooled(square_images.to(device)).cpu()
-                square_tokens = square_embeddings.reshape(batch_size_actual, square_count, -1)
+                square_embeddings = encoder.forward_pooled(square_images.to(device))
+                square_tokens = square_embeddings.reshape(batch_size_actual, square_count, -1).cpu()
             else:
-                patch_tokens = encoder.forward_patches(images.to(device)).cpu()
+                patch_tokens = encoder.forward_patches(images.to(device))
                 if corners is None:
                     square_tokens = dino_patches_to_square_tokens(patch_tokens)
                 else:
                     square_tokens = sample_projected_square_tokens_from_patch_tokens(
                         patch_tokens,
-                        corners=corners,
+                        corners=corners.to(device),
                         image_size=images.shape[-1],
                     )
+                square_tokens = square_tokens.cpu()
             feature_batches.append(square_tokens)
             label_batches.append(labels.cpu())
     return torch.cat(feature_batches, dim=0), torch.cat(label_batches, dim=0)

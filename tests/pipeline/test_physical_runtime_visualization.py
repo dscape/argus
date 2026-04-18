@@ -34,10 +34,12 @@ def test_collect_visualized_frames_only_processes_history_up_to_selected_frame(
     def fake_read_board_logits_batch_from_frames(
         images: list[np.ndarray],
         *,
+        corners_list: list[object] | None,
         device: str,
         batch_size: int,
     ) -> list[torch.Tensor]:
         del device, batch_size
+        assert corners_list is not None
         frame_indices = [int(image[0, 0, 0]) for image in images]
         processed_batches.append(frame_indices)
         return [torch.full((64, 13), float(frame_index)) for frame_index in frame_indices]

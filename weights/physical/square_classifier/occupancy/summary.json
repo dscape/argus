@@ -1,6 +1,6 @@
 {
   "best_val_accuracy": 0.8333394970414201,
-  "checkpoint": "outputs/2026-04-17/square_classifier_occupancy_retrain_init/occupancy_classifier.pt",
+  "checkpoint": "weights/physical/square_classifier/occupancy/occupancy_classifier.pt",
   "class_names": [
     "empty",
     "occupied"

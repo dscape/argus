@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+from pipeline.paths import find_video_file
 
 
 def resolve_source_video_path(source_video_id: str) -> Path:
-    video_path = _PROJECT_ROOT / "data" / "videos" / source_video_id / f"{source_video_id}.mp4"
-    if not video_path.exists():
-        raise ValueError(f"Source video is missing for {source_video_id}: {video_path}")
+    video_path = find_video_file(source_video_id)
+    if video_path is None:
+        raise ValueError(f"Source video is missing for {source_video_id}")
     return video_path

@@ -1,6 +1,6 @@
 {
   "best_val_accuracy": 0.7343806521626789,
-  "checkpoint": "outputs/2026-04-17/square_classifier_piece_retrain_init/piece_classifier.pt",
+  "checkpoint": "weights/physical/square_classifier/piece_corrected/piece_classifier.pt",
   "class_names": [
     "P",
     "N",

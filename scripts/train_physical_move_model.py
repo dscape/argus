@@ -596,7 +596,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--square-query-dropout", type=float, default=0.0)
     parser.add_argument("--square-query-mlp-ratio", type=float, default=4.0)
     parser.add_argument("--initialize-move-model-checkpoint", type=Path, default=None)
-    parser.add_argument("--initialize-square-reader-checkpoint", type=Path, default=None)
     parser.add_argument("--freeze-initialized-square-reader", action="store_true")
     parser.add_argument(
         "--initialized-square-reader-adaptation",

@@ -12,7 +12,11 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from pipeline.physical.board_probe.board_data import PhysicalEvalBoardDataset, PhysicalEvalBoardRow
+from pipeline.physical.board_probe.board_data import (
+    PhysicalEvalBoardDataset,
+    PhysicalEvalBoardRow,
+    load_annotated_board_frame_bgr,
+)
 from pipeline.physical.board_probe.runtime import (
     PhysicalBoardLogitsSequenceReader,
     board_observation_from_logits,
@@ -34,6 +38,7 @@ _HEADER_BG = (248, 248, 248)
 _PANEL_BG = (255, 255, 255)
 _CONTACT_SHEET_BG = (245, 245, 245)
 _INFERENCE_BATCH_SIZE = 16
+_ANNOTATED_CLIP_CACHE: dict[Path, dict[str, Any]] = {}
 
 _CLASS_ID_TO_SYMBOL = {
     class_id: ("" if name == "empty" else name)
@@ -331,6 +336,7 @@ def _collect_visualized_frames_for_indices(
             logits_kwargs["weights_path"] = weights_path
         stateless_logits_list = read_board_logits_batch_from_frames(
             chunk_images,
+            corners_list=[row.corners for row in chunk_rows],
             **logits_kwargs,
         )
         if stateless_logits_list is None:
@@ -537,10 +543,7 @@ def _select_clip_path(
 
 
 def _load_board_image(row: PhysicalEvalBoardRow) -> np.ndarray:
-    image = cv2.imread(str(_PROJECT_ROOT / row.board_path), cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError(f"Failed to load board image: {row.board_path}")
-    return image
+    return load_annotated_board_frame_bgr(row, clip_cache=_ANNOTATED_CLIP_CACHE)
 
 
 def _fen_to_class_ids(fen: str) -> list[int]:

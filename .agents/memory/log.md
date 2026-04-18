@@ -174,3 +174,22 @@ Finished the `refactor/piece_projection` reorganisation. The physical stack is n
 ## 2026-04-17T20:04:19.670Z | decision | medium | Physical annotation split-manifest writes made atomic
 
 Debugged an intermittent `/annotate/physical/...?...split=val` internal server error. Root cause was `pipeline/physical/shared/splits.py` rewriting `data/physical/source_video_splits.json` with plain `write_text()`, which allowed concurrent reads during truncation and produced `JSONDecodeError: Expecting value` on the annotation API. Fixed by atomically replacing the manifest via a temp file + `replace()`, and by treating an existing blank manifest as recoverable empty state so the annotation route can rebuild it instead of 500ing.
+
+## 2026-04-18T08:35:20.236Z | decision | high | Fix piece-projection review regressions after refactor
+
+Implemented the review follow-up so the active square-based physical stack is geometrically consistent again.
+
+- `pipeline/analysis/board_reading.py`: the segmentation fallback no longer runs the board-probe reader without corners; it falls back through VLM only.
+- `pipeline/physical/board_probe/board_data.py`: annotated board datasets now read original clip frames from `clip_path`/`frame_index`, preprocess with stored corners, and skip legacy rows that lack clip metadata.
+- `pipeline/physical/board_probe/runtime.py` + `probe.py`: projected square pooling now stays on-device, computes one homography per sample, and fast-paths full-frame boards via direct patch-grid pooling.
+- `scripts/eval_physical_board_{runtime,tracker}.py`, `pipeline/physical/board_probe/{runtime_visualization,failure_study}.py`: eval/diagnostic tooling now loads clip frames and passes `row.corners`/`corners_list` instead of silently using rectified `row.board_path` boards.
+- `pipeline/physical/shared/move_data.py` and `pipeline/physical/piece_projection.py`: board-neighborhood prep and occupancy bboxes now reuse shared helpers instead of duplicating geometry.
+- `pipeline/physical/shared/source_video_paths.py`: source-video lookup now reuses `pipeline.paths.find_video_file()`.
+- `scripts/train_physical_move_model.py`: removed the dead `--initialize-square-reader-checkpoint` flag.
+- Weight summaries now point at committed checkpoint paths under `weights/physical/...`.
+
+Validation: `make lint`, `make typecheck`, `make test`.
+
+## 2026-04-18T08:38:01.495Z | decision | low | Physical runtime inspector still labels board images as rectified despite new piece-projection ru...
+
+Confirmed `/evaluate/physical` runtime inspector sessions (e.g. `22725862d6ce`) are using the promoted default model `weights/physical/best.pt` / `default · v8r1`, whose metadata says `board_input_mode: piece_projection_board`. Runtime inference goes through `pipeline/physical/board_probe/runtime.py` (`preprocess_board_neighborhood_image` + `sample_projected_square_tokens_from_patch_tokens`) and loads frames from `clip_path`, not from `rectified_board_path`. The dev-tools UI copy is stale (`dev-tools/components/evaluate/PhysicalRuntimeCard.tsx` says `Rectified frame crop`; `PhysicalRuntimeInspector.tsx` tooltip says `Samples rectified...`), and `PhysicalEvalBoardRow.board_path` is still populated from legacy `rectified_board_path` metadata for display/debug only.

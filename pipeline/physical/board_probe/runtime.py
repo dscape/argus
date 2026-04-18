@@ -11,11 +11,16 @@ import torch
 import torch.nn as nn
 
 from argus.model.vision_encoder import VisionEncoder
-from pipeline.physical.board_probe.board_data import INPUT_SIZE, preprocess_board_neighborhood_image
+from pipeline.physical.board_probe.board_data import (
+    INPUT_SIZE,
+    preprocess_board_image,
+    preprocess_board_neighborhood_image,
+)
 from pipeline.physical.board_probe.probe import (
     PhysicalBoardStateEnsembleProbe,
     board_probe_config_from_checkpoint,
     build_board_state_probe,
+    dino_patches_to_square_tokens,
     sample_projected_square_tokens_from_patch_tokens,
 )
 from pipeline.physical.board_probe.square_probe import load_probe_checkpoint
@@ -365,21 +370,20 @@ def _predict_board_logits(
     encoder.eval()
     probe.eval()
 
-    runtime_corners = _runtime_corners(board_crop, corners)
-    board_tensor, corners_tensor = preprocess_board_neighborhood_image(
+    board_tensor, corners_tensor = _prepare_runtime_board_input(
         board_crop,
-        runtime_corners,
-        size=input_size,
+        corners=corners,
+        input_size=input_size,
     )
 
     with torch.no_grad():
         patch_tokens = encoder.forward_patches(board_tensor.unsqueeze(0).to(probe_device))
-        square_tokens = sample_projected_square_tokens_from_patch_tokens(
-            patch_tokens.cpu(),
-            corners=corners_tensor.unsqueeze(0),
+        square_tokens = _pool_square_tokens_batch(
+            patch_tokens,
+            corners_list=[corners_tensor],
             image_size=input_size,
         )
-        return probe(square_tokens.to(probe_device)).squeeze(0).cpu()
+        return probe(square_tokens).squeeze(0).cpu()
 
 
 def _predict_board_logits_batch(
@@ -414,31 +418,120 @@ def _predict_board_logits_batch(
     probe.eval()
 
     prepared = [
-        preprocess_board_neighborhood_image(
+        _prepare_runtime_board_input(
             board_crop,
-            _runtime_corners(board_crop, corners),
-            size=input_size,
+            corners=corners,
+            input_size=input_size,
         )
         for board_crop, corners in zip(board_crops, corners_per_board)
     ]
     tensors = [board_tensor for board_tensor, _corners in prepared]
-    scaled_corners = [corners_tensor for _board_tensor, corners_tensor in prepared]
+    prepared_corners = [corners_tensor for _board_tensor, corners_tensor in prepared]
 
     logits_list: list[torch.Tensor] = []
     with torch.no_grad():
         for start in range(0, len(tensors), batch_size):
             batch_tensors = tensors[start : start + batch_size]
-            batch_corners = scaled_corners[start : start + batch_size]
+            batch_corners = prepared_corners[start : start + batch_size]
             batch = torch.stack(batch_tensors, dim=0).to(probe_device)
-            patch_tokens = encoder.forward_patches(batch).cpu()
-            square_tokens = sample_projected_square_tokens_from_patch_tokens(
+            patch_tokens = encoder.forward_patches(batch)
+            square_tokens = _pool_square_tokens_batch(
                 patch_tokens,
-                corners=torch.stack(batch_corners, dim=0),
+                corners_list=batch_corners,
                 image_size=input_size,
             )
-            logits_batch = probe(square_tokens.to(probe_device)).cpu()
+            logits_batch = probe(square_tokens).cpu()
             logits_list.extend(logits_batch.unbind(0))
     return logits_list
+
+
+def _prepare_runtime_board_input(
+    board_crop: np.ndarray,
+    *,
+    corners: tuple[tuple[float, float], ...] | list[list[float]] | None,
+    input_size: int,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    if _should_use_direct_square_pooling(board_crop, corners):
+        return preprocess_board_image(board_crop, size=input_size), None
+    board_tensor, corners_tensor = preprocess_board_neighborhood_image(
+        board_crop,
+        _runtime_corners(board_crop, corners),
+        size=input_size,
+    )
+    return board_tensor, corners_tensor
+
+
+def _pool_square_tokens_batch(
+    patch_tokens: torch.Tensor,
+    *,
+    corners_list: list[torch.Tensor | None],
+    image_size: int,
+) -> torch.Tensor:
+    batch_size = patch_tokens.shape[0]
+    if len(corners_list) != batch_size:
+        raise ValueError(
+            f"corners_list length {len(corners_list)} must match batch size {batch_size}"
+        )
+
+    square_tokens = torch.empty(
+        (batch_size, 64, patch_tokens.shape[-1]),
+        device=patch_tokens.device,
+        dtype=patch_tokens.dtype,
+    )
+
+    direct_indices = [index for index, corners in enumerate(corners_list) if corners is None]
+    if direct_indices:
+        direct_index_tensor = torch.tensor(
+            direct_indices,
+            device=patch_tokens.device,
+            dtype=torch.long,
+        )
+        direct_square_tokens = dino_patches_to_square_tokens(
+            patch_tokens.index_select(0, direct_index_tensor)
+        )
+        square_tokens.index_copy_(0, direct_index_tensor, direct_square_tokens)
+
+    projected_indices = [index for index, corners in enumerate(corners_list) if corners is not None]
+    if projected_indices:
+        projected_index_tensor = torch.tensor(
+            projected_indices,
+            device=patch_tokens.device,
+            dtype=torch.long,
+        )
+        projected_corners = torch.stack(
+            [corners for corners in corners_list if corners is not None],
+            dim=0,
+        ).to(patch_tokens.device)
+        projected_square_tokens = sample_projected_square_tokens_from_patch_tokens(
+            patch_tokens.index_select(0, projected_index_tensor),
+            corners=projected_corners,
+            image_size=image_size,
+        )
+        square_tokens.index_copy_(0, projected_index_tensor, projected_square_tokens)
+
+    return square_tokens
+
+
+def _should_use_direct_square_pooling(
+    board_crop: np.ndarray,
+    corners: tuple[tuple[float, float], ...] | list[list[float]] | None,
+) -> bool:
+    if corners is None:
+        return True
+    points = np.asarray(corners, dtype=np.float32)
+    if points.shape != (4, 2):
+        return False
+    return np.allclose(points, np.asarray(_full_frame_corners(board_crop), dtype=np.float32), atol=1e-3)
+
+
+def _full_frame_corners(board_crop: np.ndarray) -> tuple[tuple[float, float], ...]:
+    height, width = board_crop.shape[:2]
+    return (
+        (0.0, 0.0),
+        (float(width - 1), 0.0),
+        (float(width - 1), float(height - 1)),
+        (0.0, float(height - 1)),
+    )
 
 
 def _get_runtime_model(
@@ -506,13 +599,7 @@ def _runtime_corners(
 ) -> tuple[tuple[float, float], ...] | list[list[float]]:
     if corners is not None:
         return corners
-    height, width = board_crop.shape[:2]
-    return (
-        (0.0, 0.0),
-        (float(width - 1), 0.0),
-        (float(width - 1), float(height - 1)),
-        (0.0, float(height - 1)),
-    )
+    return _full_frame_corners(board_crop)
 
 
 def _encoder_kwargs_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:

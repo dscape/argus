@@ -16,7 +16,7 @@ from argus.chess.constraint_mask import get_legal_mask
 from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
 from pipeline.overlay.overlay_move_detector import find_move_between_positions
 from pipeline.physical.shared import splits
-from pipeline.physical.piece_projection import extract_board_neighborhood_crop
+from pipeline.physical.board_probe.board_data import prepare_board_neighborhood_image
 from pipeline.physical.shared.annotation_rows import (
     _load_clip_frame_bgr,
     load_annotated_oblique_rows,
@@ -695,17 +695,12 @@ def _prepare_projected_board_frame(
     image_size: int,
     crop_margin: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    crop = extract_board_neighborhood_crop(image_bgr, corners, crop_margin=crop_margin)
-    rgb = cv2.cvtColor(crop.image_bgr, cv2.COLOR_BGR2RGB)
-    interpolation = cv2.INTER_AREA if min(rgb.shape[:2]) >= image_size else cv2.INTER_LINEAR
-    resized = cv2.resize(rgb, (image_size, image_size), interpolation=interpolation)
-    image_tensor = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
-
-    height, width = crop.image_bgr.shape[:2]
-    scaled_corners = crop.corners.copy()
-    scaled_corners[:, 0] *= float(image_size) / max(float(width), 1.0)
-    scaled_corners[:, 1] *= float(image_size) / max(float(height), 1.0)
-    return image_tensor, torch.from_numpy(scaled_corners.astype("float32"))
+    return prepare_board_neighborhood_image(
+        image_bgr,
+        corners,
+        size=image_size,
+        crop_margin=crop_margin,
+    )
 
 
 def _initial_board_state_for_clip(clip_path: str) -> tuple[str, str | None]:

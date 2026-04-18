@@ -1,4 +1,4 @@
-- Current objective shifted from refactor completion to closing the remaining dev-tools/runtime verification gap after the refactor.
+- Current objective is closing the remaining dev-tools/runtime verification gap after the refactor.
 - Immediate next step: inspect/fix the backend/API path used by `/evaluate/physical` `Sample & Inspect`, starting from `dev-tools/api/routers/evaluate/physical_runtime.py` and `dev-tools/api/services/evaluate/physical_runtime_service.py`, to explain why the UI stalls at `0/8`.
 - Reconcile route expectations from the original plan with current app routes: decide whether `/evaluate/physical-runtime` and `/annotate/physical-eval` should be restored, redirected, or documented as superseded by `/evaluate/physical` and `/annotate/physical`.
 - If backend/runtime flow and route expectations are satisfactorily resolved, rerun final validation (`make lint`, `make typecheck`, `make test`) and then call `signal_loop_success`.

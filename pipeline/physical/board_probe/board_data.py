@@ -110,17 +110,20 @@ class PhysicalAnnotatedBoardDataset(Dataset[tuple[torch.Tensor, torch.Tensor, to
         self.image_size = image_size
         self.crop_margin = crop_margin
         self.rows = rows or load_annotated_board_rows(self.annotation_root)
+        self._clip_cache: dict[Path, dict[str, Any]] = {}
 
     def __len__(self) -> int:
         return len(self.rows)
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         row = self.rows[index]
-        image_bgr = cv2.imread(str(_PROJECT_ROOT / row.board_path), cv2.IMREAD_COLOR)
-        if image_bgr is None:
-            raise ValueError(f"Failed to load board image: {row.board_path}")
-        image = preprocess_board_image(image_bgr, size=self.image_size)
-        corners = _scaled_full_frame_corners(image_bgr, size=self.image_size)
+        image_bgr = load_annotated_board_frame_bgr(row, clip_cache=self._clip_cache)
+        image, corners = preprocess_board_neighborhood_image(
+            image_bgr,
+            row.corners,
+            size=self.image_size,
+            crop_margin=self.crop_margin,
+        )
         targets = torch.tensor(row.labels, dtype=torch.long)
         return image, targets, corners
 
@@ -188,6 +191,8 @@ def load_annotated_board_rows(annotation_root: str | Path) -> list[PhysicalEvalB
             or len(raw_corners) != 4
         ):
             continue
+        if payload.get("clip_path") is None or payload.get("frame_index") is None:
+            continue
         rows.append(
             PhysicalEvalBoardRow(
                 annotation_id=str(payload["annotation_id"]),
@@ -199,12 +204,8 @@ def load_annotated_board_rows(annotation_root: str | Path) -> list[PhysicalEvalB
                     else None
                 ),
                 corners=tuple((float(x), float(y)) for x, y in raw_corners),
-                clip_path=(
-                    str(payload["clip_path"]) if payload.get("clip_path") is not None else None
-                ),
-                frame_index=(
-                    int(payload["frame_index"]) if payload.get("frame_index") is not None else None
-                ),
+                clip_path=str(payload["clip_path"]),
+                frame_index=int(payload["frame_index"]),
             )
         )
     return rows
@@ -282,7 +283,7 @@ def preprocess_board_image(image_bgr: np.ndarray, *, size: int = INPUT_SIZE) -> 
     return normalize_rgb_tensor(tensor)
 
 
-def preprocess_board_neighborhood_image(
+def prepare_board_neighborhood_image(
     image_bgr: np.ndarray,
     corners: tuple[tuple[float, float], ...] | list[list[float]],
     *,
@@ -290,12 +291,32 @@ def preprocess_board_neighborhood_image(
     crop_margin: float = _DEFAULT_BOARD_CROP_MARGIN,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     crop = extract_board_neighborhood_crop(image_bgr, corners, crop_margin=crop_margin)
-    tensor = preprocess_board_image(crop.image_bgr, size=size)
+    rgb = cv2.cvtColor(crop.image_bgr, cv2.COLOR_BGR2RGB)
+    interpolation = cv2.INTER_AREA if min(rgb.shape[:2]) >= size else cv2.INTER_LINEAR
+    resized = cv2.resize(rgb, (size, size), interpolation=interpolation)
+    tensor = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
+
     height, width = crop.image_bgr.shape[:2]
     scaled_corners = crop.corners.copy()
     scaled_corners[:, 0] *= float(size) / max(float(width), 1.0)
     scaled_corners[:, 1] *= float(size) / max(float(height), 1.0)
     return tensor, torch.from_numpy(scaled_corners.astype(np.float32))
+
+
+def preprocess_board_neighborhood_image(
+    image_bgr: np.ndarray,
+    corners: tuple[tuple[float, float], ...] | list[list[float]],
+    *,
+    size: int = INPUT_SIZE,
+    crop_margin: float = _DEFAULT_BOARD_CROP_MARGIN,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    tensor, scaled_corners = prepare_board_neighborhood_image(
+        image_bgr,
+        corners,
+        size=size,
+        crop_margin=crop_margin,
+    )
+    return normalize_rgb_tensor(tensor), scaled_corners
 
 
 def normalize_rgb_tensor(tensor: torch.Tensor) -> torch.Tensor:
@@ -331,6 +352,18 @@ def _scaled_full_frame_corners(frame_bgr: np.ndarray, *, size: int) -> torch.Ten
         ],
         dtype=torch.float32,
     )
+
+
+def load_annotated_board_frame_bgr(
+    row: PhysicalEvalBoardRow,
+    *,
+    clip_cache: dict[Path, dict[str, Any]],
+) -> np.ndarray:
+    if row.clip_path is None or row.frame_index is None:
+        raise ValueError(
+            "Annotated board rows require clip_path and frame_index for piece-projection inputs"
+        )
+    return _load_clip_frame_bgr(row, clip_cache=clip_cache)
 
 
 def _load_clip_frame_bgr(
