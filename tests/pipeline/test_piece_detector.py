@@ -11,7 +11,7 @@ from pipeline.analysis.piece_detector import (
 
 
 def test_detect_with_square_classifier_uses_physical_module(monkeypatch) -> None:
-    import pipeline.physical.square_classifier as square_classifier
+    import pipeline.physical.board_probe.runtime as square_classifier
 
     monkeypatch.setattr(
         square_classifier,

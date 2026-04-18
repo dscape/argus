@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-from pipeline.physical.square_classifiers import (
+from pipeline.physical.two_stage.classifiers import (
     OCCUPANCY_CLASS_NAMES,
     OCCUPANCY_NUM_CLASSES,
     PIECE_CLASS_NAMES,

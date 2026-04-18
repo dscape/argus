@@ -16,7 +16,7 @@ import torch
 from pipeline.overlay.calibration import is_camera_bbox_usable
 from pipeline.overlay.overlay_move_detector import find_move_between_positions
 from pipeline.overlay.replay import build_replay_board
-from pipeline.physical import eval_dataset, splits
+from pipeline.physical.shared import eval_dataset, splits
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 from api.services.data import clip_service
@@ -110,7 +110,7 @@ def detect_corners(
     *,
     padding_px: int = 0,
 ) -> dict[str, Any] | None:
-    from pipeline.physical.board_localizer import localize_board
+    from pipeline.physical.shared.board_localizer import localize_board
 
     image_rgb = _get_clip_frame_rgb(session_id, frame_index, padding_px=padding_px)
     image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
@@ -132,7 +132,7 @@ def track_corners(
     *,
     padding_px: int = 0,
 ) -> dict[str, Any] | None:
-    from pipeline.physical.board_localizer import track_corners as _track
+    from pipeline.physical.shared.board_localizer import track_corners as _track
 
     source_rgb = _get_clip_frame_rgb(session_id, source_frame_index, padding_px=padding_px)
     target_rgb = _get_clip_frame_rgb(session_id, target_frame_index, padding_px=padding_px)

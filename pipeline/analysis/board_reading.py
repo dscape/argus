@@ -95,7 +95,7 @@ class HybridFrameReader(OverlayFrameReader):
 
     def __init__(self, config: VideoAnalysisConfig) -> None:
         super().__init__(config)
-        from pipeline.physical.square_classifier import PhysicalBoardSequenceReader
+        from pipeline.physical.board_probe.runtime import PhysicalBoardSequenceReader
 
         self._physical_reader = PhysicalBoardSequenceReader(device=config.device)
 
@@ -108,7 +108,7 @@ class HybridFrameReader(OverlayFrameReader):
 
         from pipeline.analysis.board_segmenter import segment_board
         from pipeline.analysis.piece_detector import detect_pieces
-        from pipeline.physical.board_localizer import localize_board
+        from pipeline.physical.shared.board_localizer import localize_board
 
         localization = localize_board(frame_bgr, device=self.config.device)
         if localization is not None:

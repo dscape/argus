@@ -49,6 +49,14 @@ class CameraPose:
         return self.K @ np.hstack([self.R, self.t])
 
 
+@dataclass(frozen=True)
+class BoardNeighborhoodCrop:
+    """Axis-aligned crop around the annotated board and its relative corners."""
+
+    image_bgr: np.ndarray
+    corners: np.ndarray
+
+
 def default_camera_matrix(frame_shape: tuple[int, int] | tuple[int, int, int]) -> np.ndarray:
     """Default pinhole intrinsics for a frame of the given shape.
 
@@ -88,6 +96,78 @@ def board_to_image_homography(
         dtype=np.float32,
     )
     return cv2.getPerspectiveTransform(board_points, points).astype(np.float64)
+
+
+def extract_board_neighborhood_crop(
+    image_bgr: np.ndarray,
+    corners: tuple[tuple[float, float], ...] | list[list[float]],
+    *,
+    crop_margin: float = 0.18,
+) -> BoardNeighborhoodCrop:
+    """Crop the frame down to the board neighborhood and return relative corners."""
+    points = np.asarray(corners, dtype=np.float32)
+    if points.shape != (4, 2):
+        raise ValueError(f"corners must have shape (4, 2), got {points.shape}")
+    if crop_margin < 0.0:
+        raise ValueError(f"crop_margin must be >= 0, got {crop_margin}")
+
+    height, width = image_bgr.shape[:2]
+    min_xy = points.min(axis=0)
+    max_xy = points.max(axis=0)
+    extent = np.maximum(max_xy - min_xy, 1.0)
+    margin = extent * float(crop_margin)
+
+    x1 = max(0, int(np.floor(min_xy[0] - margin[0])))
+    y1 = max(0, int(np.floor(min_xy[1] - margin[1])))
+    x2 = min(width, int(np.ceil(max_xy[0] + margin[0])))
+    y2 = min(height, int(np.ceil(max_xy[1] + margin[1])))
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError("Invalid board crop derived from corners")
+
+    cropped = image_bgr[y1:y2, x1:x2].copy()
+    relative_corners = points - np.array([x1, y1], dtype=np.float32)
+    return BoardNeighborhoodCrop(image_bgr=cropped, corners=relative_corners)
+
+
+def project_square_base_quad(
+    corners: tuple[tuple[float, float], ...] | list[list[float]],
+    *,
+    row: int,
+    col: int,
+) -> np.ndarray:
+    """Project one square's base quad (z=0) into image pixels."""
+    _validate_row_col(row, col)
+    board_quad = np.array(
+        [
+            [float(col), float(row)],
+            [float(col + 1), float(row)],
+            [float(col + 1), float(row + 1)],
+            [float(col), float(row + 1)],
+        ],
+        dtype=np.float32,
+    ).reshape(1, 4, 2)
+    projected = cv2.perspectiveTransform(board_quad, board_to_image_homography(corners))
+    return projected.reshape(4, 2).astype(np.float64)
+
+
+def square_bbox_from_corners(
+    corners: tuple[tuple[float, float], ...] | list[list[float]],
+    *,
+    row: int,
+    col: int,
+    pad_ratio: float = 0.0,
+) -> tuple[float, float, float, float]:
+    """Axis-aligned image bbox for one square's projected base quad."""
+    if pad_ratio < 0.0:
+        raise ValueError(f"pad_ratio must be >= 0, got {pad_ratio}")
+    projected = project_square_base_quad(corners, row=row, col=col)
+    xmin = float(projected[:, 0].min())
+    ymin = float(projected[:, 1].min())
+    xmax = float(projected[:, 0].max())
+    ymax = float(projected[:, 1].max())
+    pad_x = (xmax - xmin) * pad_ratio
+    pad_y = (ymax - ymin) * pad_ratio
+    return xmin - pad_x, ymin - pad_y, xmax + pad_x, ymax + pad_y
 
 
 def camera_pose_from_corners(
@@ -238,6 +318,11 @@ def piece_bbox_from_projection(projected_quad: np.ndarray) -> tuple[float, float
     xs = projected_quad[:, 0]
     ys = projected_quad[:, 1]
     return float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())
+
+
+def _validate_row_col(row: int, col: int) -> None:
+    if not 0 <= row <= 7 or not 0 <= col <= 7:
+        raise ValueError(f"row and col must be in [0, 7], got row={row}, col={col}")
 
 
 def _axis_aligned_crop(

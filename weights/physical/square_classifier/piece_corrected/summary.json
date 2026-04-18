@@ -1,6 +1,6 @@
 {
-  "best_val_accuracy": 0.725750607203762,
-  "checkpoint": "outputs/square_classifier/piece_corrected/piece_classifier.pt",
+  "best_val_accuracy": 0.7343806521626789,
+  "checkpoint": "outputs/2026-04-17/square_classifier_piece_retrain_init/piece_classifier.pt",
   "class_names": [
     "P",
     "N",
@@ -19,41 +19,12 @@
   "history": [
     {
       "epoch": 0,
-      "train_accuracy": 0.9169024045261669,
-      "train_loss": 0.2806170100272604,
-      "val_accuracy": 0.6438426954679345
-    },
-    {
-      "epoch": 1,
-      "train_accuracy": 0.9759547383309759,
-      "train_loss": 0.08410841074768556,
-      "val_accuracy": 0.6429125109813446
-    },
-    {
-      "epoch": 2,
-      "train_accuracy": 0.9863861386138614,
-      "train_loss": 0.04656125980000327,
-      "val_accuracy": 0.635005942845331
-    },
-    {
-      "epoch": 3,
-      "train_accuracy": 0.9931046676096181,
-      "train_loss": 0.022735391008887305,
-      "val_accuracy": 0.725750607203762
-    },
-    {
-      "epoch": 4,
-      "train_accuracy": 0.9969059405940595,
-      "train_loss": 0.008654610323722767,
-      "val_accuracy": 0.6787762906309751
-    },
-    {
-      "epoch": 5,
-      "train_accuracy": 0.9988507779349364,
-      "train_loss": 0.003767652204481493,
-      "val_accuracy": 0.724096945894269
+      "train_accuracy": 0.9974327195467422,
+      "train_loss": 0.007887680313561313,
+      "val_accuracy": 0.7343806521626789
     }
   ],
+  "initialize_checkpoint": "weights/physical/square_classifier/piece_corrected/piece_classifier.pt",
   "input_size": 224,
   "model_name": "facebook/dinov2-base",
   "num_classes": 12,

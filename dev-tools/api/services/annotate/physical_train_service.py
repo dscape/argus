@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pipeline.physical import manual_train_dataset
+from pipeline.physical.shared import manual_train_dataset
 
 from api.services.annotate import physical_eval_service
 

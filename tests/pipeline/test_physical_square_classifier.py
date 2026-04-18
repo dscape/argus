@@ -3,8 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
-from pipeline.physical.board_probe import PhysicalBoardStateEnsembleProbe, PhysicalBoardStateProbe
-from pipeline.physical.square_classifier import (
+from pipeline.physical.board_probe.probe import (
+    PhysicalBoardStateEnsembleProbe,
+    PhysicalBoardStateProbe,
+)
+from pipeline.physical.board_probe.runtime import (
     PhysicalBoardSequenceReader,
     _build_probe_from_checkpoint,
     _class_ids_to_board_fen,
@@ -74,7 +77,7 @@ def test_build_probe_from_checkpoint_returns_ensemble_for_logit_ensemble_archite
 
 
 def test_read_board_observation_from_frame_applies_constraints(monkeypatch) -> None:
-    import pipeline.physical.square_classifier as square_classifier
+    import pipeline.physical.board_probe.runtime as square_classifier
 
     class DummyModule:
         pass
@@ -113,7 +116,7 @@ def test_read_board_observation_from_frame_applies_constraints(monkeypatch) -> N
 def test_physical_board_sequence_reader_uses_runtime_default_temporal_smoothing(
     monkeypatch,
 ) -> None:
-    import pipeline.physical.square_classifier as square_classifier
+    import pipeline.physical.board_probe.runtime as square_classifier
     from pipeline.shared.board_smoothing import AdaptiveBoardLogitsExponentialSmoother
 
     monkeypatch.setattr(
@@ -138,7 +141,7 @@ def test_physical_board_sequence_reader_uses_runtime_default_temporal_smoothing(
 
 
 def test_read_board_observation_from_frame_applies_runtime_logit_bias(monkeypatch) -> None:
-    import pipeline.physical.square_classifier as square_classifier
+    import pipeline.physical.board_probe.runtime as square_classifier
 
     class DummyModule:
         pass
@@ -175,7 +178,7 @@ def test_read_board_observation_from_frame_applies_runtime_logit_bias(monkeypatc
 
 
 def test_physical_board_sequence_reader_applies_logit_bias_before_smoothing(monkeypatch) -> None:
-    import pipeline.physical.square_classifier as square_classifier
+    import pipeline.physical.board_probe.runtime as square_classifier
 
     class DummyModule:
         pass
@@ -230,7 +233,7 @@ def test_physical_board_sequence_reader_applies_logit_bias_before_smoothing(monk
 
 
 def test_physical_board_sequence_reader_smooths_logits_across_frames(monkeypatch) -> None:
-    import pipeline.physical.square_classifier as square_classifier
+    import pipeline.physical.board_probe.runtime as square_classifier
 
     class DummyModule:
         pass
@@ -282,7 +285,7 @@ def test_physical_board_sequence_reader_smooths_logits_across_frames(monkeypatch
 
 
 def test_read_fen_from_frame_returns_none_without_weights(monkeypatch) -> None:
-    import pipeline.physical.square_classifier as square_classifier
+    import pipeline.physical.board_probe.runtime as square_classifier
 
     monkeypatch.setattr(
         square_classifier,

@@ -7,9 +7,12 @@ from pipeline.physical.piece_projection import (
     board_to_image_homography,
     camera_pose_from_corners,
     default_camera_matrix,
+    extract_board_neighborhood_crop,
     piece_bbox_from_projection,
     project_piece_box,
     project_points,
+    project_square_base_quad,
+    square_bbox_from_corners,
 )
 
 _FRAME_SHAPE = (1080, 1920, 3)
@@ -184,6 +187,39 @@ def test_oblique_vs_top_down_produces_very_different_top_extensions() -> None:
         f"closer-to-top-down top_ext {closer_to_top_down:.2f} should be <1"
     )
     assert oblique > closer_to_top_down + 1.5
+
+
+def test_extract_board_neighborhood_crop_returns_relative_corners() -> None:
+    image = np.zeros((100, 120, 3), dtype=np.uint8)
+    corners = ((20.0, 10.0), (100.0, 10.0), (100.0, 90.0), (20.0, 90.0))
+
+    crop = extract_board_neighborhood_crop(image, corners, crop_margin=0.25)
+
+    assert crop.image_bgr.shape == (100, 120, 3)
+    np.testing.assert_allclose(
+        crop.corners,
+        np.array([[20.0, 10.0], [100.0, 10.0], [100.0, 90.0], [20.0, 90.0]], dtype=np.float32),
+    )
+
+
+def test_project_square_base_quad_matches_axis_aligned_board_geometry() -> None:
+    corners = ((20.0, 10.0), (100.0, 10.0), (100.0, 90.0), (20.0, 90.0))
+
+    quad = project_square_base_quad(corners, row=2, col=3)
+
+    np.testing.assert_allclose(
+        quad,
+        np.array([[50.0, 30.0], [60.0, 30.0], [60.0, 40.0], [50.0, 40.0]], dtype=np.float64),
+        atol=1e-6,
+    )
+
+
+def test_square_bbox_from_corners_supports_padding() -> None:
+    corners = ((20.0, 10.0), (100.0, 10.0), (100.0, 90.0), (20.0, 90.0))
+
+    bbox = square_bbox_from_corners(corners, row=2, col=3, pad_ratio=0.1)
+
+    np.testing.assert_allclose(bbox, (49.0, 29.0, 61.0, 41.0), atol=1e-6)
 
 
 def test_default_piece_height_roundtrips_to_expected_range() -> None:

@@ -25,13 +25,13 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline.physical.oblique_square_context import load_annotated_oblique_rows
-from pipeline.physical.square_classifier_data import NativeFrameLoader
-from pipeline.physical.square_classifiers import (
+from pipeline.physical.shared.annotation_rows import load_annotated_oblique_rows
+from pipeline.physical.two_stage.classifier_data import NativeFrameLoader
+from pipeline.physical.two_stage.classifiers import (
     SquareClassifier,
     SquareClassifierConfig,
 )
-from pipeline.physical.two_stage_board_reader import read_board
+from pipeline.physical.two_stage.reader import read_board
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 from argus.model.vision_encoder import VisionEncoder
@@ -179,7 +179,11 @@ def main() -> None:
     print(f"board exact match:             {metrics.board_exact_match:.4f}")
     print(f"piece-only exact match:        {metrics.piece_only_exact_match:.4f}")
     print(f"mean squares correct / board:  {metrics.mean_squares_correct_per_board:.1f} / 64")
-    print(f"\nwrote: {output_path.relative_to(_PROJECT_ROOT)}")
+    try:
+        rendered_output_path = output_path.relative_to(_PROJECT_ROOT)
+    except ValueError:
+        rendered_output_path = output_path
+    print(f"\nwrote: {rendered_output_path}")
 
 
 def _load_classifier(checkpoint_path: Path, *, device: torch.device) -> SquareClassifier:

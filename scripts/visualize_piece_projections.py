@@ -26,14 +26,14 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline.physical.direct_board_reader_data import resolve_source_video_path
-from pipeline.physical.oblique_square_context import load_annotated_oblique_rows
 from pipeline.physical.piece_projection import (
     camera_pose_from_corners,
     default_camera_matrix,
     extract_projected_piece_crop,
     project_piece_box,
 )
+from pipeline.physical.shared.annotation_rows import load_annotated_oblique_rows
+from pipeline.physical.shared.source_video_paths import resolve_source_video_path
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent

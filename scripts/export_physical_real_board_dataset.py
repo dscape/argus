@@ -16,8 +16,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline.physical.eval_dataset import DEFAULT_BOARD_SIZE, rectify_board_image
-from pipeline.physical.real_board_data import PhysicalRealBoardDataset
+from pipeline.physical.shared.eval_dataset import DEFAULT_BOARD_SIZE, rectify_board_image
+from pipeline.physical.shared.real_board_data import PhysicalRealBoardDataset
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "physical_real_board_dataset"

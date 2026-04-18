@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import pytest
 import torch
-from pipeline.physical.board_data import (
+from pipeline.physical.board_probe.board_data import (
     INPUT_SIZE,
     PhysicalEvalBoardDataset,
     PhysicalEvalBoardRow,
@@ -48,10 +48,11 @@ def test_physical_synthetic_clip_board_dataset_returns_board_and_targets(tmp_pat
         seed=7,
     )
 
-    image, targets = dataset[0]
+    image, targets, corners = dataset[0]
 
     assert image.shape == (3, 64, 64)
     assert targets.shape == (64,)
+    assert corners.shape == (4, 2)
 
 
 def test_load_synthetic_board_rows_rejects_request_larger_than_available(tmp_path) -> None:
@@ -65,11 +66,14 @@ def test_load_synthetic_board_rows_rejects_request_larger_than_available(tmp_pat
         load_synthetic_board_rows(clips_dir=clip_dir, num_positions=2, seed=7)
 
 
-def test_physical_eval_board_dataset_loads_rectified_boards(tmp_path) -> None:
+def test_physical_eval_board_dataset_loads_board_neighborhoods(tmp_path) -> None:
     project_root = tmp_path
     board_path = project_root / "data" / "physical" / "val" / "boards" / "sample.jpg"
     board_path.parent.mkdir(parents=True)
     assert cv2.imwrite(str(board_path), np.full((32, 32, 3), 127, dtype=np.uint8))
+    clip_path = project_root / "data" / "argus" / "train_real" / "clip.pt"
+    clip_path.parent.mkdir(parents=True)
+    torch.save({"frames": torch.zeros((1, 3, 32, 32), dtype=torch.uint8)}, clip_path)
 
     dataset = PhysicalEvalBoardDataset(
         rows=[
@@ -78,29 +82,36 @@ def test_physical_eval_board_dataset_loads_rectified_boards(tmp_path) -> None:
                 board_path="data/physical/val/boards/sample.jpg",
                 labels=tuple([0] * 64),
                 source_video_id="video-1",
+                corners=((0.0, 0.0), (31.0, 0.0), (31.0, 31.0), (0.0, 31.0)),
+                clip_path="data/argus/train_real/clip.pt",
+                frame_index=0,
             )
         ],
         image_size=32,
     )
 
-    import pipeline.physical.board_data as board_data
+    import pipeline.physical.board_probe.board_data as board_data
 
     original_root = board_data._PROJECT_ROOT
     board_data._PROJECT_ROOT = project_root
     try:
-        image, targets = dataset[0]
+        image, targets, corners = dataset[0]
     finally:
         board_data._PROJECT_ROOT = original_root
 
     assert image.shape == (3, 32, 32)
     assert targets.shape == (64,)
+    assert corners.shape == (4, 2)
 
 
-def test_physical_manual_train_board_dataset_loads_rectified_boards(tmp_path) -> None:
+def test_physical_manual_train_board_dataset_loads_board_neighborhoods(tmp_path) -> None:
     project_root = tmp_path
     board_path = project_root / "data" / "physical" / "train" / "boards" / "sample.jpg"
     board_path.parent.mkdir(parents=True)
     assert cv2.imwrite(str(board_path), np.full((32, 32, 3), 127, dtype=np.uint8))
+    clip_path = project_root / "data" / "argus" / "train_real" / "clip.pt"
+    clip_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({"frames": torch.zeros((1, 3, 32, 32), dtype=torch.uint8)}, clip_path)
 
     dataset = PhysicalManualTrainBoardDataset(
         rows=[
@@ -109,19 +120,23 @@ def test_physical_manual_train_board_dataset_loads_rectified_boards(tmp_path) ->
                 board_path="data/physical/train/boards/sample.jpg",
                 labels=tuple([0] * 64),
                 source_video_id="video-1",
+                corners=((0.0, 0.0), (31.0, 0.0), (31.0, 31.0), (0.0, 31.0)),
+                clip_path="data/argus/train_real/clip.pt",
+                frame_index=0,
             )
         ],
         image_size=32,
     )
 
-    import pipeline.physical.board_data as board_data
+    import pipeline.physical.board_probe.board_data as board_data
 
     original_root = board_data._PROJECT_ROOT
     board_data._PROJECT_ROOT = project_root
     try:
-        image, targets = dataset[0]
+        image, targets, corners = dataset[0]
     finally:
         board_data._PROJECT_ROOT = original_root
 
     assert image.shape == (3, 32, 32)
     assert targets.shape == (64,)
+    assert corners.shape == (4, 2)

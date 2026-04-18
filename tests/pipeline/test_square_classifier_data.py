@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import torch
-from pipeline.physical.square_classifier_data import (
+from pipeline.physical.two_stage.classifier_data import (
     class_counts,
     preprocess_square_crop,
 )
@@ -36,12 +36,12 @@ def test_occupancy_dataset_yields_64_samples_per_board(tmp_path: Path) -> None:
     labels[63] = 12  # black king on h1
     annotation_root = _make_annotation_bundle(tmp_path, labels=labels)
 
-    import pipeline.physical.oblique_square_context as oblique_context
+    import pipeline.physical.shared.annotation_rows as annotation_rows
 
-    original_root = oblique_context._PROJECT_ROOT
-    oblique_context._PROJECT_ROOT = tmp_path
+    original_root = annotation_rows._PROJECT_ROOT
+    annotation_rows._PROJECT_ROOT = tmp_path
     try:
-        from pipeline.physical.square_classifier_data import load_occupancy_dataset
+        from pipeline.physical.two_stage.classifier_data import load_occupancy_dataset
 
         dataset = load_occupancy_dataset(annotation_root, input_size=32, use_native_frames=False)
         assert len(dataset) == 64
@@ -52,7 +52,7 @@ def test_occupancy_dataset_yields_64_samples_per_board(tmp_path: Path) -> None:
         empty_image, empty_label = dataset[1]
         assert empty_label.item() == 0  # empty
     finally:
-        oblique_context._PROJECT_ROOT = original_root
+        annotation_rows._PROJECT_ROOT = original_root
 
 
 def test_piece_dataset_skips_empty_squares_and_emits_12_class_labels(tmp_path: Path) -> None:
@@ -62,19 +62,19 @@ def test_piece_dataset_skips_empty_squares_and_emits_12_class_labels(tmp_path: P
     labels[2] = 12  # black king -> piece_label 11
     annotation_root = _make_annotation_bundle(tmp_path, labels=labels)
 
-    import pipeline.physical.oblique_square_context as oblique_context
+    import pipeline.physical.shared.annotation_rows as annotation_rows
 
-    original_root = oblique_context._PROJECT_ROOT
-    oblique_context._PROJECT_ROOT = tmp_path
+    original_root = annotation_rows._PROJECT_ROOT
+    annotation_rows._PROJECT_ROOT = tmp_path
     try:
-        from pipeline.physical.square_classifier_data import load_piece_dataset
+        from pipeline.physical.two_stage.classifier_data import load_piece_dataset
 
         dataset = load_piece_dataset(annotation_root, input_size=32, use_native_frames=False)
         assert len(dataset) == 3
         piece_labels = sorted(int(dataset[i][1].item()) for i in range(3))
         assert piece_labels == [0, 5, 11]
     finally:
-        oblique_context._PROJECT_ROOT = original_root
+        annotation_rows._PROJECT_ROOT = original_root
 
 
 def test_occupancy_dataset_class_counts_match_label_distribution(tmp_path: Path) -> None:
@@ -83,16 +83,16 @@ def test_occupancy_dataset_class_counts_match_label_distribution(tmp_path: Path)
     labels[8] = 7  # black pawn (class 7)
     annotation_root = _make_annotation_bundle(tmp_path, labels=labels)
 
-    import pipeline.physical.oblique_square_context as oblique_context
+    import pipeline.physical.shared.annotation_rows as annotation_rows
 
-    original_root = oblique_context._PROJECT_ROOT
-    oblique_context._PROJECT_ROOT = tmp_path
+    original_root = annotation_rows._PROJECT_ROOT
+    annotation_rows._PROJECT_ROOT = tmp_path
     try:
-        from pipeline.physical.square_classifier_data import load_occupancy_dataset
+        from pipeline.physical.two_stage.classifier_data import load_occupancy_dataset
 
         dataset = load_occupancy_dataset(annotation_root, input_size=32, use_native_frames=False)
     finally:
-        oblique_context._PROJECT_ROOT = original_root
+        annotation_rows._PROJECT_ROOT = original_root
 
     counts = class_counts(dataset)
     assert counts["empty"] == 62

@@ -23,15 +23,17 @@ from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline.physical.oblique_square_context import (
+from pipeline.physical.piece_projection import (
+    extract_projected_occupancy_crop,
+    extract_projected_piece_crop,
+)
+from pipeline.physical.shared.annotation_rows import (
     _load_clip_frame_bgr,
     load_annotated_oblique_rows,
 )
-from pipeline.physical.square_crop import (
+from pipeline.physical.two_stage.classifier_data import (
     DEFAULT_OCCUPANCY_CROP_SIZE,
     DEFAULT_PIECE_CROP_SIZE,
-    extract_all_occupancy_crops,
-    extract_all_piece_crops,
 )
 from pipeline.shared import SQUARE_CLASS_NAMES
 
@@ -59,12 +61,26 @@ def main() -> None:
             except (FileNotFoundError, ValueError) as error:
                 print(f"[{split_name}] skip {row.annotation_id}: {error}")
                 continue
-            occupancy_crops = extract_all_occupancy_crops(
-                frame_bgr, row.corners, output_size=DEFAULT_OCCUPANCY_CROP_SIZE
-            )
-            piece_crops = extract_all_piece_crops(
-                frame_bgr, row.corners, output_size=DEFAULT_PIECE_CROP_SIZE
-            )
+            occupancy_crops = [
+                extract_projected_occupancy_crop(
+                    frame_bgr,
+                    row.corners,
+                    row=square_index // 8,
+                    col=square_index % 8,
+                    output_size=DEFAULT_OCCUPANCY_CROP_SIZE,
+                )
+                for square_index in range(64)
+            ]
+            piece_crops = [
+                extract_projected_piece_crop(
+                    frame_bgr,
+                    row.corners,
+                    row=square_index // 8,
+                    col=square_index % 8,
+                    output_size=DEFAULT_PIECE_CROP_SIZE,
+                )
+                for square_index in range(64)
+            ]
             sheet_path = output_dir / f"{split_name}_{row.annotation_id}.jpg"
             _render_contact_sheet(
                 sheet_path,

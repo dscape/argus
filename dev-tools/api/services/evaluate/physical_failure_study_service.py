@@ -13,8 +13,8 @@ from typing import Any
 import cv2
 
 from pipeline.paths import PROJECT_ROOT
-from pipeline.physical.board_tracker_failure_study import BUCKETS
-from pipeline.physical.oblique_square_context import (
+from pipeline.physical.board_probe.failure_study import BUCKETS
+from pipeline.physical.shared.annotation_rows import (
     _load_clip_frame_bgr,
     load_annotated_oblique_rows,
 )

@@ -13,12 +13,12 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline.physical.board_probe import board_probe_config_from_checkpoint
-from pipeline.physical.square_probe import load_probe_checkpoint
+from pipeline.physical.board_probe.probe import board_probe_config_from_checkpoint
+from pipeline.physical.board_probe.square_probe import load_probe_checkpoint
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_WEIGHTS_DIR = _PROJECT_ROOT / "weights" / "physical"
-_MODEL_CODE_VERSION = "v7"
+_MODEL_CODE_VERSION = "v8"
 
 
 def main() -> None:

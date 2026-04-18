@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import torch
-from pipeline.physical import runtime_visualization
-from pipeline.physical.board_data import PhysicalEvalBoardRow
+from pipeline.physical.board_probe import runtime_visualization
+from pipeline.physical.board_probe.board_data import PhysicalEvalBoardRow
 
 
 def _row(frame_index: int) -> PhysicalEvalBoardRow:
@@ -14,6 +14,7 @@ def _row(frame_index: int) -> PhysicalEvalBoardRow:
         board_path=f"data/physical/val/boards/frame_{frame_index:04d}.png",
         labels=(frame_index,) * 64,
         source_video_id="video-1",
+        corners=((0.0, 0.0), (3.0, 0.0), (3.0, 3.0), (0.0, 3.0)),
         clip_path="data/argus/train_real/example_clip.pt",
         frame_index=frame_index,
     )

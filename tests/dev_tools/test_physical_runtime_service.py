@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import numpy as np
 from api.services.evaluate import physical_runtime_service
 from PIL import Image
-from pipeline.physical.board_data import PhysicalEvalBoardRow
-from pipeline.physical.runtime_visualization import VisualizedRuntimeFrame
+from pipeline.physical.board_probe.board_data import PhysicalEvalBoardRow
+from pipeline.physical.board_probe.runtime_visualization import VisualizedRuntimeFrame
 
 
 def _row(annotation_id: str, clip_path: str, frame_index: int) -> PhysicalEvalBoardRow:
@@ -15,6 +15,7 @@ def _row(annotation_id: str, clip_path: str, frame_index: int) -> PhysicalEvalBo
         board_path=f"data/physical/val/boards/{annotation_id}.png",
         labels=(frame_index % 13,) * 64,
         source_video_id="video-1",
+        corners=((0.0, 0.0), (7.0, 0.0), (7.0, 7.0), (0.0, 7.0)),
         clip_path=clip_path,
         frame_index=frame_index,
     )

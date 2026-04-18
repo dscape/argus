@@ -19,13 +19,13 @@ from transformers import AutoConfig
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.overlay.replay import build_replay_board
-from pipeline.physical.board_data import PhysicalEvalBoardDataset
-from pipeline.physical.move_data import (
+from pipeline.physical.board_probe.board_data import PhysicalEvalBoardDataset
+from pipeline.physical.board_probe.runtime import read_board_logits_batch_from_frames
+from pipeline.physical.board_probe.square_probe import evaluate_probe
+from pipeline.physical.shared.move_data import (
     build_board_hypotheses_from_piece_fen,
     load_eval_move_sequences,
 )
-from pipeline.physical.square_classifier import read_board_logits_batch_from_frames
-from pipeline.physical.square_probe import evaluate_probe
 from pipeline.shared import (
     SQUARE_CLASS_NAMES,
     LegalSequenceBeamDecoder,
@@ -98,7 +98,7 @@ def main() -> None:
     sequences = load_eval_move_sequences(
         image_size=args.image_size,
         observation_mode=args.observation_mode,
-        oblique_crop_margin=args.oblique_crop_margin,
+        board_crop_margin=args.board_crop_margin,
     )
     rectified_row_lookup = (
         _build_rectified_eval_row_lookup()
@@ -617,10 +617,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clip-length", type=int, default=16)
     parser.add_argument(
         "--observation-mode",
-        choices=("rectified", "oblique", "native_oblique"),
-        default="oblique",
+        choices=("piece_projection_board",),
+        default="piece_projection_board",
     )
-    parser.add_argument("--oblique-crop-margin", type=float, default=0.18)
+    parser.add_argument("--board-crop-margin", type=float, default=0.18)
     parser.add_argument(
         "--decoder-mode",
         choices=("beam", "segmental", "detect_threshold", "move_prob_margin"),

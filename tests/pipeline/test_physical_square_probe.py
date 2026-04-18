@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import torch
-from pipeline.physical.square_probe import PhysicalSquareLinearProbe, evaluate_probe
+from pipeline.physical.board_probe.square_probe import PhysicalSquareLinearProbe, evaluate_probe
 
 
 def test_evaluate_probe_reports_perfect_metrics() -> None:

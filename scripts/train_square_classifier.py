@@ -15,23 +15,21 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline.physical.oblique_square_context import load_annotated_oblique_rows
-from pipeline.physical.square_classifier_data import (
+from pipeline.physical.shared.annotation_rows import load_annotated_oblique_rows
+from pipeline.physical.two_stage.classifier_data import (
+    DEFAULT_OCCUPANCY_CROP_SIZE,
+    DEFAULT_PIECE_CROP_SIZE,
     OccupancySquareDataset,
     PieceSquareDataset,
     class_counts,
 )
-from pipeline.physical.square_classifiers import (
+from pipeline.physical.two_stage.classifiers import (
     OCCUPANCY_CLASS_NAMES,
     OCCUPANCY_NUM_CLASSES,
     PIECE_CLASS_NAMES,
     PIECE_NUM_CLASSES,
     SquareClassifier,
     SquareClassifierConfig,
-)
-from pipeline.physical.square_crop import (
-    DEFAULT_OCCUPANCY_CROP_SIZE,
-    DEFAULT_PIECE_CROP_SIZE,
 )
 
 from argus.device import resolve_device
@@ -49,8 +47,27 @@ def main() -> None:
 
     torch.manual_seed(args.seed)
 
-    train_rows = load_annotated_oblique_rows(args.physical_train_root)
-    val_rows = load_annotated_oblique_rows(args.physical_val_root)
+    if args.combined_split_seed is not None:
+        # Merge train+val and randomly split for an apples-to-apples model-capacity test
+        # (breaks cross-game held-out semantics).
+        import random as _random
+
+        merged = load_annotated_oblique_rows(
+            args.physical_train_root
+        ) + load_annotated_oblique_rows(args.physical_val_root)
+        rng = _random.Random(args.combined_split_seed)
+        shuffled = list(merged)
+        rng.shuffle(shuffled)
+        cutoff = int(len(shuffled) * 0.8)
+        train_rows = shuffled[:cutoff]
+        val_rows = shuffled[cutoff:]
+        print(
+            f"combined split seed={args.combined_split_seed}: "
+            f"train={len(train_rows)} val={len(val_rows)}"
+        )
+    else:
+        train_rows = load_annotated_oblique_rows(args.physical_train_root)
+        val_rows = load_annotated_oblique_rows(args.physical_val_root)
 
     num_classes, input_size, train_dataset, val_dataset = _build_datasets(
         task=args.task,
@@ -72,6 +89,16 @@ def main() -> None:
         vision_encoder=encoder,
         config=SquareClassifierConfig(num_classes=num_classes, dropout=args.dropout),
     ).to(device)
+    if args.initialize_checkpoint is not None:
+        checkpoint = torch.load(args.initialize_checkpoint, map_location=device, weights_only=False)
+        state_dict = checkpoint.get("model_state_dict")
+        if not isinstance(state_dict, dict):
+            state_dict = checkpoint.get("state_dict")
+        if not isinstance(state_dict, dict):
+            raise ValueError(
+                f"Checkpoint is missing model_state_dict/state_dict: {args.initialize_checkpoint}"
+            )
+        classifier.load_state_dict(state_dict)
 
     if args.class_weighting:
         class_weights = _class_weights(train_dataset, num_classes=num_classes).to(device)
@@ -102,6 +129,12 @@ def main() -> None:
         shuffle=False,
         num_workers=args.num_workers,
     )
+
+    initial_val_accuracy = _evaluate(classifier, val_loader, device=device)
+    best_val_accuracy = initial_val_accuracy
+    best_state = {
+        key: value.detach().cpu().clone() for key, value in classifier.state_dict().items()
+    }
 
     for epoch in range(args.epochs):
         classifier.train()
@@ -168,6 +201,9 @@ def main() -> None:
         "input_size": input_size,
         "encoder_type": args.encoder_type,
         "model_name": model_name,
+        "initialize_checkpoint": (
+            None if args.initialize_checkpoint is None else str(args.initialize_checkpoint)
+        ),
         "train_count": len(train_dataset),
         "val_count": len(val_dataset),
         "best_val_accuracy": best_val_accuracy,
@@ -245,6 +281,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=_PROJECT_ROOT / "data" / "physical" / "val",
     )
+    parser.add_argument("--initialize-checkpoint", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
@@ -275,6 +312,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Enable color/affine/blur augmentation on the training set (not val).",
+    )
+    parser.add_argument(
+        "--combined-split-seed",
+        type=int,
+        default=None,
+        help=(
+            "If set, merge train+val annotations and randomly split 80/20 with this seed. "
+            "Tests model capacity free of the cross-game held-out gap."
+        ),
     )
     return parser
 

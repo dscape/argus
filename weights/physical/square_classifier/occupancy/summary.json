@@ -1,6 +1,6 @@
 {
-  "best_val_accuracy": 0.8327847633136095,
-  "checkpoint": "weights/physical/square_classifier/occupancy/occupancy_classifier.pt",
+  "best_val_accuracy": 0.8333394970414201,
+  "checkpoint": "outputs/2026-04-17/square_classifier_occupancy_retrain_init/occupancy_classifier.pt",
   "class_names": [
     "empty",
     "occupied"
@@ -9,29 +9,12 @@
   "history": [
     {
       "epoch": 0,
-      "train_accuracy": 0.9725187059859155,
-      "train_loss": 0.07962819961151799,
-      "val_accuracy": 0.8327847633136095
-    },
-    {
-      "epoch": 1,
-      "train_accuracy": 0.9915547975352113,
-      "train_loss": 0.0272547716358499,
-      "val_accuracy": 0.8229659763313609
-    },
-    {
-      "epoch": 2,
-      "train_accuracy": 0.9954335387323944,
-      "train_loss": 0.01621059552132119,
-      "val_accuracy": 0.8186205621301775
-    },
-    {
-      "epoch": 3,
-      "train_accuracy": 0.9977992957746479,
-      "train_loss": 0.009200411933223632,
-      "val_accuracy": 0.8278846153846153
+      "train_accuracy": 0.9929302376760564,
+      "train_loss": 0.021691715126917827,
+      "val_accuracy": 0.8333394970414201
     }
   ],
+  "initialize_checkpoint": "weights/physical/square_classifier/occupancy/occupancy_classifier.pt",
   "input_size": 112,
   "model_name": "facebook/dinov2-base",
   "num_classes": 2,

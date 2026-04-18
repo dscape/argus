@@ -12,12 +12,12 @@ import cv2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline.physical.board_data import PhysicalEvalBoardDataset
-from pipeline.physical.square_classifier import (
+from pipeline.physical.board_probe.board_data import PhysicalEvalBoardDataset
+from pipeline.physical.board_probe.runtime import (
     PhysicalBoardSequenceReader,
     read_board_observation_from_frame,
 )
-from pipeline.physical.square_probe import evaluate_probe
+from pipeline.physical.board_probe.square_probe import evaluate_probe
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent

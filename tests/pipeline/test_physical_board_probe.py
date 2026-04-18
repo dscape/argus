@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import pytest
 import torch
-from pipeline.physical.board_probe import (
+from pipeline.physical.board_probe.probe import (
     PhysicalBoardStateProbe,
     board_probe_config_from_checkpoint,
     dino_patches_to_square_tokens,
     extract_square_token_features,
-    sample_oblique_square_tokens_from_patch_tokens,
+    sample_projected_square_tokens_from_patch_tokens,
     selection_score_for_metrics,
 )
-from pipeline.physical.square_probe import ProbeMetrics
+from pipeline.physical.board_probe.square_probe import ProbeMetrics
 from torch.utils.data import Dataset
 
 
@@ -65,14 +65,14 @@ def test_selection_score_for_metrics_prefers_non_empty_plus_macro() -> None:
     assert selection_score_for_metrics(metrics, "non_empty_plus_macro") == pytest.approx(0.3)
 
 
-def test_sample_oblique_square_tokens_from_constant_patch_grid_stays_constant() -> None:
+def test_sample_projected_square_tokens_from_constant_patch_grid_stays_constant() -> None:
     patch_tokens = torch.ones((1, 64, 3), dtype=torch.float32)
     corners = torch.tensor(
         [[[0.0, 0.0], [15.0, 0.0], [15.0, 15.0], [0.0, 15.0]]],
         dtype=torch.float32,
     )
 
-    square_tokens = sample_oblique_square_tokens_from_patch_tokens(
+    square_tokens = sample_projected_square_tokens_from_patch_tokens(
         patch_tokens,
         corners=corners,
         image_size=16,

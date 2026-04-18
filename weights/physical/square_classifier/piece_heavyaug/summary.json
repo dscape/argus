@@ -1,0 +1,117 @@
+{
+  "best_val_accuracy": 0.7213063924344995,
+  "checkpoint": "weights/physical/square_classifier/piece_heavyaug/piece_classifier.pt",
+  "class_names": [
+    "P",
+    "N",
+    "B",
+    "R",
+    "Q",
+    "K",
+    "p",
+    "n",
+    "b",
+    "r",
+    "q",
+    "k"
+  ],
+  "encoder_type": "dinov2",
+  "history": [
+    {
+      "epoch": 0,
+      "train_accuracy": 0.8973656294200849,
+      "train_loss": 0.33638454496394843,
+      "val_accuracy": 0.6697845072606067
+    },
+    {
+      "epoch": 1,
+      "train_accuracy": 0.9701202263083452,
+      "train_loss": 0.10489018104658916,
+      "val_accuracy": 0.6466849258436257
+    },
+    {
+      "epoch": 2,
+      "train_accuracy": 0.9786067892503536,
+      "train_loss": 0.07154701174457645,
+      "val_accuracy": 0.6372797271458839
+    },
+    {
+      "epoch": 3,
+      "train_accuracy": 0.9832036775106082,
+      "train_loss": 0.05420336400301464,
+      "val_accuracy": 0.6848224897938091
+    },
+    {
+      "epoch": 4,
+      "train_accuracy": 0.9877121640735502,
+      "train_loss": 0.03796768967639001,
+      "val_accuracy": 0.7094207017725183
+    },
+    {
+      "epoch": 5,
+      "train_accuracy": 0.9917786421499293,
+      "train_loss": 0.02720751232581455,
+      "val_accuracy": 0.7213063924344995
+    },
+    {
+      "epoch": 6,
+      "train_accuracy": 0.9946958981612447,
+      "train_loss": 0.014931959283078017,
+      "val_accuracy": 0.6667355692212289
+    },
+    {
+      "epoch": 7,
+      "train_accuracy": 0.9961987270155587,
+      "train_loss": 0.01278463340059115,
+      "val_accuracy": 0.7143300087850757
+    },
+    {
+      "epoch": 8,
+      "train_accuracy": 0.9972595473833098,
+      "train_loss": 0.009237485911979008,
+      "val_accuracy": 0.7124179628959744
+    },
+    {
+      "epoch": 9,
+      "train_accuracy": 0.9986739745403111,
+      "train_loss": 0.004936857185760357,
+      "val_accuracy": 0.720479561779753
+    }
+  ],
+  "input_size": 224,
+  "model_name": "facebook/dinov2-base",
+  "num_classes": 12,
+  "task": "piece",
+  "train_class_distribution": {
+    "B": 417,
+    "K": 568,
+    "N": 906,
+    "P": 3007,
+    "Q": 346,
+    "R": 608,
+    "b": 625,
+    "empty": 0,
+    "k": 568,
+    "n": 399,
+    "p": 2603,
+    "q": 344,
+    "r": 923
+  },
+  "train_count": 11314,
+  "val_class_distribution": {
+    "B": 1015,
+    "K": 845,
+    "N": 990,
+    "P": 4615,
+    "Q": 709,
+    "R": 1514,
+    "b": 770,
+    "empty": 0,
+    "k": 845,
+    "n": 1313,
+    "p": 4513,
+    "q": 709,
+    "r": 1513
+  },
+  "val_count": 19351
+}

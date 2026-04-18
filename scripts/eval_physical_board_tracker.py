@@ -16,16 +16,17 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.overlay.replay import build_replay_board
-from pipeline.physical.board_data import PhysicalEvalBoardDataset
-from pipeline.physical.oblique_square_context import (
-    _load_clip_frame_bgr,
-    load_annotated_oblique_rows,
+from pipeline.physical.board_probe.board_data import PhysicalEvalBoardDataset
+from pipeline.physical.board_probe.decoder import (
+    PRODUCTION_DECODER_ID,
+    decode_sequence_with_production_decoder,
+    production_decoder_config,
 )
-from pipeline.physical.square_classifier import (
+from pipeline.physical.board_probe.runtime import (
     PhysicalBoardLogitsSequenceReader,
     read_board_logits_from_frame,
 )
-from pipeline.physical.square_probe import evaluate_probe
+from pipeline.physical.board_probe.square_probe import evaluate_probe
 from pipeline.shared import (
     SQUARE_CLASS_NAMES,
     LegalMoveStateTracker,
@@ -57,8 +58,8 @@ def main() -> None:
     parser.add_argument(
         "--observation-input",
         type=str,
-        choices=["rectified_board", "original_oblique"],
-        default="rectified_board",
+        choices=["piece_projection_board"],
+        default="piece_projection_board",
     )
     parser.add_argument(
         "--temporal-mode",
@@ -70,8 +71,8 @@ def main() -> None:
     parser.add_argument(
         "--tracker-mode",
         type=str,
-        choices=["greedy", "lookahead"],
-        default="greedy",
+        choices=["greedy", "lookahead", "production"],
+        default="production",
     )
     parser.add_argument("--move-accept-threshold", type=float, default=2.5)
     parser.add_argument("--move-accept-margin", type=float, default=0.75)
@@ -81,18 +82,15 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=_DEFAULT_OUTPUT_PATH)
     args = parser.parse_args()
 
-    if args.observation_input == "rectified_board":
-        dataset = PhysicalEvalBoardDataset()
-        rows = sorted(
-            dataset.rows,
-            key=lambda row: (
-                row.clip_path or row.annotation_id,
-                -1 if row.frame_index is None else row.frame_index,
-                row.annotation_id,
-            ),
-        )
-    else:
-        rows = load_annotated_oblique_rows(_PROJECT_ROOT / "data" / "physical" / "val")
+    dataset = PhysicalEvalBoardDataset()
+    rows = sorted(
+        dataset.rows,
+        key=lambda row: (
+            row.clip_path or row.annotation_id,
+            -1 if row.frame_index is None else row.frame_index,
+            row.annotation_id,
+        ),
+    )
 
     if args.temporal_mode == "fixed":
         if args.temporal_ema_alpha <= 0.0:
@@ -139,16 +137,14 @@ def main() -> None:
                 observation_input=args.observation_input,
                 clip_cache=clip_cache,
             )
-            corners = getattr(row, "corners", None)
             if logits_reader is None:
                 logits = read_board_logits_from_frame(
                     image,
-                    corners=corners,
                     device=args.device,
                     weights_path=args.weights_path,
                 )
             else:
-                logits = logits_reader.read_board_logits_from_frame(image, corners=corners)
+                logits = logits_reader.read_board_logits_from_frame(image)
             if logits is None:
                 missing_predictions += 1
                 continue
@@ -158,8 +154,14 @@ def main() -> None:
         if not usable_rows:
             continue
 
-        if args.tracker_mode == "lookahead":
-            initial_board_fen, initial_side_to_move = _initial_board_state_for_row(usable_rows[0])
+        initial_board_fen, initial_side_to_move = _initial_board_state_for_row(usable_rows[0])
+        if args.tracker_mode == "production":
+            sequence_results = decode_sequence_with_production_decoder(
+                clip_logits,
+                initial_board_fen=initial_board_fen,
+                initial_side_to_move=initial_side_to_move,
+            )
+        elif args.tracker_mode == "lookahead":
             sequence_results = LookaheadLegalMoveStateTracker(
                 initial_board_fen,
                 initial_side_to_move=initial_side_to_move,
@@ -167,7 +169,6 @@ def main() -> None:
                 move_score_margin=args.lookahead_margin,
             ).decode(clip_logits)
         else:
-            initial_board_fen, initial_side_to_move = _initial_board_state_for_row(usable_rows[0])
             tracker = LegalMoveStateTracker(
                 initial_board_fen,
                 initial_side_to_move=initial_side_to_move,
@@ -225,6 +226,9 @@ def main() -> None:
         "static_frame_false_change_rate": static_false_change_rate,
         "sequence_diagnostics": diagnostics,
     }
+    if args.tracker_mode == "production":
+        report["production_decoder"] = production_decoder_config()
+        report["production_decoder_id"] = PRODUCTION_DECODER_ID
     output_path = args.output.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True))
@@ -236,12 +240,11 @@ def _load_row_image(
     observation_input: str,
     clip_cache: dict[Path, dict[str, object]],
 ) -> cv2.typing.MatLike:
-    if observation_input == "rectified_board":
-        image = cv2.imread(str(_PROJECT_ROOT / row.board_path), cv2.IMREAD_COLOR)
-        if image is None:
-            raise ValueError(f"Failed to load board image: {row.board_path}")
-        return image
-    return _load_clip_frame_bgr(row, clip_cache=clip_cache)
+    del observation_input, clip_cache
+    image = cv2.imread(str(_PROJECT_ROOT / row.board_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError(f"Failed to load board image: {row.board_path}")
+    return image
 
 
 def _initial_board_state_for_row(row: object) -> tuple[str, str | None]:

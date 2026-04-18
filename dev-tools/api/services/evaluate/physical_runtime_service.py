@@ -14,8 +14,8 @@ from typing import Any
 from PIL import Image
 from pipeline.db.connection import get_conn
 from pipeline.paths import PROJECT_ROOT
-from pipeline.physical.board_data import PhysicalEvalBoardDataset, PhysicalEvalBoardRow
-from pipeline.physical.runtime_visualization import (
+from pipeline.physical.board_probe.board_data import PhysicalEvalBoardDataset, PhysicalEvalBoardRow
+from pipeline.physical.board_probe.runtime_visualization import (
     VisualizedRuntimeFrame,
     _collect_visualized_frames,
     _collect_visualized_frames_for_indices,
