@@ -1,9 +1,9 @@
-- Keep repo changes minimal; prefer shrinking plan text rather than expanding it.
+- Keep repo changes minimal; prefer shrinking plan text over expanding it.
 - Do not commit local `.agents/memory/*` changes.
-- Preserve explicit invalidates/supersedes links when future memory replaces prior conclusions.
+- Preserve explicit invalidates/supersedes links when replacing prior memory.
 - In shell calculations, use `python3`, not `python`.
 - User prefers very simple, succinct explanations and wants visual artifacts for image geometry.
-- Physical transient-label UX: use the existing move list as the labeling surface; no separate transient panel. Infer capture/check from replay/board state. Move-row selection must not change the current frame. Show `!` until both touch markers are set, then `fstart > freplay > fend`; controls `Touch start`/`Touch end`; per-marker `×` resets; hand occlusion edits happen directly on the frame; show `i/o/p` shortcut keycaps; edits autosave.
+- Physical transient-label UX: use the existing move list as the labeling surface; no separate transient panel. Infer capture/check from replay/board state. Move-row selection must not change the current frame. Show `!` until both touch markers are set, then `fstart > freplay > fend`; controls `Touch start`/`Touch end`; per-marker `×` resets; hand-occlusion edits happen directly on the frame; show `i/o/p` shortcut keycaps; edits autosave.
 - Transient autosave must save from current ref-backed draft snapshots on each mutation, preserve later edits during in-flight saves, wait for baseline hydration/sync before saving local edits, keep local-dirty separate from raw draft-vs-baseline diffs, merge occlusion toggles against refreshed baselines, block autosave while baseline-sync draft updates are pending, clear stale blockers, and clear dirty state immediately on save ack. This supersedes older autosave assumptions.
 - `refactor/piece_projection` constraints remain: `pipeline/physical/piece_projection.py` is the sole physical geometry source; keep `square_manifest.jsonl` writer/live annotation tooling; production stays board-probe + promoted decoder; two-stage stays experimental; keep `autoresearch/` out of README.
 - For physical board-reading diagnosis, treat `outputs/piece_projection_review2/` and matching full-frame projected overlays as source-of-truth geometry signature; reject naive grid/full-frame visualizations that do not match the active piece-projection contract.

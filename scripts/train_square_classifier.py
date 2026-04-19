@@ -209,7 +209,9 @@ def main() -> None:
         )
         if val_accuracy > best_val_accuracy:
             best_val_accuracy = val_accuracy
-            best_state = {k: v.detach().clone() for k, v in classifier.state_dict().items()}
+            # Always materialize on CPU to avoid MPS hangs in torch.save
+            # for large models with non-standard architectures (e.g. DINOv3).
+            best_state = {k: v.detach().cpu().clone() for k, v in classifier.state_dict().items()}
 
     if best_state is None:
         best_state = classifier.state_dict()
@@ -352,7 +354,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--encoder-type", choices=("dinov2", "siglip2"), default="dinov2")
+    parser.add_argument(
+        "--encoder-type",
+        choices=("dinov2", "dinov3", "siglip2"),
+        default="dinov2",
+    )
     parser.add_argument("--model-name", type=str, default=None)
     parser.add_argument("--freeze-encoder", action="store_true", default=True)
     parser.add_argument(

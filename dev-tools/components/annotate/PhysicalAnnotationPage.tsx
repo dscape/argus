@@ -526,20 +526,30 @@ function AnnotationContent({
     );
   }, [effectiveFrameReplayFens, effectiveMoves, frameCount, selectedFrame]);
 
-  const previousMoveFrame = useMemo(() => {
-    for (let i = effectiveMoves.length - 1; i >= 0; i--) {
-      if (effectiveMoves[i].frame_index < selectedFrame)
-        return effectiveMoves[i].frame_index;
+  const previousMoveIndex = useMemo(() => {
+    for (let i = effectiveMoves.length - 1; i >= 0; i -= 1) {
+      if (effectiveMoves[i].frame_index < selectedFrame) return i;
     }
     return null;
   }, [effectiveMoves, selectedFrame]);
 
-  const nextMoveFrame = useMemo(() => {
-    for (const m of effectiveMoves) {
-      if (m.frame_index > selectedFrame) return m.frame_index;
+  const nextMoveIndex = useMemo(() => {
+    for (let i = 0; i < effectiveMoves.length; i += 1) {
+      if (effectiveMoves[i].frame_index > selectedFrame) return i;
     }
     return null;
   }, [effectiveMoves, selectedFrame]);
+
+  const goToMoveIndex = useCallback(
+    (moveIndex: number | null) => {
+      if (moveIndex === null) return;
+      const move = effectiveMoves[moveIndex];
+      if (!move) return;
+      setActiveMoveIndex(moveIndex);
+      setSelectedFrame(move.frame_index);
+    },
+    [effectiveMoves],
+  );
 
   const stepFrameBackward = useCallback(() => {
     setSelectedFrame((frame) => Math.max(0, frame - 1));
@@ -580,6 +590,20 @@ function AnnotationContent({
         return;
       }
 
+      if (event.key === "ArrowUp") {
+        if (previousMoveIndex === null) return;
+        event.preventDefault();
+        goToMoveIndex(previousMoveIndex);
+        return;
+      }
+
+      if (event.key === "ArrowDown") {
+        if (nextMoveIndex === null) return;
+        event.preventDefault();
+        goToMoveIndex(nextMoveIndex);
+        return;
+      }
+
       if (event.repeat) {
         return;
       }
@@ -610,6 +634,9 @@ function AnnotationContent({
   }, [
     activeMoveIndex,
     selectedFrame,
+    goToMoveIndex,
+    nextMoveIndex,
+    previousMoveIndex,
     setMoveEndFrame,
     setMoveStartFrame,
     stepFrameBackward,
@@ -1235,12 +1262,9 @@ function AnnotationContent({
             <button
               type="button"
               className={NAV_MOVE_BUTTON_CLASS}
-              disabled={previousMoveFrame === null}
-              onClick={() =>
-                previousMoveFrame !== null &&
-                setSelectedFrame(previousMoveFrame)
-              }
-              title="Previous move"
+              disabled={previousMoveIndex === null}
+              onClick={() => goToMoveIndex(previousMoveIndex)}
+              title="Previous move (↑)"
             >
               &larr; Move
             </button>
@@ -1268,11 +1292,9 @@ function AnnotationContent({
             <button
               type="button"
               className={NAV_MOVE_BUTTON_CLASS}
-              disabled={nextMoveFrame === null}
-              onClick={() =>
-                nextMoveFrame !== null && setSelectedFrame(nextMoveFrame)
-              }
-              title="Next move"
+              disabled={nextMoveIndex === null}
+              onClick={() => goToMoveIndex(nextMoveIndex)}
+              title="Next move (↓)"
             >
               Move &rarr;
             </button>

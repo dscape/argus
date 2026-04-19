@@ -50,7 +50,6 @@ runs/
 
 # Blender
 *.blend1
-.blender-server.pid
 
 # Next.js / Node
 node_modules/
@@ -74,3 +73,4 @@ autoresearch/*.out
 .env
 weights/dinov2-base/
 /.agents/memory/attachments/
+*.pid

@@ -23,45 +23,29 @@ from prepare import (
 )
 from pipeline.shared.board_tracking import score_board_state
 
-EXPERIMENT_NAME = "hybrid_lookahead_segmental_drop1_boardcands2_ratio95_props8_top4_detect10_lwindow3_minsep8_secsep1_thresh3_total125_permove150_lmargin9p935836791992188_m9p8957061767578125_r0_beam3_v822"
+EXPERIMENT_NAME = "hybrid_lookahead_segmental_drop1_boardcands3_ratio95_props14_top4_detect10_lwindow1_minsep4_secsep1_thresh3_total150_permove125_lmargin9p5_m9p8957061767578125_r0_beam4_v545"
 EXPERIMENT_DESCRIPTION = (
-    "Restore the recovered compact props8 sibling after recent local mapping showed the "
-    "props7 shelf is saturated across top_move_candidates=5..16, beam_size=4 is an exact "
-    "no-op, beam_size=2 is slightly worse, beam_size=1 is much worse, both hybrid "
-    "acceptance gates are exact-flat down to 125.0, event_window_radius=1..2, "
-    "segment_board_drop_worst_frames=0, and secondary_peak_ratio=0.98 are exact no-ops on "
-    "the adjacent props7 shelf, secondary_min_event_separation=2 is worse there, and "
-    "min_event_separation=8 and 6 are both worse than 7 there. On the compact props8 top4 "
-    "anchor, top_board_candidates=2..4 are exact no-ops, top_move_candidates=4 is exact-flat "
-    "while 5 is worse, secondary_min_event_separation=2 is worse, and raising "
-    "min_event_separation from 7 to 8 opened a lower-noise shelf that remained exact-flat at "
-    "9 before breaking sharply at 10. On that minsep8 shelf, top_move_candidates=3 is exact-flat, "
-    "2 and 1 only slightly weaken secondary metrics, top_board_candidates=2..4 are exact-flat, "
-    "top_board_candidates=1 is harmful, beam_size=2 is slightly worse, secsep2 is worse, and "
-    "event_window_radius=1..2, segment_board_drop_worst_frames=0, and secondary_peak_ratio=0.98 "
-    "are exact no-ops. Lowering min_score_gain_per_added_move from 150.0 to 137.5 increased false "
-    "changes and weakened secondaries, while lowering min_total_score_gain from 150.0 to 137.5 was "
-    "an exact no-op. This run keeps the stable minsep8 shelf anchor and lowers only "
-    "min_total_score_gain from 137.5 to 125.0 to test whether the total-gain gate stays non-binding "
-    "across the full previously-flat range on the lower-noise shelf."
+    "Hybrid decoder keeps the baseline lookahead path unless a conservative board-only "
+    "segmental pass wins the current score-gain gates, while following up the kept window1 branch after lowering lookahead window from 2 to 1 on the 9.5-margin baseline opened a lower-false-change but lower-recall tradeoff, lowering only max_event_proposals from 16 to 15 on the restored plain window1 branch improved recall and secondary metrics but worsened false-change, additionally narrowing top-board breadth from 4 to 3 recovered the lower false-change without hurting recall, lowering only max_event_proposals one step further from 15 to 14 on that boardcands3 plain props branch kept that recovered tradeoff, lowering segment_board_drop_worst_frames from 1 to 0 on that stronger props14 branch produced a new kept low-noise / lower-recall tradeoff, lowering secondary minimum event separation from 2 to 1 improved that tradeoff again, raising max_event_proposals from 14 to 15 was worse, raising top-board breadth from 3 to 4 was an exact no-op, lowering top-board breadth from 3 to 2 was worse, raising beam size from 4 to 5 was an exact no-op, raising beam size from 4 to 6 was worse, lowering max_event_proposals from 14 to 13 was sharply worse, and lowering top-move breadth from 4 to 1 was an exact no-op, and raising only segment_board_drop_worst_frames from 0 back to 1 on the new secsep1 best branch "
+    "to test whether the secsep1 gain survives restoring one-frame suppression or whether drop0 remains essential to the improved low-noise tradeoff."
 )
 
 DECODER_KIND = "hybrid"
 
-LOOKAHEAD_WINDOW = 3
-LOOKAHEAD_MARGIN = 9.935836791992188
+LOOKAHEAD_WINDOW = 1
+LOOKAHEAD_MARGIN = 9.5
 
 SEGMENTAL_CONFIG: dict[str, Any] = {
-    "beam_size": 3,
+    "beam_size": 4,
     "top_move_candidates": 4,
-    "top_board_candidates": 2,
+    "top_board_candidates": 3,
     "board_weight": 1.0,
     "move_weight": 0.0,
     "detect_weight": 0.0,
     "move_score_margin": 9.8957061767578125,
     "detect_peak_threshold": 0.1,
     "board_change_peak_threshold": 3.0 / 64.0,
-    "min_event_separation": 8,
+    "min_event_separation": 4,
     "secondary_min_event_separation": 1,
     "secondary_peak_ratio": 0.95,
     "state_aware_proposal_passes": 0,
@@ -69,13 +53,13 @@ SEGMENTAL_CONFIG: dict[str, Any] = {
     "anomaly_settled_gain_threshold": 0.0,
     "segment_board_drop_worst_frames": 1,
     "event_window_radius": 0,
-    "max_event_proposals": 8,
+    "max_event_proposals": 14,
     "diagnostic_settled_horizon": 8,
 }
 
 HYBRID_CONFIG: dict[str, Any] = {
-    "min_total_score_gain": 125.0,
-    "min_score_gain_per_added_move": 150.0,
+    "min_total_score_gain": 150.0,
+    "min_score_gain_per_added_move": 125.0,
 }
 
 

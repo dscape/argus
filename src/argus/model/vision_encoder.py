@@ -19,6 +19,11 @@ from transformers import (
     SiglipVisionModel,
 )
 
+try:
+    from transformers import DINOv3ViTModel  # transformers >= 5.0
+except ImportError:
+    DINOv3ViTModel = None  # type: ignore[assignment]
+
 _WEIGHTS_ROOT = Path(__file__).resolve().parent.parent.parent.parent / "weights"
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD = (0.229, 0.224, 0.225)
@@ -26,6 +31,7 @@ _SIGLIP_MEAN = (0.5, 0.5, 0.5)
 _SIGLIP_STD = (0.5, 0.5, 0.5)
 
 DEFAULT_DINOV2_MODEL = "facebook/dinov2-base"
+DEFAULT_DINOV3_MODEL = "facebook/dinov3-vitb16-pretrain-lvd1689m"
 DEFAULT_SIGLIP_MODEL = "google/siglip-base-patch16-224"
 DEFAULT_SIGLIP2_MODEL = "google/siglip2-base-patch16-naflex"
 DEFAULT_YOLO_MODEL = "weights/yolo_base/yolo11n.pt"
@@ -35,6 +41,8 @@ def default_model_name_for_encoder_type(encoder_type: str) -> str:
     normalized = encoder_type.lower()
     if normalized in {"dino", "dinov2"}:
         return DEFAULT_DINOV2_MODEL
+    if normalized == "dinov3":
+        return DEFAULT_DINOV3_MODEL
     if normalized == "siglip":
         return DEFAULT_SIGLIP_MODEL
     if normalized == "siglip2":
@@ -259,6 +267,105 @@ class Dinov2Backbone(nn.Module):
     def forward_pooled(self, x: torch.Tensor) -> torch.Tensor:
         patches = self.forward_patches(x)
         return patches[:, 1:, :].mean(dim=1)
+
+    def forward(self, x: torch.Tensor, return_patches: bool = False) -> torch.Tensor:
+        if return_patches:
+            return self.forward_patches(x)
+        return self.forward_pooled(x)
+
+
+class Dinov3Backbone(nn.Module):
+    """DINOv3 ViT wrapper exposing patch tokens.
+
+    Mirrors `Dinov2Backbone`. DINOv3's default config has `num_register_tokens=0`
+    so the output shape matches DINOv2: [B, 1+num_patches, hidden_size]. If a
+    non-zero register-token count appears in the config, `forward_pooled` will
+    still pool over everything except position 0 (the CLS) which includes
+    registers — acceptable for classifier heads but worth revisiting if a
+    downstream task needs patch-only pooling.
+
+    Note: Meta's DINOv3 checkpoints on HuggingFace are gated. Run
+    ``huggingface-cli login`` with a token that has accepted the gate before
+    instantiating this backbone.
+    """
+
+    def __init__(
+        self,
+        model_name: str = DEFAULT_DINOV3_MODEL,
+        frozen: bool = True,
+        embed_dim: int | None = None,
+        feature_layer_indices: Sequence[int] | None = None,
+    ) -> None:
+        super().__init__()
+        if DINOv3ViTModel is None:
+            raise ImportError(
+                "DINOv3 requires transformers >= 5.0 (DINOv3ViTModel not importable)."
+            )
+        resolved = _resolve_dino_model_path(model_name)
+        # Note: `local_files_only=True` triggers a spurious size-mismatch error
+        # in transformers 5.x when combined with certain DINOv3 checkpoints.
+        # Let transformers use its default cache lookup instead.
+        self.model = DINOv3ViTModel.from_pretrained(resolved)
+
+        hidden_size = int(self.model.config.hidden_size)
+        raw_feature_layers = feature_layer_indices or ()
+        self.feature_layer_indices = tuple(int(idx) for idx in raw_feature_layers)
+        num_hidden_layers = int(self.model.config.num_hidden_layers)
+        for layer_index in self.feature_layer_indices:
+            if layer_index < 0 or layer_index >= num_hidden_layers:
+                raise ValueError(
+                    "Invalid DINOv3 feature layer index"
+                    f" {layer_index}; expected 0 <= idx < {num_hidden_layers}"
+                )
+        if embed_dim is not None and embed_dim != hidden_size:
+            raise ValueError(
+                f"Requested DINOv3 embed_dim={embed_dim}, but model outputs {hidden_size}"
+            )
+        self.embed_dim = hidden_size
+        self.num_register_tokens = int(getattr(self.model.config, "num_register_tokens", 0))
+        if frozen:
+            self.freeze()
+
+    def freeze(self) -> None:
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_layers(self, n: int) -> None:
+        self.freeze()
+        if n <= 0:
+            return
+        # DINOv3ViTModel in transformers has `.layer` (not `.encoder.layer`).
+        for layer in self.model.layer[-n:]:
+            for param in layer.parameters():
+                param.requires_grad = True
+
+    def unfreeze(self) -> None:
+        for param in self.model.parameters():
+            param.requires_grad = True
+
+    def forward_patches(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.feature_layer_indices:
+            outputs = self.model(pixel_values=x)
+            result: torch.Tensor = outputs.last_hidden_state
+            return result
+
+        outputs = self.model(pixel_values=x, output_hidden_states=True)
+        hidden_states = outputs.hidden_states
+        if hidden_states is None:
+            raise RuntimeError("DINOv3 encoder did not return hidden states")
+        selected_states = [
+            hidden_states[layer_index + 1] for layer_index in self.feature_layer_indices
+        ]
+        result = torch.stack(selected_states, dim=0).mean(dim=0)
+        return result
+
+    def forward_pooled(self, x: torch.Tensor) -> torch.Tensor:
+        patches = self.forward_patches(x)
+        # Skip CLS token at index 0. Register tokens (if any) follow CLS and
+        # precede the patch tokens. Pooling over 1: includes them; for a
+        # classifier head this is fine (registers carry global context).
+        skip = 1 + self.num_register_tokens
+        return patches[:, skip:, :].mean(dim=1)
 
     def forward(self, x: torch.Tensor, return_patches: bool = False) -> torch.Tensor:
         if return_patches:
@@ -676,7 +783,7 @@ class VisionEncoder(nn.Module):
 
     def __init__(
         self,
-        model_name: str = "facebook/dinov2-base",
+        model_name: str | None = None,
         frozen: bool = True,
         embed_dim: int | None = None,
         encoder_type: str = "dinov2",
@@ -686,10 +793,19 @@ class VisionEncoder(nn.Module):
         super().__init__()
         normalized_type = encoder_type.lower()
         self.encoder_type = normalized_type
+        if model_name is None:
+            model_name = default_model_name_for_encoder_type(normalized_type)
 
         self.backend: VisionBackboneProtocol
         if normalized_type in {"dino", "dinov2"}:
             self.backend = Dinov2Backbone(
+                model_name=model_name,
+                frozen=frozen,
+                embed_dim=embed_dim,
+                feature_layer_indices=feature_layer_indices,
+            )
+        elif normalized_type == "dinov3":
+            self.backend = Dinov3Backbone(
                 model_name=model_name,
                 frozen=frozen,
                 embed_dim=embed_dim,
