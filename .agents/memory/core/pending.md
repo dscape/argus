@@ -1,20 +1,15 @@
 - Confirm/manual-complete final bucket tagging for all selected episodes in `manual_buckets.csv` if any rows remain heuristic rather than reviewed.
-- Open question: whether `max_per_video=5` should remain for future studies when total episodes are low (`14` total, `13` selected here).
-- Open tooling question: `record_successful_run` / keep logic appears heavily driven by `board_exact`, so tied-but-better secondary-metric variants may still be discarded or over-kept.
-- Verify current physical transient-annotation UI in browser at `/annotate/physical` and a clip page; confirm no current checkmarks, desired minimal move-row UX, per-marker clear behavior, usable frame-occlusion toggling, and autosave semantics.
-- If needed, tighten the meaning of `transient_annotation_complete` so clip-index completion matches the user’s intended “all moves covered + latent states annotations.”
-- Optional cleanup after UX verification: remove any now-unused fields/logic in `usePhysicalTransientAnnotations.ts` and `PhysicalAnnotationPage.tsx`.
-- Repo audit follow-up: README/docs should stay aligned with the active physical stack if future reader-family changes land; if desired, update lingering references that still imply rectified-board eval/runtime inputs instead of `piece_projection_board` / native-frame piece-projection inputs.
+- Open question: whether `max_per_video=5` should remain for future studies when totals are low (`14` total, `13` selected here).
+- Verify current transient-annotation UI in browser at `/annotate/physical` and a clip page; confirm no current checkmarks, desired minimal move-row UX, per-marker clear behavior, usable frame-occlusion toggling, shortcut keycaps, move-row selection not changing frame, and autosave semantics.
+- If needed, tighten `transient_annotation_complete` so clip-index completion matches intended “all moves covered + latent states annotations.”
+- Optional cleanup after UX verification: remove now-unused fields/logic in `usePhysicalTransientAnnotations.ts` and `PhysicalAnnotationPage.tsx`.
 - Environment warning remains noted but unblocked: duplicate `AVFFrameReceiver` / `AVFAudioReceiver` implementations from `cv2` and `av` may cause spurious casting failures/crashes.
 - Reconcile dev-tools route expectations after refactor: determine whether missing `/evaluate/physical-runtime` and `/annotate/physical-eval` routes are intentional supersessions or regressions needing fixes/redirects.
-- Native autoresearch cache rebuild is done via `autoresearch/prepare.py`; next decide whether to archive/reset stale `autoresearch/results.tsv` and `autoresearch/best_train.py` before the corrected-native resweep.
-- Revisit board-probe checkpoint selection/training after the contract fix: 2026-04-18 piece-box pooling sweeps (`outputs/2026-04-18/piecebox_manual_selection_sweep/summary.json`, `outputs/2026-04-18/piecebox_mixed_manual_selection_sweep/summary.json`) improved geometry fidelity but did not produce a promotable checkpoint.
-- Re-evaluate training/selection strategy before promoting new weights: current promoted `weights/physical/best.pt` under piece-box pooling is weak, and quick retrains were worse overall.
-- Remaining core open question: explain the gap between corrected native-frame board-probe eval (`board_exact ≈ 0.03787-0.05917`, depending on exact report surface) and the stale rectified/autoresearch surface (`0.25444`), including how much is decoder-only vs stale weights trained/selected on the wrong signature.
-- Debug the current `/evaluate/physical` rendering report that the new geometry is not visible after reload; check for stale frontend bundle/session hydration, SVG/CSS/aspect issues, or overlays being present but visually subtle.
-- Confirm the intended displayed image contract for runtime inspection after the latest user feedback: raw full source frame vs board-focused crop with padding, while keeping overlay geometry faithful and inspectable.
-- Open UX question: whether the hover preview should remain a projected bbox crop or be upgraded to a true perspective-warped projected crop.
-- Optional follow-up: make `scripts/eval_two_stage_board_reader.py` accept `--device auto` instead of requiring `--device cpu`.
-- Full-data two-stage retraining on the exported no-augment corpus was not completed in the CPU-only environment; resume only if that experiment is still desired.
-- After resolving the remaining geometry/route gap, rerun final validation (`make lint`, `make typecheck`, `make test`) and then call `signal_loop_success` if all gates are met.
+- Browser-verify `/evaluate/physical/<session>` after latest migration so overlay shows projected piece boxes and hover crops match intended review geometry.
+- Re-evaluate training/selection strategy before promoting new weights: current promoted `weights/physical/best.pt` under piece-box pooling is weak; quick MPS retrains stayed weak; decoder gains on corrected native cache top out around `board_exact≈0.074556`.
+- Autoresearch cache is rebuilt on corrected native piecebox surface; follow-up is to search outside the saturated local neighborhood around `v545` or revisit model/training if cheap decoder-only structural probes stop helping.
+- Keep watching whether `record_successful_run` / keep behavior still overweights `board_exact` when tied variants have meaningfully better secondary metrics.
+- Autoresearch unresolved: `v795` is currently prepared in `autoresearch/train.py` and awaiting controller execution; on the next loop, compare it against `v792`/`v794`, then choose exactly one new adjacent cheap follow-up from the compact `props8` shelf; avoid `props15`, avoid further margin ULP search, and re-encode from restored `v545` baseline as needed.
+- After resolving the remaining geometry/route gap, rerun `make lint`, `make typecheck`, `make test`, then call `signal_loop_success` if all gates pass.
 - Optional follow-up: run a fresh `/review` after the geometry migration if additional confirmation is desired.
+- Define how to run the requested side-by-side Argus-vs-Chesscog occupancy and piece-classification comparison on Argus data, including metric parity and any needed Chesscog input adaptation.

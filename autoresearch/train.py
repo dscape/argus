@@ -23,21 +23,37 @@ from prepare import (
 )
 from pipeline.shared.board_tracking import score_board_state
 
-EXPERIMENT_NAME = "hybrid_lookahead_segmental_drop1_boardcands2_ratio95_props16_top2_detect10_minsep2_thresh3_total150_permove125_m9p8957061767578125_r1_beam8_v318"
+EXPERIMENT_NAME = "hybrid_lookahead_segmental_drop1_boardcands2_ratio95_props8_top4_detect10_lwindow3_minsep8_secsep1_thresh3_total125_permove150_lmargin9p935836791992188_m9p8957061767578125_r0_beam3_v822"
 EXPERIMENT_DESCRIPTION = (
-    "Hybrid decoder keeps the baseline lookahead path unless a conservative board-only "
-    "segmental pass wins the current score-gain gates, while following up the kept beam8 + props16 + top2 branch after top1 matched it, top3 was worse, boardcands3 snapped it toward the older v120-style tradeoff, boardcands1 was harmful, boardcands4 was worse, and the per-added-move gate stayed safe down to 93.75 before breaking at 87.5, and widening only the segmental event window radius from 0 to 1 on that active beam8 regime "
-    "to test whether slightly broader temporal aggregation can recover ambiguity cases without collapsing the branch's lower false-change behavior."
+    "Restore the recovered compact props8 sibling after recent local mapping showed the "
+    "props7 shelf is saturated across top_move_candidates=5..16, beam_size=4 is an exact "
+    "no-op, beam_size=2 is slightly worse, beam_size=1 is much worse, both hybrid "
+    "acceptance gates are exact-flat down to 125.0, event_window_radius=1..2, "
+    "segment_board_drop_worst_frames=0, and secondary_peak_ratio=0.98 are exact no-ops on "
+    "the adjacent props7 shelf, secondary_min_event_separation=2 is worse there, and "
+    "min_event_separation=8 and 6 are both worse than 7 there. On the compact props8 top4 "
+    "anchor, top_board_candidates=2..4 are exact no-ops, top_move_candidates=4 is exact-flat "
+    "while 5 is worse, secondary_min_event_separation=2 is worse, and raising "
+    "min_event_separation from 7 to 8 opened a lower-noise shelf that remained exact-flat at "
+    "9 before breaking sharply at 10. On that minsep8 shelf, top_move_candidates=3 is exact-flat, "
+    "2 and 1 only slightly weaken secondary metrics, top_board_candidates=2..4 are exact-flat, "
+    "top_board_candidates=1 is harmful, beam_size=2 is slightly worse, secsep2 is worse, and "
+    "event_window_radius=1..2, segment_board_drop_worst_frames=0, and secondary_peak_ratio=0.98 "
+    "are exact no-ops. Lowering min_score_gain_per_added_move from 150.0 to 137.5 increased false "
+    "changes and weakened secondaries, while lowering min_total_score_gain from 150.0 to 137.5 was "
+    "an exact no-op. This run keeps the stable minsep8 shelf anchor and lowers only "
+    "min_total_score_gain from 137.5 to 125.0 to test whether the total-gain gate stays non-binding "
+    "across the full previously-flat range on the lower-noise shelf."
 )
 
 DECODER_KIND = "hybrid"
 
-LOOKAHEAD_WINDOW = 2
-LOOKAHEAD_MARGIN = 10.0
+LOOKAHEAD_WINDOW = 3
+LOOKAHEAD_MARGIN = 9.935836791992188
 
 SEGMENTAL_CONFIG: dict[str, Any] = {
-    "beam_size": 8,
-    "top_move_candidates": 2,
+    "beam_size": 3,
+    "top_move_candidates": 4,
     "top_board_candidates": 2,
     "board_weight": 1.0,
     "move_weight": 0.0,
@@ -45,21 +61,21 @@ SEGMENTAL_CONFIG: dict[str, Any] = {
     "move_score_margin": 9.8957061767578125,
     "detect_peak_threshold": 0.1,
     "board_change_peak_threshold": 3.0 / 64.0,
-    "min_event_separation": 2,
-    "secondary_min_event_separation": 2,
+    "min_event_separation": 8,
+    "secondary_min_event_separation": 1,
     "secondary_peak_ratio": 0.95,
     "state_aware_proposal_passes": 0,
     "anomaly_change_evidence_threshold": 0.25,
     "anomaly_settled_gain_threshold": 0.0,
     "segment_board_drop_worst_frames": 1,
-    "event_window_radius": 1,
-    "max_event_proposals": 16,
+    "event_window_radius": 0,
+    "max_event_proposals": 8,
     "diagnostic_settled_horizon": 8,
 }
 
 HYBRID_CONFIG: dict[str, Any] = {
-    "min_total_score_gain": 150.0,
-    "min_score_gain_per_added_move": 125.0,
+    "min_total_score_gain": 125.0,
+    "min_score_gain_per_added_move": 150.0,
 }
 
 

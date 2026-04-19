@@ -208,6 +208,7 @@ class OccupancySquareDataset(_SquareSampleDataset):
         use_native_frames: bool = True,
         piece_height: float = DEFAULT_PIECE_HEIGHT,
         augment: bool = False,
+        pad_ratio: float = 0.3,
     ) -> None:
         filtered = _rows_with_native_metadata(rows) if use_native_frames else rows
         indices = [
@@ -227,6 +228,7 @@ class OccupancySquareDataset(_SquareSampleDataset):
             piece_height=piece_height,
             augment=augment,
         )
+        self.pad_ratio = pad_ratio
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         sample = self.indices[index]
@@ -239,6 +241,7 @@ class OccupancySquareDataset(_SquareSampleDataset):
             row=row,
             col=col,
             output_size=self.input_size,
+            pad_ratio=self.pad_ratio,
         )
         image = preprocess_square_crop(crop_bgr, size=self.input_size, augment=self.augment)
         label = torch.tensor(

@@ -47,35 +47,73 @@ def main() -> None:
 
     torch.manual_seed(args.seed)
 
-    if args.combined_split_seed is not None:
-        # Merge train+val and randomly split for an apples-to-apples model-capacity test
-        # (breaks cross-game held-out semantics).
-        import random as _random
-
-        merged = load_annotated_oblique_rows(
-            args.physical_train_root
-        ) + load_annotated_oblique_rows(args.physical_val_root)
-        rng = _random.Random(args.combined_split_seed)
-        shuffled = list(merged)
-        rng.shuffle(shuffled)
-        cutoff = int(len(shuffled) * 0.8)
-        train_rows = shuffled[:cutoff]
-        val_rows = shuffled[cutoff:]
-        print(
-            f"combined split seed={args.combined_split_seed}: "
-            f"train={len(train_rows)} val={len(val_rows)}"
+    if args.source == "chesscog-png":
+        from pipeline.physical.chesscog_baseline.png_square_dataset import (
+            OccupancyPngDataset,
+            PiecePngDataset,
         )
-    else:
-        train_rows = load_annotated_oblique_rows(args.physical_train_root)
-        val_rows = load_annotated_oblique_rows(args.physical_val_root)
 
-    num_classes, input_size, train_dataset, val_dataset = _build_datasets(
-        task=args.task,
-        train_rows=train_rows,
-        val_rows=val_rows,
-        input_size_override=args.input_size,
-        augment_train=args.augment,
-    )
+        print(f"loading chesscog PNG dataset from {args.chesscog_png_root}")
+        if args.task == "occupancy":
+            input_size = args.input_size or 100
+            train_dataset = OccupancyPngDataset(
+                root=args.chesscog_png_root / "occupancy",
+                split="train",
+                input_size=input_size,
+                augment=args.augment,
+            )
+            val_dataset = OccupancyPngDataset(
+                root=args.chesscog_png_root / "occupancy",
+                split="val",
+                input_size=input_size,
+            )
+            num_classes = OCCUPANCY_NUM_CLASSES
+        else:
+            input_size = args.input_size or 200
+            train_dataset = PiecePngDataset(
+                root=args.chesscog_png_root / "pieces",
+                split="train",
+                input_size=input_size,
+                augment=args.augment,
+            )
+            val_dataset = PiecePngDataset(
+                root=args.chesscog_png_root / "pieces",
+                split="val",
+                input_size=input_size,
+            )
+            num_classes = PIECE_NUM_CLASSES
+    else:
+        if args.combined_split_seed is not None:
+            # Merge train+val and randomly split for an apples-to-apples model-capacity test
+            # (breaks cross-game held-out semantics).
+            import random as _random
+
+            merged = load_annotated_oblique_rows(
+                args.physical_train_root
+            ) + load_annotated_oblique_rows(args.physical_val_root)
+            rng = _random.Random(args.combined_split_seed)
+            shuffled = list(merged)
+            rng.shuffle(shuffled)
+            cutoff = int(len(shuffled) * 0.8)
+            train_rows = shuffled[:cutoff]
+            val_rows = shuffled[cutoff:]
+            print(
+                f"combined split seed={args.combined_split_seed}: "
+                f"train={len(train_rows)} val={len(val_rows)}"
+            )
+        else:
+            train_rows = load_annotated_oblique_rows(args.physical_train_root)
+            val_rows = load_annotated_oblique_rows(args.physical_val_root)
+
+        num_classes, input_size, train_dataset, val_dataset = _build_datasets(
+            task=args.task,
+            train_rows=train_rows,
+            val_rows=val_rows,
+            input_size_override=args.input_size,
+            augment_train=args.augment,
+            occupancy_pad_ratio=args.occupancy_pad_ratio,
+            piece_augment_shear=args.piece_augment_shear,
+        )
 
     model_name = args.model_name or default_model_name_for_encoder_type(args.encoder_type)
     encoder = VisionEncoder(
@@ -222,16 +260,45 @@ def _build_datasets(
     val_rows,
     input_size_override: int | None,
     augment_train: bool,
+    occupancy_pad_ratio: float = 0.3,
+    piece_augment_shear: bool = False,
 ):
     if task == "occupancy":
         input_size = input_size_override or DEFAULT_OCCUPANCY_CROP_SIZE
         train_dataset = OccupancySquareDataset(
-            rows=train_rows, input_size=input_size, augment=augment_train
+            rows=train_rows,
+            input_size=input_size,
+            augment=augment_train,
+            pad_ratio=occupancy_pad_ratio,
         )
-        val_dataset = OccupancySquareDataset(rows=val_rows, input_size=input_size)
+        val_dataset = OccupancySquareDataset(
+            rows=val_rows,
+            input_size=input_size,
+            pad_ratio=occupancy_pad_ratio,
+        )
         return OCCUPANCY_NUM_CLASSES, input_size, train_dataset, val_dataset
     if task == "piece":
         input_size = input_size_override or DEFAULT_PIECE_CROP_SIZE
+        if piece_augment_shear:
+            # Paper's λ ∈ [-0.1, 0.25] corresponds to shear angles [-5.7°, 14.3°].
+            # Also nudge brightness/contrast up slightly per paper Ch. 5.2.1.3.
+            import torchvision.transforms.v2 as T
+            from pipeline.physical.two_stage import classifier_data as _cd
+
+            _cd._AUGMENTATION_PIPELINE = T.Compose(
+                [
+                    T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.3, hue=0.04),
+                    T.RandomAffine(
+                        degrees=8,
+                        translate=(0.05, 0.05),
+                        scale=(0.92, 1.08),
+                        shear=(-5.7, 14.3),
+                    ),
+                    T.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),
+                    T.RandomErasing(p=0.25, scale=(0.02, 0.12), ratio=(0.5, 2.0), value=0),
+                ]
+            )
+            print("enabled piece shear augmentation (shear=±(-5.7, 14.3)°)")
         train_dataset = PieceSquareDataset(
             rows=train_rows, input_size=input_size, augment=augment_train
         )
@@ -312,6 +379,36 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Enable color/affine/blur augmentation on the training set (not val).",
+    )
+    parser.add_argument(
+        "--occupancy-pad-ratio",
+        type=float,
+        default=0.3,
+        help=(
+            "Padding ratio for occupancy crops (Study 3a). Applied to both train and val datasets."
+        ),
+    )
+    parser.add_argument(
+        "--piece-augment-shear",
+        action="store_true",
+        default=False,
+        help="Add shear to piece augmentation pipeline (Study 3b).",
+    )
+    parser.add_argument(
+        "--source",
+        choices=("argus-projection", "chesscog-png"),
+        default="argus-projection",
+        help=(
+            "argus-projection: on-the-fly projection from annotations. "
+            "chesscog-png: load PNGs from a chesscog-style ImageFolder tree "
+            "(Study 2)."
+        ),
+    )
+    parser.add_argument(
+        "--chesscog-png-root",
+        type=Path,
+        default=_PROJECT_ROOT / "data" / "chesscog_baseline",
+        help="Root of chesscog-style PNG dataset (must contain occupancy/ and pieces/).",
     )
     parser.add_argument(
         "--combined-split-seed",

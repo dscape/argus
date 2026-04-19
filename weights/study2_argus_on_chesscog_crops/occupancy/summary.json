@@ -1,0 +1,72 @@
+{
+  "best_val_accuracy": 0.7598187869822485,
+  "checkpoint": "weights/study2_argus_on_chesscog_crops/occupancy/occupancy_classifier.pt",
+  "class_names": [
+    "empty",
+    "occupied"
+  ],
+  "encoder_type": "dinov2",
+  "history": [
+    {
+      "epoch": 0,
+      "train_accuracy": 0.8167088468309859,
+      "train_loss": 0.3888225356300532,
+      "val_accuracy": 0.7463942307692307
+    },
+    {
+      "epoch": 1,
+      "train_accuracy": 0.8571192781690141,
+      "train_loss": 0.3193262801571211,
+      "val_accuracy": 0.7525702662721894
+    },
+    {
+      "epoch": 2,
+      "train_accuracy": 0.864106514084507,
+      "train_loss": 0.3073551825077181,
+      "val_accuracy": 0.7581915680473372
+    },
+    {
+      "epoch": 3,
+      "train_accuracy": 0.864134022887324,
+      "train_loss": 0.3082427147933295,
+      "val_accuracy": 0.7598187869822485
+    }
+  ],
+  "initialize_checkpoint": null,
+  "input_size": 100,
+  "model_name": "facebook/dinov2-base",
+  "num_classes": 2,
+  "task": "occupancy",
+  "train_class_distribution": {
+    "B": 0,
+    "K": 0,
+    "N": 0,
+    "P": 11314,
+    "Q": 0,
+    "R": 0,
+    "b": 0,
+    "empty": 25038,
+    "k": 0,
+    "n": 0,
+    "p": 0,
+    "q": 0,
+    "r": 0
+  },
+  "train_count": 36352,
+  "val_class_distribution": {
+    "B": 0,
+    "K": 0,
+    "N": 0,
+    "P": 19351,
+    "Q": 0,
+    "R": 0,
+    "b": 0,
+    "empty": 34729,
+    "k": 0,
+    "n": 0,
+    "p": 0,
+    "q": 0,
+    "r": 0
+  },
+  "val_count": 54080
+}

@@ -1,0 +1,72 @@
+{
+  "best_val_accuracy": 0.7003143491124261,
+  "checkpoint": "weights/physical/square_classifier/occupancy_pad05_noaug/occupancy_classifier.pt",
+  "class_names": [
+    "empty",
+    "occupied"
+  ],
+  "encoder_type": "dinov2",
+  "history": [
+    {
+      "epoch": 0,
+      "train_accuracy": 0.7852387764084507,
+      "train_loss": 0.44430177281020394,
+      "val_accuracy": 0.6930288461538462
+    },
+    {
+      "epoch": 1,
+      "train_accuracy": 0.8381106954225352,
+      "train_loss": 0.3561980477206304,
+      "val_accuracy": 0.7003143491124261
+    },
+    {
+      "epoch": 2,
+      "train_accuracy": 0.8561014524647887,
+      "train_loss": 0.32767185553068845,
+      "val_accuracy": 0.6973742603550296
+    },
+    {
+      "epoch": 3,
+      "train_accuracy": 0.8620433538732394,
+      "train_loss": 0.31705375808015673,
+      "val_accuracy": 0.7002403846153846
+    }
+  ],
+  "initialize_checkpoint": null,
+  "input_size": 112,
+  "model_name": "facebook/dinov2-base",
+  "num_classes": 2,
+  "task": "occupancy",
+  "train_class_distribution": {
+    "B": 417,
+    "K": 568,
+    "N": 906,
+    "P": 3007,
+    "Q": 346,
+    "R": 608,
+    "b": 625,
+    "empty": 25038,
+    "k": 568,
+    "n": 399,
+    "p": 2603,
+    "q": 344,
+    "r": 923
+  },
+  "train_count": 36352,
+  "val_class_distribution": {
+    "B": 1015,
+    "K": 845,
+    "N": 990,
+    "P": 4615,
+    "Q": 709,
+    "R": 1514,
+    "b": 770,
+    "empty": 34729,
+    "k": 845,
+    "n": 1313,
+    "p": 4513,
+    "q": 709,
+    "r": 1513
+  },
+  "val_count": 54080
+}

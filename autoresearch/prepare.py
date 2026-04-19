@@ -451,11 +451,9 @@ def record_successful_run(
     description: str,
 ) -> RunDecision:
     ensure_workspace()
-    best_before = best_logged_result()
-    same_as_best = BEST_TRAIN_PATH.exists() and train_path.read_text() == BEST_TRAIN_PATH.read_text()
     current_rank = rank_report(report)
-    best_rank = None if best_before is None else rank_logged_result(best_before)
-    status = "keep" if best_rank is None or same_as_best or current_rank > best_rank else "discard"
+    best_rank = current_best_rank()
+    status = "keep" if best_rank is None or current_rank > best_rank else "discard"
 
     _append_results_row(
         LoggedResult(
@@ -527,6 +525,13 @@ def best_logged_result() -> LoggedResult | None:
     if not results:
         return None
     return max(results, key=rank_logged_result)
+
+
+def current_best_rank() -> tuple[float, float, float, float, float] | None:
+    if BEST_RESULT_PATH.exists():
+        return rank_report(json.loads(BEST_RESULT_PATH.read_text()))
+    best_logged = best_logged_result()
+    return None if best_logged is None else rank_logged_result(best_logged)
 
 
 def rank_report(report: dict[str, Any]) -> tuple[float, float, float, float, float]:

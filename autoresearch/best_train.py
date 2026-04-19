@@ -23,37 +23,37 @@ from prepare import (
 )
 from pipeline.shared.board_tracking import score_board_state
 
-EXPERIMENT_NAME = "hybrid_lookahead_segmental_drop1_boardcands2_ratio95_props16_top2_detect10_minsep2_thresh3_total150_permove125_m9p8957061767578125_r0_beam8_v282"
+EXPERIMENT_NAME = "hybrid_lookahead_segmental_drop1_boardcands3_ratio95_props14_top4_detect10_lwindow1_minsep4_secsep1_thresh3_total150_permove125_lmargin9p5_m9p8957061767578125_r0_beam4_v545"
 EXPERIMENT_DESCRIPTION = (
     "Hybrid decoder keeps the baseline lookahead path unless a conservative board-only "
-    "segmental pass wins the current score-gain gates, while following up v221-v281 after beam_size=6 + props16 rescued the old degraded branch into the best current lower-false-change tradeoff, top-move breadth stayed an exact no-op from 12 down through 3, top2 plus top1 shifted beam5 through beam7 into the same lower-non-empty lower-macro but higher-recall tradeoff, widening board-state breadth to 3 snapped back exactly to v221, narrowing it to 1 was harmful, and beam4-beam3 also snapped back to v221, and lowering only top-move breadth from top10 to top2 on the beam8 + props16 regime "
-    "to test whether the recall-favoring branch also persists at the original full beam or whether beam7 is already the upper edge of that window."
+    "segmental pass wins the current score-gain gates, while following up the kept window1 branch after lowering lookahead window from 2 to 1 on the 9.5-margin baseline opened a lower-false-change but lower-recall tradeoff, lowering only max_event_proposals from 16 to 15 on the restored plain window1 branch improved recall and secondary metrics but worsened false-change, additionally narrowing top-board breadth from 4 to 3 recovered the lower false-change without hurting recall, lowering only max_event_proposals one step further from 15 to 14 on that boardcands3 plain props branch kept that recovered tradeoff, lowering segment_board_drop_worst_frames from 1 to 0 on that stronger props14 branch produced a new kept low-noise / lower-recall tradeoff, lowering secondary minimum event separation from 2 to 1 improved that tradeoff again, raising max_event_proposals from 14 to 15 was worse, raising top-board breadth from 3 to 4 was an exact no-op, lowering top-board breadth from 3 to 2 was worse, raising beam size from 4 to 5 was an exact no-op, raising beam size from 4 to 6 was worse, lowering max_event_proposals from 14 to 13 was sharply worse, and lowering top-move breadth from 4 to 1 was an exact no-op, and raising only segment_board_drop_worst_frames from 0 back to 1 on the new secsep1 best branch "
+    "to test whether the secsep1 gain survives restoring one-frame suppression or whether drop0 remains essential to the improved low-noise tradeoff."
 )
 
 DECODER_KIND = "hybrid"
 
-LOOKAHEAD_WINDOW = 2
-LOOKAHEAD_MARGIN = 10.0
+LOOKAHEAD_WINDOW = 1
+LOOKAHEAD_MARGIN = 9.5
 
 SEGMENTAL_CONFIG: dict[str, Any] = {
-    "beam_size": 8,
-    "top_move_candidates": 2,
-    "top_board_candidates": 2,
+    "beam_size": 4,
+    "top_move_candidates": 4,
+    "top_board_candidates": 3,
     "board_weight": 1.0,
     "move_weight": 0.0,
     "detect_weight": 0.0,
     "move_score_margin": 9.8957061767578125,
     "detect_peak_threshold": 0.1,
     "board_change_peak_threshold": 3.0 / 64.0,
-    "min_event_separation": 2,
-    "secondary_min_event_separation": 2,
+    "min_event_separation": 4,
+    "secondary_min_event_separation": 1,
     "secondary_peak_ratio": 0.95,
     "state_aware_proposal_passes": 0,
     "anomaly_change_evidence_threshold": 0.25,
     "anomaly_settled_gain_threshold": 0.0,
     "segment_board_drop_worst_frames": 1,
     "event_window_radius": 0,
-    "max_event_proposals": 16,
+    "max_event_proposals": 14,
     "diagnostic_settled_horizon": 8,
 }
 

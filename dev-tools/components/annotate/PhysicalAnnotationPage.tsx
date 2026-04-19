@@ -62,6 +62,11 @@ const PANEL_STATUS_CLASS =
   "inline-flex h-5 min-w-[5rem] items-center justify-center rounded border px-1.5 text-[9px] leading-none whitespace-nowrap";
 const PRIMARY_SAVE_BUTTON_CLASS =
   "inline-flex h-6 min-w-[8.75rem] items-center justify-center rounded border bg-primary px-2.5 text-[9px] font-medium text-primary-foreground whitespace-nowrap transition-colors hover:bg-primary/90 disabled:opacity-40";
+const SHORTCUT_KEY_CLASS =
+  "ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded border border-zinc-300/80 bg-zinc-100 px-1 font-mono text-[10px] font-medium leading-none text-zinc-600 shadow-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300";
+const TOUCHSTART_SHORTCUT_KEY = "i";
+const TOUCHEND_SHORTCUT_KEY = "o";
+const OCCLUSION_SHORTCUT_KEY = "p";
 const LIVE_RECTIFY_DELAY_MS = 75;
 const MIN_CAMERA_BBOX_AREA_RATIO = 0.02;
 const MAX_CAMERA_BBOX_AREA_RATIO = 0.25;
@@ -491,12 +496,10 @@ function AnnotationContent({
       setActiveMoveIndex(null);
       return;
     }
-    if (selectedMoveIndex >= 0) {
-      setActiveMoveIndex(selectedMoveIndex);
-      return;
-    }
     setActiveMoveIndex((current) => {
-      if (current === null) return 0;
+      if (current === null) {
+        return selectedMoveIndex >= 0 ? selectedMoveIndex : 0;
+      }
       return Math.min(current, effectiveMoves.length - 1);
     });
   }, [effectiveMoves.length, selectedMoveIndex]);
@@ -574,12 +577,45 @@ function AnnotationContent({
       if (event.key === "ArrowRight") {
         event.preventDefault();
         stepFrameForward();
+        return;
+      }
+
+      if (event.repeat) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      if (key === TOUCHSTART_SHORTCUT_KEY) {
+        if (activeMoveIndex === null) return;
+        event.preventDefault();
+        setMoveStartFrame(activeMoveIndex, selectedFrame);
+        return;
+      }
+
+      if (key === TOUCHEND_SHORTCUT_KEY) {
+        if (activeMoveIndex === null) return;
+        event.preventDefault();
+        setMoveEndFrame(activeMoveIndex, selectedFrame);
+        return;
+      }
+
+      if (key === OCCLUSION_SHORTCUT_KEY) {
+        event.preventDefault();
+        toggleFrameOccluded(selectedFrame);
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [stepFrameBackward, stepFrameForward]);
+  }, [
+    activeMoveIndex,
+    selectedFrame,
+    setMoveEndFrame,
+    setMoveStartFrame,
+    stepFrameBackward,
+    stepFrameForward,
+    toggleFrameOccluded,
+  ]);
 
   const rawMetadata = clipInfo.metadata as Record<string, unknown> | undefined;
   const metadataCameraBbox = asNumberList(rawMetadata?.camera_bbox, 4);
@@ -1326,9 +1362,11 @@ function AnnotationContent({
             <button
               type="button"
               onClick={() => toggleFrameOccluded(selectedFrame)}
-              className={`absolute right-2 top-2 z-20 rounded border px-2 py-1 text-[10px] font-medium shadow ${currentFrameOccluded ? "border-amber-500/60 bg-amber-500/90 text-black" : "border-black/30 bg-black/60 text-white hover:bg-black/70"}`}
+              className={`absolute right-2 top-2 z-20 inline-flex items-center gap-1 rounded border px-2 py-1 text-[10px] font-medium shadow ${currentFrameOccluded ? "border-amber-500/60 bg-amber-500/90 text-black" : "border-black/30 bg-black/60 text-white hover:bg-black/70"}`}
+              title={`Hand occlusion (${OCCLUSION_SHORTCUT_KEY})`}
             >
               {currentFrameOccluded ? "Hand occluded" : "Mark hand occluded"}
+              <kbd className={SHORTCUT_KEY_CLASS}>{OCCLUSION_SHORTCUT_KEY}</kbd>
             </button>
             {currentFrameOccluded && (
               <div className="pointer-events-none absolute inset-0 z-10 border-2 border-amber-500/80" />
@@ -1498,9 +1536,11 @@ function AnnotationContent({
                     setMoveStartFrame(activeMoveIndex, selectedFrame)
                   }
                   disabled={activeMoveIndex === null}
-                  className="inline-flex h-7 items-center justify-center rounded border px-2 text-[11px] disabled:opacity-40"
+                  className="inline-flex h-7 items-center justify-center gap-1 rounded border px-2 text-[11px] disabled:opacity-40"
+                  title={`touchstart (${TOUCHSTART_SHORTCUT_KEY})`}
                 >
-                  Touch start
+                  touchstart
+                  <kbd className={SHORTCUT_KEY_CLASS}>{TOUCHSTART_SHORTCUT_KEY}</kbd>
                 </button>
                 <button
                   type="button"
@@ -1509,9 +1549,11 @@ function AnnotationContent({
                     setMoveEndFrame(activeMoveIndex, selectedFrame)
                   }
                   disabled={activeMoveIndex === null}
-                  className="inline-flex h-7 items-center justify-center rounded border px-2 text-[11px] disabled:opacity-40"
+                  className="inline-flex h-7 items-center justify-center gap-1 rounded border px-2 text-[11px] disabled:opacity-40"
+                  title={`touchend (${TOUCHEND_SHORTCUT_KEY})`}
                 >
-                  Touch end
+                  touchend
+                  <kbd className={SHORTCUT_KEY_CLASS}>{TOUCHEND_SHORTCUT_KEY}</kbd>
                 </button>
               </div>
             </div>
@@ -1532,9 +1574,8 @@ function AnnotationContent({
                       key={i}
                       onClick={() => {
                         setActiveMoveIndex(i);
-                        setSelectedFrame(move.frame_index);
                       }}
-                      className={`flex items-center justify-between gap-2 rounded px-1.5 py-1 text-[11px] ${activeMoveIndex === i ? "bg-primary/10 font-medium" : "hover:bg-muted/50"}`}
+                      className={`flex cursor-pointer items-center justify-between gap-2 rounded px-1.5 py-1 text-[11px] ${activeMoveIndex === i ? "bg-primary/10 font-medium" : "hover:bg-muted/50"}`}
                     >
                       <span className="min-w-0">
                         #{i + 1}{" "}

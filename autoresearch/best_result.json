@@ -1,0 +1,208 @@
+{
+  "baseline_board_exact": 0.0378698224852071,
+  "baseline_report": "outputs/2026-04-18/tracker_eval_weights_best_production_native_pieceboxmapped_off.json",
+  "created_at": "2026-04-19T05:17:52.826192+00:00",
+  "decoder": {
+    "baseline": {
+      "kind": "lookahead",
+      "lookahead_margin": 9.5,
+      "lookahead_window": 1
+    },
+    "name": "hybrid",
+    "segmental": {
+      "anomaly_change_evidence_threshold": 0.25,
+      "anomaly_settled_gain_threshold": 0.0,
+      "beam_size": 4,
+      "board_change_peak_threshold": 0.046875,
+      "board_weight": 1.0,
+      "detect_peak_threshold": 0.1,
+      "detect_weight": 0.0,
+      "diagnostic_settled_horizon": 8,
+      "event_window_radius": 0,
+      "max_event_proposals": 14,
+      "min_event_separation": 4,
+      "move_score_margin": 9.895706176757812,
+      "move_weight": 0.0,
+      "secondary_min_event_separation": 1,
+      "secondary_peak_ratio": 0.95,
+      "segment_board_drop_worst_frames": 1,
+      "state_aware_proposal_passes": 0,
+      "top_board_candidates": 3,
+      "top_move_candidates": 4
+    },
+    "selection": {
+      "min_score_gain_per_added_move": 125.0,
+      "min_total_score_gain": 150.0
+    }
+  },
+  "delta_board_exact": 0.036686390532544376,
+  "elapsed_seconds": 9.586840152740479,
+  "evaluated_boards": 845,
+  "experiment_description": "Hybrid decoder keeps the baseline lookahead path unless a conservative board-only segmental pass wins the current score-gain gates, while following up the kept window1 branch after lowering lookahead window from 2 to 1 on the 9.5-margin baseline opened a lower-false-change but lower-recall tradeoff, lowering only max_event_proposals from 16 to 15 on the restored plain window1 branch improved recall and secondary metrics but worsened false-change, additionally narrowing top-board breadth from 4 to 3 recovered the lower false-change without hurting recall, lowering only max_event_proposals one step further from 15 to 14 on that boardcands3 plain props branch kept that recovered tradeoff, lowering segment_board_drop_worst_frames from 1 to 0 on that stronger props14 branch produced a new kept low-noise / lower-recall tradeoff, lowering secondary minimum event separation from 2 to 1 improved that tradeoff again, raising max_event_proposals from 14 to 15 was worse, raising top-board breadth from 3 to 4 was an exact no-op, lowering top-board breadth from 3 to 2 was worse, raising beam size from 4 to 5 was an exact no-op, raising beam size from 4 to 6 was worse, lowering max_event_proposals from 14 to 13 was sharply worse, and lowering top-move breadth from 4 to 1 was an exact no-op, and raising only segment_board_drop_worst_frames from 0 back to 1 on the new secsep1 best branch to test whether the secsep1 gain survives restoring one-frame suppression or whether drop0 remains essential to the improved low-noise tradeoff.",
+  "experiment_name": "hybrid_lookahead_segmental_drop1_boardcands3_ratio95_props14_top4_detect10_lwindow1_minsep4_secsep1_thresh3_total150_permove125_lmargin9p5_m9p8957061767578125_r0_beam4_v545",
+  "metrics": {
+    "accuracy": 0.8596523668639053,
+    "board_exact_match": 0.07455621301775148,
+    "class_accuracy": {
+      "B": 0.5192118226600986,
+      "K": 0.978698224852071,
+      "N": 0.7525252525252525,
+      "P": 0.8795232936078007,
+      "Q": 0.39774330042313116,
+      "R": 0.7754293262879789,
+      "b": 0.7207792207792207,
+      "empty": 0.8969737107316652,
+      "k": 0.8520710059171598,
+      "n": 0.5300837776085301,
+      "p": 0.8484378462220252,
+      "q": 0.8575458392101551,
+      "r": 0.8704560475875743
+    },
+    "macro_f1": 0.7517187901396271,
+    "mean_confidence": 0.18468740582466125,
+    "non_empty_accuracy": 0.792672213322309
+  },
+  "move_detection_recall": 0.234375,
+  "prepared_cache": "autoresearch/cache/native_realplusmanual_board_logits.pt",
+  "sequence_count": 8,
+  "sequence_diagnostics": {
+    "clips": {
+      "data/argus/train_real/clip_overlay_7RaBQag34Hk_clip72_10.pt": {
+        "gt_change_frames": [
+          6,
+          7,
+          11,
+          12,
+          14,
+          16
+        ],
+        "matched_gt_changes": 0,
+        "predicted_change_frames": []
+      },
+      "data/argus/train_real/clip_overlay_7RaBQag34Hk_clip72_9.pt": {
+        "gt_change_frames": [
+          1,
+          5,
+          7,
+          11,
+          13,
+          19,
+          21,
+          27,
+          31,
+          34,
+          37
+        ],
+        "matched_gt_changes": 0,
+        "predicted_change_frames": []
+      },
+      "data/argus/train_real/clip_overlay_9h4IE1G99OE_clip69_1.pt": {
+        "gt_change_frames": [
+          2,
+          40,
+          59,
+          78,
+          91
+        ],
+        "matched_gt_changes": 0,
+        "predicted_change_frames": []
+      },
+      "data/argus/train_real/clip_overlay_cQAedm_gWrw_clip67_2.pt": {
+        "gt_change_frames": [],
+        "matched_gt_changes": 0,
+        "predicted_change_frames": []
+      },
+      "data/argus/train_real/clip_overlay_e4lGbQp4pU4_clip70_9.pt": {
+        "gt_change_frames": [
+          1,
+          12,
+          27,
+          38,
+          51,
+          60,
+          68,
+          75,
+          76
+        ],
+        "matched_gt_changes": 5,
+        "predicted_change_frames": [
+          1,
+          12,
+          27,
+          38,
+          51
+        ]
+      },
+      "data/argus/train_real/clip_overlay_h2WrtkfwRl8_clip8_2.pt": {
+        "gt_change_frames": [
+          28,
+          31,
+          43,
+          45,
+          54,
+          57,
+          62,
+          66
+        ],
+        "matched_gt_changes": 0,
+        "predicted_change_frames": []
+      },
+      "data/argus/train_real/clip_overlay_h2WrtkfwRl8_clip8_5.pt": {
+        "gt_change_frames": [
+          7,
+          37,
+          68,
+          100,
+          125,
+          131,
+          146,
+          171,
+          180,
+          190,
+          256,
+          286,
+          352,
+          382,
+          392,
+          394,
+          397,
+          413,
+          416
+        ],
+        "matched_gt_changes": 10,
+        "predicted_change_frames": [
+          101,
+          125,
+          129,
+          147,
+          163,
+          189,
+          256,
+          286,
+          351,
+          382,
+          391,
+          416
+        ]
+      },
+      "data/argus/train_real/clip_overlay_h2WrtkfwRl8_clip8_6.pt": {
+        "gt_change_frames": [
+          8,
+          37,
+          39,
+          47,
+          55,
+          79
+        ],
+        "matched_gt_changes": 0,
+        "predicted_change_frames": []
+      }
+    },
+    "false_change_frames": 7,
+    "matched_gt_change_frames": 15,
+    "total_gt_change_frames": 64,
+    "total_static_frames": 773
+  },
+  "static_frame_false_change_rate": 0.009055627425614488,
+  "weights_path": "weights/physical/best.pt"
+}

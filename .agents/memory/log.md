@@ -405,3 +405,27 @@ Adjusted the just-landed `/evaluate/physical` fix after user feedback. The page 
 ## 2026-04-18T23:59:09.772Z | decision | high | Board-probe pooling now maps full-frame piece boxes into crop space before token pooling
 
 Fixed the remaining geometry leak after the native-frame migration. `pipeline/physical/board_probe/*` no longer reprojects piece boxes from resized crop-space corners for real oblique boards. It now projects piece boxes in full-frame source geometry, then maps those bboxes through the board-neighborhood crop+resize transform before pooling DINO patches. Regenerated the matching baseline report at `outputs/2026-04-18/tracker_eval_weights_best_production_native_pieceboxmapped_off.json` and updated `autoresearch/prepare.py` to verify against that surface; `.venv/bin/python3 autoresearch/prepare.py --force` now passes again.
+
+## 2026-04-19T00:18:03.779Z | decision | medium | Fixed authresearch typo across autoresearch workspace
+
+Renamed stale `authresearch` references across the local `autoresearch/` workspace to `autoresearch`, including active controllers/docs (`controller.sh`, `controller_slow.sh`, `program.md`), current scripts (`prepare.py`, `train.py`, `best_train.py`), pyproject metadata, and historical workspace artifacts/logs under `autoresearch/`. Controller env vars are now `AUTORESEARCH_*`, and `autoresearch/controller.sh` now points directly at `autoresearch/train.py` without needing a temporary `authresearch` symlink.
+
+## 2026-04-19T01:13:49.082Z | experiment | high | MPS reruns and corrected autoresearch cache on native piecebox surface
+
+- Verified PyTorch MPS now works in `.venv`; reran physical training/eval on MPS.
+- Two-stage 10-epoch MPS retrains landed at `outputs/2026-04-18/two_stage_native_occupancy_10ep_mps/summary.json` (`best_val_accuracy=0.8372226331`) and `outputs/2026-04-19/two_stage_native_piece_10ep_mps/summary.json` (`best_val_accuracy=0.7343806522`); eval `outputs/2026-04-19/two_stage_eval_native_10ep_mps.json` stayed effectively flat (`per-square=0.7763`, `non_empty=0.5711`, `board_exact=0.0036`).
+- Whole-board 10-epoch MPS retrain `outputs/2026-04-19/physical_board_probe_pieceproj_manualonly_init_bestpt_10ep_mps/metrics.json` regressed on raw board metrics (`real_eval accuracy=0.5201`, `non_empty=0.1734`, `macro_f1=0.1340`, `board_exact=0.0`); production tracker eval `outputs/2026-04-19/tracker_eval_board_probe_10ep_mps_production.json` matched the weak native baseline surface (`board_exact=0.0378698225`).
+- `autoresearch/prepare.py --device mps --force` successfully rebuilt `autoresearch/cache/native_realplusmanual_board_logits.pt` and verified the corrected native piecebox baseline against `outputs/2026-04-18/tracker_eval_weights_best_production_native_pieceboxmapped_off.json`.
+- Current autoresearch plateau on the corrected cache remains `board_exact=0.0745562130`; probes lowering gates, pure segmental decode, extra dropped worst frames, and stricter board-change threshold all regressed or were no-ops.
+
+## 2026-04-19T01:14:26.081Z | decision | high | Autoresearch best-run bookkeeping now compares against exact best_result.json
+
+`autoresearch/prepare.py:record_successful_run()` no longer decides keep/discard from rounded `results.tsv` entries or the old same-config auto-keep path. It now compares the candidate run against the exact current best stored in `autoresearch/best_result.json` (falling back to the log only if needed), and a unit test in `tests/test_autoresearch_prepare.py` covers the regression where a worse rerun of the current config could overwrite the best because the TSV had rounded away precision.
+
+## 2026-04-19T07:44:12.719Z | decision | medium | Physical transient annotation move selection and autosave fix
+
+Updated `/annotate/physical` transient labeling UX so move-row selection no longer changes the current frame, enabling reuse of one frame as another move's touch boundary. Added `i/o/p` shortcuts for `touchstart`, `touchend`, and hand occlusion with inline keycaps. Reworked `usePhysicalTransientAnnotations` autosave to save directly from ref-backed draft snapshots on each user mutation, preserve later edits during in-flight saves, and clear stale baseline-sync blockers that were preventing immediate saves.
+
+## 2026-04-19T07:57:40.803Z | prompt | high | User wants side-by-side comparison against Chesscog occupancy/piece classifiers
+
+User wants to compare Argus occupancy classification and piece classification against the Chesscog implementation/report (`~/dev/chesscog`, `~/dev/chesscog/docs/report.pdf`) using Argus data, with a side-by-side evaluation of both approaches.

@@ -52,12 +52,19 @@ def read_board(
     piece_model: SquareClassifier,
     occupancy_crop_size: int = DEFAULT_OCCUPANCY_CROP_SIZE,
     piece_crop_size: int = DEFAULT_PIECE_CROP_SIZE,
+    occupancy_threshold: float = 0.7,
+    occupancy_pad_ratio: float = 0.3,
     device: torch.device | str = "cpu",
 ) -> TwoStageBoardReaderResult:
     """Run the two-stage reader on one frame and return per-square class ids."""
     occupancy_crops = [
         extract_projected_occupancy_crop(
-            frame_bgr, corners, row=i // 8, col=i % 8, output_size=occupancy_crop_size
+            frame_bgr,
+            corners,
+            row=i // 8,
+            col=i % 8,
+            output_size=occupancy_crop_size,
+            pad_ratio=occupancy_pad_ratio,
         )
         for i in range(64)
     ]
@@ -74,7 +81,7 @@ def read_board(
         with torch.no_grad():
             occupancy_logits = occupancy_model(occupancy_tensor)
             occupancy_probs = torch.softmax(occupancy_logits, dim=-1)
-            occupied_mask = occupancy_probs[:, 1] >= 0.5
+            occupied_mask = occupancy_probs[:, 1] >= occupancy_threshold
 
             piece_probs_all = torch.zeros((64, piece_model.config.num_classes), device=device)
             class_ids = [_EMPTY_CLASS_ID] * 64

@@ -190,14 +190,21 @@ function hasDraftChanges(
   );
 }
 
+function buildSavePayload(
+  moveAnnotations: PhysicalTransientMoveAnnotation[],
+  occludedFrameIndices: number[],
+) {
+  return {
+    move_annotations: moveAnnotations,
+    hand_occlusion_spans: frameIndicesToSpans(occludedFrameIndices),
+  };
+}
+
 function draftPayloadKey(
   moveAnnotations: PhysicalTransientMoveAnnotation[],
   occludedFrameIndices: number[],
 ): string {
-  return JSON.stringify({
-    move_annotations: moveAnnotations,
-    hand_occlusion_spans: frameIndicesToSpans(occludedFrameIndices),
-  });
+  return JSON.stringify(buildSavePayload(moveAnnotations, occludedFrameIndices));
 }
 
 function spansToFrameIndices(
@@ -283,6 +290,10 @@ export function usePhysicalTransientAnnotations({
   const draftMoveAnnotationsRef = useRef<PhysicalTransientMoveAnnotation[]>([]);
   const draftOccludedFrameIndicesRef = useRef<number[]>([]);
   const hasUnsavedChangesRef = useRef(false);
+  const loadingRef = useRef(true);
+  const savingRef = useRef(false);
+  const failedPayloadKeyRef = useRef<string | null>(null);
+  const hasInvalidMoveLabelsRef = useRef(false);
   const pendingBaselineSyncPayloadKeyRef = useRef<string | null>(null);
   const lastBaselineRef = useRef<BaselineSnapshot>({
     clipPath: null,
@@ -405,36 +416,66 @@ export function usePhysicalTransientAnnotations({
       ),
     [draftMoveAnnotations, frameCount],
   );
-  const savePayload = useMemo(
-    () => ({
-      move_annotations: draftMoveAnnotations,
-      hand_occlusion_spans: frameIndicesToSpans(draftOccludedFrameIndices),
-    }),
-    [draftMoveAnnotations, draftOccludedFrameIndices],
-  );
   const savePayloadKey = useMemo(
     () => draftPayloadKey(draftMoveAnnotations, draftOccludedFrameIndices),
     [draftMoveAnnotations, draftOccludedFrameIndices],
   );
 
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    savingRef.current = saving;
+  }, [saving]);
+
+  useEffect(() => {
+    failedPayloadKeyRef.current = failedPayloadKey;
+  }, [failedPayloadKey]);
+
+  useEffect(() => {
+    hasInvalidMoveLabelsRef.current = hasInvalidMoveLabels;
+  }, [hasInvalidMoveLabels]);
+
   const save = useCallback(async () => {
-    if (hasInvalidMoveLabels) {
+    if (
+      pendingBaselineSyncPayloadKeyRef.current !== null ||
+      loadingRef.current ||
+      savingRef.current ||
+      hasInvalidMoveLabelsRef.current ||
+      !hasUnsavedChangesRef.current
+    ) {
+      return false;
+    }
+
+    const moveAnnotations = draftMoveAnnotationsRef.current;
+    const occludedFrameIndices = draftOccludedFrameIndicesRef.current;
+    const payloadKey = draftPayloadKey(moveAnnotations, occludedFrameIndices);
+    if (failedPayloadKeyRef.current === payloadKey) {
       return false;
     }
 
     setSaving(true);
+    savingRef.current = true;
     try {
       const result = await api.save({
         clip_path: clipPath,
-        ...savePayload,
+        ...buildSavePayload(moveAnnotations, occludedFrameIndices),
       });
-      hasUnsavedChangesRef.current = false;
-      setHasUnsavedChanges(false);
-      setSavedAnnotation(result.annotation);
+      const latestDraftPayloadKey = draftPayloadKey(
+        draftMoveAnnotationsRef.current,
+        draftOccludedFrameIndicesRef.current,
+      );
+      const savedLatestDraft = latestDraftPayloadKey === payloadKey;
+      hasUnsavedChangesRef.current = !savedLatestDraft;
+      setHasUnsavedChanges(!savedLatestDraft);
+      failedPayloadKeyRef.current = null;
       setFailedPayloadKey(null);
+      setSavedAnnotation(result.annotation);
       return true;
     } catch (error) {
-      setFailedPayloadKey(savePayloadKey);
+      failedPayloadKeyRef.current = payloadKey;
+      setFailedPayloadKey(payloadKey);
       toast.error(
         error instanceof Error
           ? error.message
@@ -442,128 +483,114 @@ export function usePhysicalTransientAnnotations({
       );
       return false;
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
-  }, [api, clipPath, hasInvalidMoveLabels, savePayload, savePayloadKey]);
+  }, [api, clipPath]);
 
   useEffect(() => {
     if (pendingBaselineSyncPayloadKeyRef.current === savePayloadKey) {
       pendingBaselineSyncPayloadKeyRef.current = null;
+      void save();
     }
-  }, [savePayloadKey]);
+  }, [save, savePayloadKey]);
 
-  useEffect(() => {
-    if (
-      pendingBaselineSyncPayloadKeyRef.current !== null ||
-      loading ||
-      saving ||
-      hasInvalidMoveLabels ||
-      !hasUnsavedChanges ||
-      failedPayloadKey === savePayloadKey
-    ) {
-      return;
-    }
-    void save();
-  }, [
-    failedPayloadKey,
-    hasInvalidMoveLabels,
-    hasUnsavedChanges,
-    loading,
-    save,
-    savePayloadKey,
-    saving,
-  ]);
+  const updateMoveAnnotations = useCallback(
+    (
+      updater: (
+        annotations: PhysicalTransientMoveAnnotation[],
+      ) => PhysicalTransientMoveAnnotation[],
+    ) => {
+      failedPayloadKeyRef.current = null;
+      setFailedPayloadKey(null);
+      const nextDraft = updater(draftMoveAnnotationsRef.current);
+      const nextHasUnsavedChanges = hasDraftChanges(
+        nextDraft,
+        baselineMoveAnnotations,
+        draftOccludedFrameIndicesRef.current,
+        baselineOccludedFrameIndices,
+      );
+      draftMoveAnnotationsRef.current = nextDraft;
+      hasUnsavedChangesRef.current = nextHasUnsavedChanges;
+      pendingBaselineSyncPayloadKeyRef.current = null;
+      setDraftMoveAnnotations(nextDraft);
+      setHasUnsavedChanges(nextHasUnsavedChanges);
+      void save();
+    },
+    [baselineMoveAnnotations, baselineOccludedFrameIndices, save],
+  );
+
+  const updateOccludedFrameIndices = useCallback(
+    (updater: (frameIndices: number[]) => number[]) => {
+      failedPayloadKeyRef.current = null;
+      setFailedPayloadKey(null);
+      const nextDraft = updater(draftOccludedFrameIndicesRef.current);
+      const nextHasUnsavedChanges = hasDraftChanges(
+        draftMoveAnnotationsRef.current,
+        baselineMoveAnnotations,
+        nextDraft,
+        baselineOccludedFrameIndices,
+      );
+      draftOccludedFrameIndicesRef.current = nextDraft;
+      hasUnsavedChangesRef.current = nextHasUnsavedChanges;
+      pendingBaselineSyncPayloadKeyRef.current = null;
+      setDraftOccludedFrameIndices(nextDraft);
+      setHasUnsavedChanges(nextHasUnsavedChanges);
+      void save();
+    },
+    [baselineMoveAnnotations, baselineOccludedFrameIndices, save],
+  );
 
   const setMoveStartFrame = useCallback(
     (moveIndex: number, frameIndex: number) => {
-      setDraftMoveAnnotations((currentDraft) => {
-        const nextDraft = currentDraft.map((annotation) =>
+      updateMoveAnnotations((currentDraft) =>
+        currentDraft.map((annotation) =>
           annotation.move_index === moveIndex
             ? { ...annotation, start_frame_index: frameIndex }
             : annotation,
-        );
-        const nextHasUnsavedChanges = hasDraftChanges(
-          nextDraft,
-          baselineMoveAnnotations,
-          draftOccludedFrameIndicesRef.current,
-          baselineOccludedFrameIndices,
-        );
-        draftMoveAnnotationsRef.current = nextDraft;
-        hasUnsavedChangesRef.current = nextHasUnsavedChanges;
-        setHasUnsavedChanges(nextHasUnsavedChanges);
-        return nextDraft;
-      });
+        ),
+      );
     },
-    [baselineMoveAnnotations, baselineOccludedFrameIndices],
+    [updateMoveAnnotations],
   );
 
   const setMoveEndFrame = useCallback(
     (moveIndex: number, frameIndex: number) => {
-      setDraftMoveAnnotations((currentDraft) => {
-        const nextDraft = currentDraft.map((annotation) =>
+      updateMoveAnnotations((currentDraft) =>
+        currentDraft.map((annotation) =>
           annotation.move_index === moveIndex
             ? { ...annotation, end_frame_index: frameIndex }
             : annotation,
-        );
-        const nextHasUnsavedChanges = hasDraftChanges(
-          nextDraft,
-          baselineMoveAnnotations,
-          draftOccludedFrameIndicesRef.current,
-          baselineOccludedFrameIndices,
-        );
-        draftMoveAnnotationsRef.current = nextDraft;
-        hasUnsavedChangesRef.current = nextHasUnsavedChanges;
-        setHasUnsavedChanges(nextHasUnsavedChanges);
-        return nextDraft;
-      });
+        ),
+      );
     },
-    [baselineMoveAnnotations, baselineOccludedFrameIndices],
+    [updateMoveAnnotations],
   );
 
   const clearMoveStartFrame = useCallback(
     (moveIndex: number) => {
-      setDraftMoveAnnotations((currentDraft) => {
-        const nextDraft = currentDraft.map((annotation) =>
+      updateMoveAnnotations((currentDraft) =>
+        currentDraft.map((annotation) =>
           annotation.move_index === moveIndex
             ? { ...annotation, start_frame_index: null }
             : annotation,
-        );
-        const nextHasUnsavedChanges = hasDraftChanges(
-          nextDraft,
-          baselineMoveAnnotations,
-          draftOccludedFrameIndicesRef.current,
-          baselineOccludedFrameIndices,
-        );
-        draftMoveAnnotationsRef.current = nextDraft;
-        hasUnsavedChangesRef.current = nextHasUnsavedChanges;
-        setHasUnsavedChanges(nextHasUnsavedChanges);
-        return nextDraft;
-      });
+        ),
+      );
     },
-    [baselineMoveAnnotations, baselineOccludedFrameIndices],
+    [updateMoveAnnotations],
   );
 
   const clearMoveEndFrame = useCallback(
     (moveIndex: number) => {
-      setDraftMoveAnnotations((currentDraft) => {
-        const nextDraft = currentDraft.map((annotation) =>
+      updateMoveAnnotations((currentDraft) =>
+        currentDraft.map((annotation) =>
           annotation.move_index === moveIndex
             ? { ...annotation, end_frame_index: null }
             : annotation,
-        );
-        const nextHasUnsavedChanges = hasDraftChanges(
-          nextDraft,
-          baselineMoveAnnotations,
-          draftOccludedFrameIndicesRef.current,
-          baselineOccludedFrameIndices,
-        );
-        draftMoveAnnotationsRef.current = nextDraft;
-        hasUnsavedChangesRef.current = nextHasUnsavedChanges;
-        setHasUnsavedChanges(nextHasUnsavedChanges);
-        return nextDraft;
-      });
+        ),
+      );
     },
-    [baselineMoveAnnotations, baselineOccludedFrameIndices],
+    [updateMoveAnnotations],
   );
 
   const isFrameOccluded = useCallback(
@@ -573,23 +600,13 @@ export function usePhysicalTransientAnnotations({
 
   const toggleFrameOccluded = useCallback(
     (frameIndex: number) => {
-      setDraftOccludedFrameIndices((currentDraft) => {
-        const nextDraft = currentDraft.includes(frameIndex)
+      updateOccludedFrameIndices((currentDraft) =>
+        currentDraft.includes(frameIndex)
           ? currentDraft.filter((value) => value !== frameIndex)
-          : sortNumbers([...currentDraft, frameIndex]);
-        const nextHasUnsavedChanges = hasDraftChanges(
-          draftMoveAnnotationsRef.current,
-          baselineMoveAnnotations,
-          nextDraft,
-          baselineOccludedFrameIndices,
-        );
-        draftOccludedFrameIndicesRef.current = nextDraft;
-        hasUnsavedChangesRef.current = nextHasUnsavedChanges;
-        setHasUnsavedChanges(nextHasUnsavedChanges);
-        return nextDraft;
-      });
+          : sortNumbers([...currentDraft, frameIndex]),
+      );
     },
-    [baselineMoveAnnotations, baselineOccludedFrameIndices],
+    [updateOccludedFrameIndices],
   );
 
   return {
