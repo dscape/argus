@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,7 @@ from pipeline.physical.two_stage.classifier_data import (
     OccupancySquareDataset,
     PieceSquareDataset,
     class_counts,
+    load_synthetic_oblique_rows,
 )
 from pipeline.physical.two_stage.classifiers import (
     OCCUPANCY_CLASS_NAMES,
@@ -46,6 +48,11 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     torch.manual_seed(args.seed)
+    _validate_args(args)
+
+    physical_train_row_count: int | None = None
+    selected_synthetic_train_row_count: int | None = None
+    train_allow_clip_fallback = False
 
     if args.source == "chesscog-png":
         from pipeline.physical.chesscog_baseline.png_square_dataset import (
@@ -86,12 +93,10 @@ def main() -> None:
         if args.combined_split_seed is not None:
             # Merge train+val and randomly split for an apples-to-apples model-capacity test
             # (breaks cross-game held-out semantics).
-            import random as _random
-
             merged = load_annotated_oblique_rows(
                 args.physical_train_root
             ) + load_annotated_oblique_rows(args.physical_val_root)
-            rng = _random.Random(args.combined_split_seed)
+            rng = random.Random(args.combined_split_seed)
             shuffled = list(merged)
             rng.shuffle(shuffled)
             cutoff = int(len(shuffled) * 0.8)
@@ -105,6 +110,23 @@ def main() -> None:
             train_rows = load_annotated_oblique_rows(args.physical_train_root)
             val_rows = load_annotated_oblique_rows(args.physical_val_root)
 
+        physical_train_row_count = len(train_rows)
+        if args.synthetic_train_root is not None:
+            synthetic_train_rows = load_synthetic_oblique_rows(args.synthetic_train_root)
+            train_rows, selected_synthetic_train_row_count = _merge_train_rows(
+                physical_rows=train_rows,
+                synthetic_rows=synthetic_train_rows,
+                mix_ratio=args.mix_ratio,
+                seed=args.seed,
+            )
+            train_allow_clip_fallback = bool(selected_synthetic_train_row_count)
+            print(
+                "training rows: "
+                f"physical={physical_train_row_count} "
+                f"synthetic={selected_synthetic_train_row_count} "
+                f"total={len(train_rows)}"
+            )
+
         num_classes, input_size, train_dataset, val_dataset = _build_datasets(
             task=args.task,
             train_rows=train_rows,
@@ -113,6 +135,7 @@ def main() -> None:
             augment_train=args.augment,
             occupancy_pad_ratio=args.occupancy_pad_ratio,
             piece_augment_shear=args.piece_augment_shear,
+            train_allow_clip_fallback=train_allow_clip_fallback,
         )
 
     model_name = args.model_name or default_model_name_for_encoder_type(args.encoder_type)
@@ -235,6 +258,7 @@ def main() -> None:
 
     summary = {
         "task": args.task,
+        "source": args.source,
         "num_classes": num_classes,
         "class_names": OCCUPANCY_CLASS_NAMES if args.task == "occupancy" else PIECE_CLASS_NAMES,
         "checkpoint": str(checkpoint_path.relative_to(_PROJECT_ROOT)),
@@ -244,6 +268,12 @@ def main() -> None:
         "initialize_checkpoint": (
             None if args.initialize_checkpoint is None else str(args.initialize_checkpoint)
         ),
+        "synthetic_train_root": (
+            None if args.synthetic_train_root is None else str(args.synthetic_train_root)
+        ),
+        "mix_ratio": args.mix_ratio,
+        "physical_train_rows": physical_train_row_count,
+        "synthetic_train_rows": selected_synthetic_train_row_count,
         "train_count": len(train_dataset),
         "val_count": len(val_dataset),
         "best_val_accuracy": best_val_accuracy,
@@ -255,6 +285,43 @@ def main() -> None:
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 
+def _validate_args(args: argparse.Namespace) -> None:
+    if args.mix_ratio is not None and args.synthetic_train_root is None:
+        raise ValueError("--mix-ratio requires --synthetic-train-root")
+    if args.source == "chesscog-png" and args.synthetic_train_root is not None:
+        raise ValueError("--synthetic-train-root is only supported with --source argus-projection")
+    if args.source == "chesscog-png" and args.mix_ratio is not None:
+        raise ValueError("--mix-ratio is only supported with --source argus-projection")
+
+
+def _merge_train_rows(
+    *,
+    physical_rows,
+    synthetic_rows,
+    mix_ratio: float | None,
+    seed: int,
+):
+    if mix_ratio is not None and not 0.0 <= mix_ratio <= 1.0:
+        raise ValueError(f"--mix-ratio must be in [0, 1], got {mix_ratio}")
+    if not synthetic_rows:
+        return list(physical_rows), 0
+    if mix_ratio is None:
+        return [*physical_rows, *synthetic_rows], len(synthetic_rows)
+    if mix_ratio == 0.0:
+        return list(physical_rows), 0
+    if mix_ratio == 1.0 or not physical_rows:
+        return list(synthetic_rows), len(synthetic_rows)
+
+    target_synthetic = max(1, int(round(len(physical_rows) * mix_ratio / (1.0 - mix_ratio))))
+    if target_synthetic >= len(synthetic_rows):
+        selected_synthetic_rows = list(synthetic_rows)
+    else:
+        shuffled = list(synthetic_rows)
+        random.Random(seed).shuffle(shuffled)
+        selected_synthetic_rows = shuffled[:target_synthetic]
+    return [*physical_rows, *selected_synthetic_rows], len(selected_synthetic_rows)
+
+
 def _build_datasets(
     *,
     task: str,
@@ -264,6 +331,7 @@ def _build_datasets(
     augment_train: bool,
     occupancy_pad_ratio: float = 0.3,
     piece_augment_shear: bool = False,
+    train_allow_clip_fallback: bool = False,
 ):
     if task == "occupancy":
         input_size = input_size_override or DEFAULT_OCCUPANCY_CROP_SIZE
@@ -272,6 +340,7 @@ def _build_datasets(
             input_size=input_size,
             augment=augment_train,
             pad_ratio=occupancy_pad_ratio,
+            allow_clip_fallback=train_allow_clip_fallback,
         )
         val_dataset = OccupancySquareDataset(
             rows=val_rows,
@@ -302,7 +371,10 @@ def _build_datasets(
             )
             print("enabled piece shear augmentation (shear=±(-5.7, 14.3)°)")
         train_dataset = PieceSquareDataset(
-            rows=train_rows, input_size=input_size, augment=augment_train
+            rows=train_rows,
+            input_size=input_size,
+            augment=augment_train,
+            allow_clip_fallback=train_allow_clip_fallback,
         )
         val_dataset = PieceSquareDataset(rows=val_rows, input_size=input_size)
         return PIECE_NUM_CLASSES, input_size, train_dataset, val_dataset
@@ -415,6 +487,24 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=_PROJECT_ROOT / "data" / "chesscog_baseline",
         help="Root of chesscog-style PNG dataset (must contain occupancy/ and pieces/).",
+    )
+    parser.add_argument(
+        "--synthetic-train-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional argus synthetic clip directory. Clips must contain fens + board_corners; "
+            "rows are mixed into the physical training split only."
+        ),
+    )
+    parser.add_argument(
+        "--mix-ratio",
+        type=float,
+        default=None,
+        help=(
+            "Optional target synthetic row fraction in the training set. "
+            "0 keeps only physical rows, 1 keeps only synthetic rows."
+        ),
     )
     parser.add_argument(
         "--combined-split-seed",

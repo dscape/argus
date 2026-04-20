@@ -5,7 +5,10 @@ from pathlib import Path
 
 import torch
 from pipeline.physical.two_stage.classifier_data import (
+    OccupancySquareDataset,
+    PieceSquareDataset,
     class_counts,
+    load_synthetic_oblique_rows,
     preprocess_square_crop,
 )
 
@@ -28,6 +31,24 @@ def _make_annotation_bundle(tmp_path: Path, *, labels: list[int]) -> Path:
     }
     (annotation_root / "board_annotations.jsonl").write_text(json.dumps(payload) + "\n")
     return annotation_root
+
+
+def _make_synthetic_clip(tmp_path: Path) -> Path:
+    clip_path = tmp_path / "synthetic" / "clip_000000.pt"
+    clip_path.parent.mkdir(parents=True, exist_ok=True)
+    frame = torch.full((3, 64, 64), 127, dtype=torch.uint8)
+    torch.save(
+        {
+            "frames": torch.stack([frame], dim=0),
+            "fens": ["8/8/8/8/8/8/8/K6k w - - 0 1"],
+            "board_corners": torch.tensor(
+                [[[8.0, 8.0], [56.0, 8.0], [56.0, 56.0], [8.0, 56.0]]],
+                dtype=torch.float32,
+            ),
+        },
+        clip_path,
+    )
+    return clip_path.parent
 
 
 def test_occupancy_dataset_yields_64_samples_per_board(tmp_path: Path) -> None:
@@ -98,6 +119,44 @@ def test_occupancy_dataset_class_counts_match_label_distribution(tmp_path: Path)
     assert counts["empty"] == 62
     assert counts["P"] == 1
     assert counts["p"] == 1
+
+
+def test_load_synthetic_oblique_rows_reads_clip_fens_and_board_corners(tmp_path: Path) -> None:
+    clips_root = _make_synthetic_clip(tmp_path)
+
+    rows = load_synthetic_oblique_rows(clips_root)
+
+    assert len(rows) == 1
+    assert rows[0].corners == ((8.0, 8.0), (56.0, 8.0), (56.0, 56.0), (8.0, 56.0))
+    assert rows[0].labels[56] == 6
+    assert rows[0].labels[63] == 12
+
+
+def test_square_datasets_can_read_synthetic_rows_with_clip_fallback(tmp_path: Path) -> None:
+    clips_root = _make_synthetic_clip(tmp_path)
+    rows = load_synthetic_oblique_rows(clips_root)
+
+    occupancy_dataset = OccupancySquareDataset(
+        rows=rows,
+        input_size=32,
+        use_native_frames=True,
+        allow_clip_fallback=True,
+    )
+    piece_dataset = PieceSquareDataset(
+        rows=rows,
+        input_size=32,
+        use_native_frames=True,
+        allow_clip_fallback=True,
+    )
+
+    assert len(occupancy_dataset) == 64
+    occupied_image, occupied_label = occupancy_dataset[56]
+    assert occupied_image.shape == (3, 32, 32)
+    assert occupied_label.item() == 1
+
+    assert len(piece_dataset) == 2
+    piece_labels = sorted(int(piece_dataset[i][1].item()) for i in range(2))
+    assert piece_labels == [5, 11]
 
 
 def test_preprocess_square_crop_normalizes_values_into_standard_range() -> None:

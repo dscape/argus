@@ -342,6 +342,7 @@ export interface GenerationStatus {
   num_clips?: number;
   completed?: number;
   output_dir?: string;
+  broadcast_bias?: number;
   error?: string | null;
 }
 

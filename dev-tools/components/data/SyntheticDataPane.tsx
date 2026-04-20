@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Skeleton } from "@/components/ui/skeleton";
 
 const DIRECTORY = "data/argus/train";
+const DEFAULT_BROADCAST_BIAS = 0.7;
 
 export function SyntheticDataPane() {
   const [stats, setStats] = useState<SyntheticStatsResponse | null>(null);
@@ -94,7 +95,21 @@ export function SyntheticDataPane() {
   const handleGenerate10 = async () => {
     setGenLoading(true);
     try {
-      const status = await startGeneration({ num_clips: 10, output_dir: DIRECTORY });
+      const status = await startGeneration(
+        {
+          num_clips: 10,
+          output_dir: DIRECTORY,
+          broadcast_bias: DEFAULT_BROADCAST_BIAS,
+        } as {
+          num_clips?: number;
+          output_dir?: string;
+          image_size?: number;
+          clip_length?: number;
+          frames_per_move?: number;
+          seed?: number;
+          quality?: string;
+        }
+      );
       setGenStatus(status);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Generation failed");
@@ -126,7 +141,8 @@ export function SyntheticDataPane() {
         <div>
           <h3 className="text-lg font-semibold">Synthetic clips</h3>
           <p className="text-sm text-muted-foreground">
-            Blender-generated training data under <code>{DIRECTORY}</code>.
+            Blender-generated training data under <code>{DIRECTORY}</code>. New clips use
+            {(DEFAULT_BROADCAST_BIAS * 100).toFixed(0)}% broadcast-style camera elevations.
           </p>
         </div>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -143,7 +159,7 @@ export function SyntheticDataPane() {
               disabled={genLoading}
               className="flex h-8 items-center gap-1.5 rounded-xl bg-secondary px-3 text-xs font-medium text-secondary-foreground transition-all duration-150 hover:bg-secondary/80 disabled:pointer-events-none disabled:opacity-50"
             >
-              {genLoading ? "Starting..." : "Generate 10"}
+              {genLoading ? "Starting..." : "Generate 10 broadcast-biased"}
             </button>
           )}
           <span className="text-muted-foreground/40">|</span>

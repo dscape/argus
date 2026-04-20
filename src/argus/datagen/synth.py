@@ -44,6 +44,117 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
+# Camera geometry helpers
+# ---------------------------------------------------------------------------
+
+# Must stay in sync with blender/render_chess.py.
+_BLENDER_BOARD_SIZE = 1.0
+_BLENDER_BOARD_ELEVATION = 0.003
+_BLENDER_CAMERA_DISTANCE_MULTIPLIER = 1.4
+_BLENDER_CAMERA_LENS_MM = 50.0
+_BLENDER_CAMERA_SENSOR_WIDTH_MM = 36.0
+_UNIFORM_CAMERA_ELEVATION_RANGE = (30.0, 75.0)
+_BROADCAST_CAMERA_ELEVATION_RANGE = (55.0, 85.0)
+
+
+def _camera_intrinsics(image_size: int) -> np.ndarray:
+    focal = (_BLENDER_CAMERA_LENS_MM / _BLENDER_CAMERA_SENSOR_WIDTH_MM) * float(image_size)
+    center = float(image_size) / 2.0
+    return np.array(
+        [
+            [focal, 0.0, center],
+            [0.0, focal, center],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+
+def _camera_position(
+    elevation_deg: float,
+    azimuth_deg: float,
+    *,
+    board_size: float = _BLENDER_BOARD_SIZE,
+) -> np.ndarray:
+    elev_rad = np.deg2rad(max(float(elevation_deg), 15.0))
+    azim_rad = np.deg2rad(float(azimuth_deg))
+    distance = board_size * _BLENDER_CAMERA_DISTANCE_MULTIPLIER
+    return np.array(
+        [
+            distance * np.cos(elev_rad) * np.sin(azim_rad),
+            -distance * np.cos(elev_rad) * np.cos(azim_rad),
+            distance * np.sin(elev_rad),
+        ],
+        dtype=np.float64,
+    )
+
+
+def _camera_rotation(camera_position: np.ndarray, target: np.ndarray) -> np.ndarray:
+    forward = target - camera_position
+    forward = forward / np.linalg.norm(forward)
+    world_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    right = np.cross(world_up, forward)
+    right_norm = np.linalg.norm(right)
+    if right_norm < 1e-8:
+        right = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    else:
+        right = right / right_norm
+    down = np.cross(forward, right)
+    down = down / np.linalg.norm(down)
+    return np.stack([right, down, forward], axis=0)
+
+
+def _project_board_corners_to_image(
+    *,
+    elevation_deg: float,
+    azimuth_deg: float,
+    image_size: int,
+    board_size: float = _BLENDER_BOARD_SIZE,
+) -> np.ndarray:
+    half_board = board_size / 2.0
+    board_corners = np.array(
+        [
+            [-half_board, half_board, _BLENDER_BOARD_ELEVATION],
+            [half_board, half_board, _BLENDER_BOARD_ELEVATION],
+            [half_board, -half_board, _BLENDER_BOARD_ELEVATION],
+            [-half_board, -half_board, _BLENDER_BOARD_ELEVATION],
+        ],
+        dtype=np.float64,
+    )
+    camera_position = _camera_position(
+        elevation_deg=elevation_deg,
+        azimuth_deg=azimuth_deg,
+        board_size=board_size,
+    )
+    target = np.array([0.0, 0.0, _BLENDER_BOARD_ELEVATION], dtype=np.float64)
+    rotation = _camera_rotation(camera_position, target)
+    camera_points = (rotation @ (board_corners - camera_position).T).T
+    projected = (_camera_intrinsics(image_size) @ camera_points.T).T
+    return np.asarray(projected[:, :2] / projected[:, 2:3], dtype=np.float64)
+
+
+def _rotate_points_in_image_space(
+    points: np.ndarray,
+    *,
+    angle_deg: float,
+    image_size: int,
+) -> np.ndarray:
+    theta = np.deg2rad(float(angle_deg))
+    cos_theta = float(np.cos(theta))
+    sin_theta = float(np.sin(theta))
+    center_x = float(image_size) / 2.0
+    center_y = float(image_size) / 2.0
+
+    rotated = np.empty_like(points, dtype=np.float64)
+    for index, (x, y) in enumerate(points):
+        dx = float(x) - center_x
+        dy = float(y) - center_y
+        rotated[index, 0] = center_x + cos_theta * dx + sin_theta * dy
+        rotated[index, 1] = center_y - sin_theta * dx + cos_theta * dy
+    return rotated
+
+
+# ---------------------------------------------------------------------------
 # Augmentation utilities
 # ---------------------------------------------------------------------------
 
@@ -107,55 +218,63 @@ def sample_clip_augment_params(
     )
 
 
-def apply_augmentations(
-    img: Image.Image,
+def sample_frame_augment_params(
     rng: random.Random,
     clip_params: ClipAugmentParams | None = None,
     image_size: int = 224,
-) -> Image.Image:
-    """Apply random augmentations to a board image.
-
-    When *clip_params* is provided, base values come from there with
-    small per-frame jitter — giving temporal coherence across a clip.
-    Intensity is also scaled by *image_size* so that small images
-    (e.g. 64x64) aren't destroyed by augmentations tuned for 224x224.
-    """
+) -> ClipAugmentParams:
+    """Sample one frame's augmentation params, optionally from clip-level bases."""
     s = _scale_factor(image_size)
-
     if clip_params is not None:
-        brightness = clip_params.brightness + rng.gauss(0, 0.02)
-        contrast = clip_params.contrast + rng.gauss(0, 0.02)
-        rotation = clip_params.rotation + rng.gauss(0, 0.5)
-        do_blur = clip_params.apply_blur
-        do_noise = clip_params.apply_noise
-        blur_radius = max(0.1, clip_params.blur_radius + rng.gauss(0, 0.1))
-        noise_sigma = max(1.0, clip_params.noise_sigma + rng.gauss(0, 1.0))
-    else:
-        brightness = rng.uniform(1.0 - 0.3 * s, 1.0 + 0.3 * s)
-        contrast = rng.uniform(1.0 - 0.2 * s, 1.0 + 0.2 * s)
-        rotation = rng.uniform(-5.0, 5.0)
-        do_blur = rng.random() < 0.3
-        do_noise = rng.random() < 0.4
-        blur_radius = rng.uniform(0.5 * s, 2.0 * s)
-        noise_sigma = rng.uniform(5 * s, 20 * s)
+        return ClipAugmentParams(
+            brightness=clip_params.brightness + rng.gauss(0, 0.02),
+            contrast=clip_params.contrast + rng.gauss(0, 0.02),
+            noise_sigma=max(1.0, clip_params.noise_sigma + rng.gauss(0, 1.0)),
+            blur_radius=max(0.1, clip_params.blur_radius + rng.gauss(0, 0.1)),
+            apply_blur=clip_params.apply_blur,
+            apply_noise=clip_params.apply_noise,
+            rotation=clip_params.rotation + rng.gauss(0, 0.5),
+        )
+    return ClipAugmentParams(
+        brightness=rng.uniform(1.0 - 0.3 * s, 1.0 + 0.3 * s),
+        contrast=rng.uniform(1.0 - 0.2 * s, 1.0 + 0.2 * s),
+        noise_sigma=rng.uniform(5 * s, 20 * s),
+        blur_radius=rng.uniform(0.5 * s, 2.0 * s),
+        apply_blur=rng.random() < 0.3,
+        apply_noise=rng.random() < 0.4,
+        rotation=rng.uniform(-5.0, 5.0),
+    )
 
-    img = img.rotate(rotation, resample=Image.Resampling.BILINEAR, fillcolor=(128, 128, 128))
+
+def apply_augmentations(
+    img: Image.Image,
+    rng: random.Random,
+    params: ClipAugmentParams,
+) -> Image.Image:
+    """Apply one frame's already-sampled augmentations to a board image."""
+    img = img.rotate(
+        params.rotation,
+        resample=Image.Resampling.BILINEAR,
+        fillcolor=(128, 128, 128),
+    )
 
     arr = np.array(img, dtype=np.float32)
-    arr = np.clip(arr * brightness, 0, 255).astype(np.uint8)
+    arr = np.clip(arr * params.brightness, 0, 255).astype(np.uint8)
     img = Image.fromarray(arr)
 
     mean = arr.mean()
     arr = np.array(img, dtype=np.float32)
-    arr = np.clip((arr - mean) * contrast + mean, 0, 255).astype(np.uint8)
+    arr = np.clip((arr - mean) * params.contrast + mean, 0, 255).astype(np.uint8)
     img = Image.fromarray(arr)
 
-    if do_blur:
-        img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+    if params.apply_blur:
+        img = img.filter(ImageFilter.GaussianBlur(radius=params.blur_radius))
 
-    if do_noise:
+    if params.apply_noise:
         arr = np.array(img, dtype=np.float32)
-        noise = np.random.RandomState(rng.randint(0, 2**31)).normal(0, noise_sigma, arr.shape)
+        noise = np.random.RandomState(rng.randint(0, 2**31)).normal(
+            0, params.noise_sigma, arr.shape
+        )
         arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
         img = Image.fromarray(arr)
 
@@ -389,6 +508,28 @@ def _sample_illegal_move(board: chess.Board, rng: random.Random) -> str | None:
     return None
 
 
+def _sample_camera_profile(
+    rng: random.Random,
+    *,
+    augment: bool,
+    broadcast_bias: float,
+) -> tuple[str, float, float]:
+    if not 0.0 <= broadcast_bias <= 1.0:
+        raise ValueError(f"broadcast_bias must be in [0, 1], got {broadcast_bias}")
+
+    use_broadcast = rng.random() < broadcast_bias if augment else broadcast_bias >= 0.5
+    elevation_range = (
+        _BROADCAST_CAMERA_ELEVATION_RANGE if use_broadcast else _UNIFORM_CAMERA_ELEVATION_RANGE
+    )
+    if augment:
+        elevation = rng.uniform(*elevation_range)
+        azimuth = rng.uniform(0.0, 360.0)
+    else:
+        elevation = 70.0 if use_broadcast else 55.0
+        azimuth = 0.0
+    return ("broadcast" if use_broadcast else "uniform", elevation, azimuth)
+
+
 def generate_clip(
     moves: list[str],
     clip_length: int = 16,
@@ -400,6 +541,7 @@ def generate_clip(
     illegal_clip_prob: float = 0.0,
     seed: int | None = None,
     quality: str = "training",
+    broadcast_bias: float = 0.0,
     server: BlenderServerClient | None = None,
 ) -> dict[str, Any]:
     """Generate a synthetic training clip using Blender 3D rendering.
@@ -418,6 +560,8 @@ def generate_clip(
             one illegal move.
         seed: Random seed for reproducibility.
         quality: Render quality preset ('training' or 'high').
+        broadcast_bias: Probability of sampling a broadcast-style camera
+            elevation from 55°..85° instead of the default 30°..75° range.
         server: Optional BlenderServerClient for persistent rendering.
             If not provided, spawns a Blender subprocess per clip.
 
@@ -454,8 +598,11 @@ def generate_clip(
     piece_set = _select_piece_set(rng, skip_fs_check=server is not None)
     lighting = randomize_lighting(LightingConfig(), seed=rng.randint(0, 2**31))
 
-    elevation = rng.uniform(30.0, 75.0) if augment else 55.0
-    azimuth = rng.uniform(0.0, 360.0) if augment else 0.0
+    camera_profile, elevation, azimuth = _sample_camera_profile(
+        rng,
+        augment=augment,
+        broadcast_bias=broadcast_bias,
+    )
     flipped = rng.random() < 0.5 if augment else False
     clip_aug_params = sample_clip_augment_params(rng, image_size) if augment else None
 
@@ -569,38 +716,75 @@ def generate_clip(
 
     # Apply augmentations and convert to tensors
     frames_list: list[torch.Tensor] = []
-    for i, img in enumerate(images):
+    board_corners_list: list[torch.Tensor] = []
+    rendered_frame_count = min(len(images), len(frame_data))
+    for i in range(rendered_frame_count):
+        img = images[i]
+        corners = _project_board_corners_to_image(
+            elevation_deg=float(frame_data[i]["elevation"]),
+            azimuth_deg=float(frame_data[i]["azimuth"]),
+            image_size=image_size,
+        )
         if augment:
-            img = apply_augmentations(img, rng, clip_params=clip_aug_params, image_size=image_size)
+            frame_aug_params = sample_frame_augment_params(
+                rng,
+                clip_params=clip_aug_params,
+                image_size=image_size,
+            )
+            img = apply_augmentations(img, rng, frame_aug_params)
+            corners = _rotate_points_in_image_space(
+                corners,
+                angle_deg=frame_aug_params.rotation,
+                image_size=image_size,
+            )
             img = add_occlusion(img, rng, prob=occlusion_prob, image_size=image_size)
 
         arr = np.array(img, dtype=np.float32) / 255.0
         tensor = torch.from_numpy(arr).permute(2, 0, 1)
         frames_list.append(tensor)
+        board_corners_list.append(torch.from_numpy(corners.astype(np.float32)))
 
     # Pad if Blender returned fewer frames than expected
     while len(frames_list) < clip_length:
         fallback = frames_list[-1] if frames_list else torch.zeros(3, image_size, image_size)
         frames_list.append(fallback)
+    while len(board_corners_list) < clip_length:
+        fallback_corners = (
+            board_corners_list[-1].clone()
+            if board_corners_list
+            else torch.zeros(4, 2, dtype=torch.float32)
+        )
+        board_corners_list.append(fallback_corners)
 
     return {
         "frames": torch.stack(frames_list[:clip_length]),
+        "board_corners": torch.stack(board_corners_list[:clip_length]),
         "move_targets": torch.tensor(move_targets, dtype=torch.long),
         "detect_targets": torch.tensor(detect_targets, dtype=torch.float32),
         "legal_masks": torch.stack(legal_masks),
         "move_mask": torch.tensor(move_mask_list, dtype=torch.bool),
         "fens": fens,
         "board_flipped": flipped,
+        "camera_profile": camera_profile,
+        "camera_base_elevation_deg": float(elevation),
+        "camera_base_azimuth_deg": float(azimuth),
+        "camera_broadcast_bias": float(broadcast_bias),
     }
 
 
 def _save_clip(clip: dict[str, Any], out: Path, clip_num: int) -> None:
     """Save a clip dict to disk as a .pt file."""
     save_dict = {k: v for k, v in clip.items() if isinstance(v, torch.Tensor)}
-    if "fens" in clip:
-        save_dict["fens"] = clip["fens"]
-    if "board_flipped" in clip:
-        save_dict["board_flipped"] = clip["board_flipped"]
+    for key in [
+        "fens",
+        "board_flipped",
+        "camera_profile",
+        "camera_base_elevation_deg",
+        "camera_base_azimuth_deg",
+        "camera_broadcast_bias",
+    ]:
+        if key in clip:
+            save_dict[key] = clip[key]
     torch.save(save_dict, out / f"clip_{clip_num:06d}.pt")
 
 
@@ -621,6 +805,7 @@ def generate_dataset(
     seed: int = 42,
     on_progress: Callable[[int, int], None] | None = None,
     quality: str = "training",
+    broadcast_bias: float = 0.0,
     num_workers: int = 1,
     cancel_check: Callable[[], bool] | None = None,
     server: BlenderServerClient | None = None,
@@ -644,6 +829,8 @@ def generate_dataset(
         seed: Random seed.
         on_progress: Optional callback(completed, total).
         quality: Render quality preset ('training' or 'high').
+        broadcast_bias: Probability of sampling a broadcast-style camera
+            elevation from 55°..85° instead of the default 30°..75° range.
         num_workers: Number of parallel Blender render workers.
         cancel_check: Optional callable returning True to stop generation early.
         server: Optional persistent Blender server client, mainly for tests.
@@ -731,6 +918,7 @@ def generate_dataset(
             illegal_clip_prob=illegal_clip_prob,
             seed=game_seed + i,
             quality=quality,
+            broadcast_bias=broadcast_bias,
             server=server,
         )
         clips.append(clip)

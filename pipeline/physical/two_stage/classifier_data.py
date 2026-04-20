@@ -14,6 +14,7 @@ reads across the 64 samples per board.
 
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,16 +26,15 @@ import torch
 import torchvision.transforms.v2 as T
 from torch.utils.data import Dataset
 
+from pipeline.physical.piece_projection import (
+    DEFAULT_PIECE_HEIGHT,
+    extract_projected_occupancy_crop,
+    extract_projected_piece_crop,
+)
 from pipeline.physical.shared.annotation_rows import (
     PhysicalObliqueBoardRow,
     _load_clip_frame_bgr,
     load_annotated_oblique_rows,
-)
-from pipeline.physical.piece_projection import (
-    DEFAULT_PIECE_HEIGHT,
-    default_camera_matrix,
-    extract_projected_occupancy_crop,
-    extract_projected_piece_crop,
 )
 from pipeline.physical.shared.source_video_paths import resolve_source_video_path
 from pipeline.physical.two_stage.classifiers import (
@@ -43,7 +43,7 @@ from pipeline.physical.two_stage.classifiers import (
     square_class_to_occupancy_label,
     square_class_to_piece_label,
 )
-from pipeline.shared import SQUARE_CLASS_NAMES
+from pipeline.shared import SQUARE_CLASS_NAMES, fen_to_square_labels
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OCCUPANCY_CROP_SIZE = 112
@@ -102,18 +102,21 @@ class NativeFrameLoader:
 
     Frames are cached by ``(video_path, source_frame_index)``. Video captures
     are held open until ``close()`` to avoid the cost of re-opening files.
+    Access is serialized because OpenCV `VideoCapture` is not thread-safe.
     """
 
     def __init__(self, *, capacity: int = _NATIVE_FRAME_CACHE_CAPACITY) -> None:
         self._capacity = capacity
         self._frames: OrderedDict[tuple[Path, int], np.ndarray] = OrderedDict()
         self._captures: dict[Path, cv2.VideoCapture] = {}
+        self._lock = threading.Lock()
 
     def close(self) -> None:
-        for capture in self._captures.values():
-            capture.release()
-        self._captures.clear()
-        self._frames.clear()
+        with self._lock:
+            for capture in self._captures.values():
+                capture.release()
+            self._captures.clear()
+            self._frames.clear()
 
     def __del__(self) -> None:
         self.close()
@@ -121,26 +124,37 @@ class NativeFrameLoader:
     def load(self, *, source_video_id: str, source_frame_index: int) -> np.ndarray:
         video_path = resolve_source_video_path(source_video_id)
         key = (video_path, int(source_frame_index))
-        cached = self._frames.get(key)
-        if cached is not None:
-            self._frames.move_to_end(key)
-            return cached
-        capture = self._captures.get(video_path)
-        if capture is None:
-            capture = cv2.VideoCapture(str(video_path))
-            if not capture.isOpened():
-                raise ValueError(f"Failed to open video {video_path}")
-            self._captures[video_path] = capture
-        capture.set(cv2.CAP_PROP_POS_FRAMES, int(source_frame_index))
-        ok, frame = capture.read()
-        if not ok or frame is None:
-            raise ValueError(
-                f"Failed to read frame {source_frame_index} from {video_path}"
-            )
-        self._frames[key] = frame
-        if len(self._frames) > self._capacity:
-            self._frames.popitem(last=False)
-        return frame
+        with self._lock:
+            cached = self._frames.get(key)
+            if cached is not None:
+                self._frames.move_to_end(key)
+                return cached.copy()
+            capture = self._captures.get(video_path)
+            if capture is None:
+                capture = cv2.VideoCapture(str(video_path))
+                if not capture.isOpened():
+                    raise ValueError(f"Failed to open video {video_path}")
+                self._captures[video_path] = capture
+            capture.set(cv2.CAP_PROP_POS_FRAMES, int(source_frame_index))
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                raise ValueError(
+                    f"Failed to read frame {source_frame_index} from {video_path}"
+                )
+            cached_frame = frame.copy()
+            self._frames[key] = cached_frame
+            if len(self._frames) > self._capacity:
+                self._frames.popitem(last=False)
+            return cached_frame.copy()
+
+
+def _row_has_native_metadata(row: PhysicalObliqueBoardRow) -> bool:
+    return (
+        row.source_video_id is not None
+        and row.source_frame_index is not None
+        and row.native_corners is not None
+        and row.native_image_bbox is not None
+    )
 
 
 def _full_frame_corners(row: PhysicalObliqueBoardRow) -> tuple[tuple[float, float], ...]:
@@ -151,6 +165,98 @@ def _full_frame_corners(row: PhysicalObliqueBoardRow) -> tuple[tuple[float, floa
         )
     x_off, y_off, _, _ = row.native_image_bbox
     return tuple((float(c[0] + x_off), float(c[1] + y_off)) for c in row.native_corners)
+
+
+def _path_for_storage(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(_PROJECT_ROOT.resolve()))
+    except ValueError:
+        return str(resolved)
+
+
+def _frame_tensor_hw(frames: torch.Tensor) -> tuple[int, int]:
+    if frames.ndim < 4:
+        raise ValueError(f"Expected frames tensor with at least 4 dims, got {tuple(frames.shape)}")
+    frame = frames[0]
+    if frame.ndim != 3:
+        raise ValueError(f"Expected frame tensor with 3 dims, got {tuple(frame.shape)}")
+    if frame.shape[0] == 3:
+        return int(frame.shape[1]), int(frame.shape[2])
+    if frame.shape[-1] == 3:
+        return int(frame.shape[0]), int(frame.shape[1])
+    raise ValueError(f"Expected RGB frame tensor, got {tuple(frame.shape)}")
+
+
+def _flatten_fen_labels(fen: str) -> tuple[int, ...]:
+    return tuple(int(label) for row in fen_to_square_labels(fen) for label in row)
+
+
+def load_synthetic_oblique_rows(clips_root: str | Path) -> list[PhysicalObliqueBoardRow]:
+    clips_root_path = Path(clips_root)
+    if not clips_root_path.is_absolute():
+        clips_root_path = (_PROJECT_ROOT / clips_root_path).resolve()
+    if not clips_root_path.exists():
+        raise ValueError(f"Synthetic clips directory not found: {clips_root_path}")
+
+    clip_paths = sorted(clips_root_path.glob("clip_*.pt"))
+    if not clip_paths:
+        raise ValueError(f"No synthetic clips found in {clips_root_path}")
+
+    rows: list[PhysicalObliqueBoardRow] = []
+    for clip_path in clip_paths:
+        clip = torch.load(clip_path, map_location="cpu", weights_only=False)
+        if not isinstance(clip, dict):
+            raise ValueError(f"Invalid synthetic clip payload: {clip_path}")
+
+        frames = clip.get("frames")
+        fens = clip.get("fens")
+        board_corners = clip.get("board_corners")
+        if not isinstance(frames, torch.Tensor):
+            raise ValueError(f"Synthetic clip has no frames tensor: {clip_path}")
+        if not isinstance(fens, list):
+            raise ValueError(f"Synthetic clip has no fens list: {clip_path}")
+        if board_corners is None:
+            raise ValueError(
+                f"Synthetic clip is missing board_corners: {clip_path}. Regenerate the clips first."
+            )
+
+        corners_tensor = (
+            board_corners.to(dtype=torch.float32)
+            if isinstance(board_corners, torch.Tensor)
+            else torch.as_tensor(board_corners, dtype=torch.float32)
+        )
+        if corners_tensor.ndim != 3 or tuple(corners_tensor.shape[1:]) != (4, 2):
+            raise ValueError(
+                f"Synthetic clip board_corners must have shape (T, 4, 2): {clip_path}"
+            )
+
+        frame_height, frame_width = _frame_tensor_hw(frames)
+        frame_count = min(int(frames.shape[0]), len(fens), int(corners_tensor.shape[0]))
+        clip_path_str = _path_for_storage(clip_path)
+        for frame_index in range(frame_count):
+            fen = fens[frame_index]
+            if not isinstance(fen, str) or not fen.strip():
+                raise ValueError(
+                    f"Synthetic clip has invalid FEN at frame {frame_index}: {clip_path}"
+                )
+            corners = corners_tensor[frame_index].tolist()
+            rows.append(
+                PhysicalObliqueBoardRow(
+                    annotation_id=f"{clip_path.stem}_frame{frame_index:04d}",
+                    clip_path=clip_path_str,
+                    frame_index=frame_index,
+                    source_video_id=None,
+                    corners=tuple((float(x), float(y)) for x, y in corners),
+                    labels=_flatten_fen_labels(fen),
+                    corner_space="clip_frame",
+                    clip_frame_size=(frame_width, frame_height),
+                    native_corners=None,
+                    native_image_bbox=None,
+                    source_frame_index=None,
+                )
+            )
+    return rows
 
 
 class _SquareSampleDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
@@ -165,6 +271,7 @@ class _SquareSampleDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         use_native_frames: bool,
         piece_height: float,
         augment: bool = False,
+        allow_clip_fallback: bool = False,
     ) -> None:
         self.rows = rows
         self.indices = indices
@@ -172,6 +279,7 @@ class _SquareSampleDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         self.use_native_frames = use_native_frames
         self.piece_height = piece_height
         self.augment = augment
+        self.allow_clip_fallback = allow_clip_fallback
         self._clip_cache: dict[Path, dict[str, Any]] = {}
         self._frame_loader = NativeFrameLoader() if use_native_frames else None
 
@@ -186,7 +294,11 @@ class _SquareSampleDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         self, row_index: int
     ) -> tuple[np.ndarray, tuple[tuple[float, float], ...]]:
         row = self.rows[row_index]
-        if self.use_native_frames and self._frame_loader is not None:
+        if (
+            self.use_native_frames
+            and self._frame_loader is not None
+            and _row_has_native_metadata(row)
+        ):
             frame = self._frame_loader.load(
                 source_video_id=str(row.source_video_id),
                 source_frame_index=int(row.source_frame_index),
@@ -209,8 +321,13 @@ class OccupancySquareDataset(_SquareSampleDataset):
         piece_height: float = DEFAULT_PIECE_HEIGHT,
         augment: bool = False,
         pad_ratio: float = 0.3,
+        allow_clip_fallback: bool = False,
     ) -> None:
-        filtered = _rows_with_native_metadata(rows) if use_native_frames else rows
+        filtered = (
+            rows
+            if (not use_native_frames or allow_clip_fallback)
+            else _rows_with_native_metadata(rows)
+        )
         indices = [
             SquareSampleIndex(
                 row_index=row_index,
@@ -227,6 +344,7 @@ class OccupancySquareDataset(_SquareSampleDataset):
             use_native_frames=use_native_frames,
             piece_height=piece_height,
             augment=augment,
+            allow_clip_fallback=allow_clip_fallback,
         )
         self.pad_ratio = pad_ratio
 
@@ -267,8 +385,13 @@ class PieceSquareDataset(_SquareSampleDataset):
         piece_height: float = DEFAULT_PIECE_HEIGHT,
         flip_left_half: bool = True,
         augment: bool = False,
+        allow_clip_fallback: bool = False,
     ) -> None:
-        filtered = _rows_with_native_metadata(rows) if use_native_frames else rows
+        filtered = (
+            rows
+            if (not use_native_frames or allow_clip_fallback)
+            else _rows_with_native_metadata(rows)
+        )
         indices = [
             SquareSampleIndex(
                 row_index=row_index,
@@ -286,6 +409,7 @@ class PieceSquareDataset(_SquareSampleDataset):
             use_native_frames=use_native_frames,
             piece_height=piece_height,
             augment=augment,
+            allow_clip_fallback=allow_clip_fallback,
         )
         self.flip_left_half = flip_left_half
 
@@ -314,14 +438,7 @@ class PieceSquareDataset(_SquareSampleDataset):
 def _rows_with_native_metadata(
     rows: list[PhysicalObliqueBoardRow],
 ) -> list[PhysicalObliqueBoardRow]:
-    return [
-        row
-        for row in rows
-        if row.source_video_id is not None
-        and row.source_frame_index is not None
-        and row.native_corners is not None
-        and row.native_image_bbox is not None
-    ]
+    return [row for row in rows if _row_has_native_metadata(row)]
 
 
 def load_occupancy_dataset(
@@ -367,5 +484,6 @@ __all__ = [
     "class_counts",
     "load_occupancy_dataset",
     "load_piece_dataset",
+    "load_synthetic_oblique_rows",
     "preprocess_square_crop",
 ]

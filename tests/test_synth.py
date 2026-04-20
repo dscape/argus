@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import torch
 from PIL import Image
 
 from argus.chess.move_vocabulary import NO_MOVE_IDX, get_vocabulary
@@ -37,6 +38,43 @@ def test_generate_clip_defaults_to_legal_move_targets() -> None:
         target = int(move_targets[frame_idx].item())
         assert target != NO_MOVE_IDX
         assert legal_masks[frame_idx, target].item() is True
+
+
+def test_generate_clip_exports_board_corners() -> None:
+    clip = generate_clip(
+        moves=["e2e4", "e7e5", "g1f3", "b8c6"],
+        clip_length=8,
+        frames_per_move=2,
+        image_size=32,
+        augment=False,
+        seed=123,
+        server=_FakeBlenderServer(),
+    )
+
+    board_corners = clip["board_corners"]
+    assert isinstance(board_corners, torch.Tensor)
+    assert board_corners.shape == (8, 4, 2)
+    assert torch.isfinite(board_corners).all()
+    assert float(board_corners[:, :, 0].max() - board_corners[:, :, 0].min()) > 20.0
+    assert float(board_corners[:, :, 1].max() - board_corners[:, :, 1].min()) > 20.0
+
+
+def test_generate_clip_can_bias_toward_broadcast_angles() -> None:
+    clip = generate_clip(
+        moves=["e2e4", "e7e5", "g1f3", "b8c6"],
+        clip_length=8,
+        frames_per_move=2,
+        image_size=32,
+        augment=True,
+        broadcast_bias=1.0,
+        seed=321,
+        server=_FakeBlenderServer(),
+    )
+
+    assert clip["camera_profile"] == "broadcast"
+    assert 55.0 <= clip["camera_base_elevation_deg"] <= 85.0
+    assert 0.0 <= clip["camera_base_azimuth_deg"] <= 360.0
+    assert clip["camera_broadcast_bias"] == 1.0
 
 
 def test_generate_dataset_can_source_games_from_pgn_file(tmp_path) -> None:

@@ -37,6 +37,10 @@ def _make_midgame_clip_bytes() -> bytes:
         "pgn_moves": "Bg2",
         "training_target_timing": "overlay_confirm_post_move",
         "estimated_otb_delay_seconds": 0.5,
+        "camera_profile": "broadcast",
+        "camera_base_elevation_deg": 72.5,
+        "camera_base_azimuth_deg": 140.0,
+        "camera_broadcast_bias": 0.7,
     }
 
     buffer = io.BytesIO()
@@ -72,6 +76,10 @@ def test_inspect_replays_from_initial_board_fen_for_midgame_clip() -> None:
     assert result["metadata"]["initial_board_fen"] == EXPECTED_INITIAL_BOARD_FEN
     assert result["metadata"]["training_target_timing"] == "overlay_confirm_post_move"
     assert result["metadata"]["estimated_otb_delay_seconds"] == 0.5
+    assert result["metadata"]["camera_profile"] == "broadcast"
+    assert result["metadata"]["camera_base_elevation_deg"] == 72.5
+    assert result["metadata"]["camera_base_azimuth_deg"] == 140.0
+    assert result["metadata"]["camera_broadcast_bias"] == 0.7
 
 
 def test_get_overlay_frame_png_uses_source_video_and_db_clip(monkeypatch, tmp_path) -> None:

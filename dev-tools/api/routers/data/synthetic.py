@@ -61,6 +61,7 @@ class GenerateRequest(BaseModel):
     frames_per_move: int = 4
     seed: int = 42
     quality: str = "training"
+    broadcast_bias: float = 0.0
 
 
 @router.post("/generate")
@@ -76,6 +77,7 @@ async def start_generation(body: GenerateRequest):
             body.frames_per_move,
             body.seed,
             body.quality,
+            body.broadcast_bias,
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
