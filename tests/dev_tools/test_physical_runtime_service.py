@@ -110,3 +110,51 @@ def test_inspect_runtime_frames_groups_by_clip_and_preserves_input_order(monkeyp
     assert all(result.get("image_b64") for result in results)
     assert all(result["image_render_mode"] == "source_frame_raw" for result in results)
     assert all(result["image_width"] == 8 and result["image_height"] == 8 for result in results)
+
+
+def test_inspect_runtime_frames_can_skip_inline_images(monkeypatch) -> None:
+    row = _row("clip-a-frame-0001", "data/argus/train_real/clip_a.pt", 1)
+    monkeypatch.setattr(
+        physical_runtime_service,
+        "PhysicalEvalBoardDataset",
+        lambda: SimpleNamespace(rows=[row]),
+    )
+    monkeypatch.setattr(
+        physical_runtime_service,
+        "_collect_visualized_frames_for_indices",
+        lambda clip_rows, **kwargs: [_visualized_frame(clip_rows[0])],
+    )
+
+    result = physical_runtime_service.inspect_runtime_frames(
+        annotation_ids=[row.annotation_id],
+        device="cpu",
+        include_images=False,
+    )[0]
+
+    assert result["image_b64"] is None
+    assert result["thumbnail_b64"] is None
+    assert result["image_render_mode"] == "source_frame_raw"
+
+
+def test_merge_runtime_results_for_refresh_preserves_existing_session_images() -> None:
+    merged = physical_runtime_service._merge_runtime_results_for_refresh(
+        {
+            "annotation_id": "frame-1",
+            "image_filename": "frame.png",
+            "thumbnail_filename": "thumb.png",
+            "image_b64": None,
+            "thumbnail_b64": None,
+        },
+        {
+            "annotation_id": "frame-1",
+            "temporal_transition_kind": "stay",
+            "image_filename": None,
+            "thumbnail_filename": None,
+            "image_b64": None,
+            "thumbnail_b64": None,
+        },
+    )
+
+    assert merged["temporal_transition_kind"] == "stay"
+    assert merged["image_filename"] == "frame.png"
+    assert merged["thumbnail_filename"] == "thumb.png"

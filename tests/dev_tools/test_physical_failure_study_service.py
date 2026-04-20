@@ -3,7 +3,9 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 from api.services.evaluate import physical_failure_study_service as service
 from PIL import Image
 
@@ -231,3 +233,41 @@ def test_update_failure_study_entry(monkeypatch, tmp_path: Path) -> None:
 
     csv_text = (tmp_path / "outputs" / "bundle_a" / "manual_buckets.csv").read_text()
     assert "Stayed on the wrong legal successor after the first miss." in csv_text
+
+
+def test_get_failure_study_adds_geometry_and_probabilities(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    study_dir = _write_bundle(tmp_path)
+    manifest_path = study_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    square_probabilities = [[0.0] * 13 for _ in range(64)]
+    square_probabilities[0][1] = 0.9
+    manifest[0]["failing_frame"]["stateless_square_probabilities"] = square_probabilities
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+
+    monkeypatch.setattr(service, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(service, "_OUTPUTS_DIR", tmp_path / "outputs")
+    monkeypatch.setattr(
+        service,
+        "_annotation_rows_by_id",
+        lambda: {
+            "clip_a_frame0002": SimpleNamespace(
+                corners=((10.0, 10.0), (90.0, 10.0), (90.0, 90.0), (10.0, 90.0)),
+            )
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "load_annotated_board_frame_bgr",
+        lambda row, clip_cache: np.zeros((100, 100, 3), dtype=np.uint8),
+    )
+
+    detail = service.get_failure_study("outputs/bundle_a")
+    frame = detail["entries"][0]["failing_frame"]
+
+    assert frame["stateless_square_probabilities"][0][1] == 0.9
+    assert frame["raw_image_path"].endswith("clip_a_frame0002.png")
+    assert len(frame["geometry_square_quads"]["a8"]) == 4
+    assert len(frame["geometry_piece_bboxes"]["a8"]) == 4

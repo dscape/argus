@@ -609,6 +609,60 @@ export function usePhysicalTransientAnnotations({
     [updateOccludedFrameIndices],
   );
 
+  const replaceDraftFromAutoLabel = useCallback(
+    (
+      moveUpdates: Array<{
+        move_index: number;
+        uci?: string;
+        start_frame_index: number | null;
+        end_frame_index: number | null;
+        is_capture?: boolean | null;
+      }>,
+      occlusionSpans: PhysicalHandOcclusionSpan[],
+    ) => {
+      failedPayloadKeyRef.current = null;
+      setFailedPayloadKey(null);
+      const updatesByIndex = new Map(
+        moveUpdates.map((update) => [update.move_index, update]),
+      );
+      const nextMoveAnnotations = draftMoveAnnotationsRef.current.map(
+        (annotation) => {
+          const update = updatesByIndex.get(annotation.move_index);
+          if (!update) return annotation;
+          if (update.uci && update.uci !== annotation.uci) return annotation;
+          return {
+            ...annotation,
+            start_frame_index: update.start_frame_index,
+            end_frame_index: update.end_frame_index,
+            is_capture:
+              update.is_capture !== undefined
+                ? update.is_capture
+                : annotation.is_capture,
+          };
+        },
+      );
+      const nextOccludedFrameIndices = spansToFrameIndices(
+        occlusionSpans,
+        frameCount,
+      );
+      const nextHasUnsavedChanges = hasDraftChanges(
+        nextMoveAnnotations,
+        baselineMoveAnnotations,
+        nextOccludedFrameIndices,
+        baselineOccludedFrameIndices,
+      );
+      draftMoveAnnotationsRef.current = nextMoveAnnotations;
+      draftOccludedFrameIndicesRef.current = nextOccludedFrameIndices;
+      hasUnsavedChangesRef.current = nextHasUnsavedChanges;
+      pendingBaselineSyncPayloadKeyRef.current = null;
+      setDraftMoveAnnotations(nextMoveAnnotations);
+      setDraftOccludedFrameIndices(nextOccludedFrameIndices);
+      setHasUnsavedChanges(nextHasUnsavedChanges);
+      void save();
+    },
+    [baselineMoveAnnotations, baselineOccludedFrameIndices, frameCount, save],
+  );
+
   return {
     loading,
     saving,
@@ -622,5 +676,6 @@ export function usePhysicalTransientAnnotations({
     clearMoveEndFrame,
     isFrameOccluded,
     toggleFrameOccluded,
+    replaceDraftFromAutoLabel,
   };
 }

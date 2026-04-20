@@ -8,6 +8,8 @@ import { chessPieceSvg } from "@/components/chess-pieces";
 import { Badge } from "@/components/ui/badge";
 import { usePhysicalTransientAnnotations } from "@/hooks/usePhysicalTransientAnnotations";
 import {
+  autoClassifyPhysicalEvalTransientAnnotation,
+  autoClassifyPhysicalTrainTransientAnnotation,
   clipCameraFrameUrl,
   clipFrameUrl,
   clipSourceVideoUrl,
@@ -206,6 +208,7 @@ interface PhysicalAnnotationSplitConfig {
   deleteAnnotation: typeof deletePhysicalEvalAnnotation;
   detectCorners: typeof detectPhysicalEvalCorners;
   trackCorners: typeof trackPhysicalEvalCorners;
+  autoClassifyTransientAnnotation: typeof autoClassifyPhysicalEvalTransientAnnotation;
 }
 
 const SPLIT_CONFIG: Record<
@@ -223,6 +226,7 @@ const SPLIT_CONFIG: Record<
     deleteAnnotation: deletePhysicalEvalAnnotation,
     detectCorners: detectPhysicalEvalCorners,
     trackCorners: trackPhysicalEvalCorners,
+    autoClassifyTransientAnnotation: autoClassifyPhysicalEvalTransientAnnotation,
   },
   train: {
     indexHref: "/annotate/physical?split=train",
@@ -235,6 +239,7 @@ const SPLIT_CONFIG: Record<
     deleteAnnotation: deletePhysicalTrainAnnotation,
     detectCorners: detectPhysicalTrainCorners,
     trackCorners: trackPhysicalTrainCorners,
+    autoClassifyTransientAnnotation: autoClassifyPhysicalTrainTransientAnnotation,
   },
 };
 
@@ -442,12 +447,45 @@ function AnnotationContent({
     clearMoveEndFrame,
     isFrameOccluded,
     toggleFrameOccluded,
+    replaceDraftFromAutoLabel,
   } = usePhysicalTransientAnnotations({
     split,
     clipPath,
     effectiveMoves,
     frameCount,
   });
+  const [autoClassifying, setAutoClassifying] = useState(false);
+  const handleAutoClassify = useCallback(async () => {
+    if (autoClassifying) return;
+    setAutoClassifying(true);
+    try {
+      const result = await splitConfig.autoClassifyTransientAnnotation(clipPath);
+      replaceDraftFromAutoLabel(
+        result.move_annotations.map((annotation) => ({
+          move_index: annotation.move_index,
+          uci: annotation.uci,
+          start_frame_index: annotation.start_frame_index,
+          end_frame_index: annotation.end_frame_index,
+          is_capture: annotation.is_capture,
+        })),
+        result.hand_occlusion_spans,
+      );
+      toast.success(
+        `Auto-classified ${result.move_annotations.length} move${result.move_annotations.length === 1 ? "" : "s"} (${result.corners_method}, conf ${result.corners_confidence.toFixed(2)})`,
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Auto-classify failed",
+      );
+    } finally {
+      setAutoClassifying(false);
+    }
+  }, [
+    autoClassifying,
+    clipPath,
+    replaceDraftFromAutoLabel,
+    splitConfig,
+  ]);
   const replayFen = effectiveFrameReplayFens[selectedFrame] ?? null;
 
   // Load source video
@@ -1551,6 +1589,16 @@ function AnnotationContent({
                     Saving…
                   </span>
                 )}
+                <button
+                  type="button"
+                  onClick={() => void handleAutoClassify()}
+                  disabled={autoClassifying || effectiveMoves.length === 0}
+                  className="inline-flex h-7 items-center justify-center gap-1 rounded border border-primary/60 bg-primary/10 px-2 text-[11px] font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
+                  title="Auto-classify touchstart/touchend and hand occlusion from the clip's frames"
+                  data-testid="auto-classify-button"
+                >
+                  {autoClassifying ? "Auto-classifying…" : "Auto-classify"}
+                </button>
                 <button
                   type="button"
                   onClick={() =>

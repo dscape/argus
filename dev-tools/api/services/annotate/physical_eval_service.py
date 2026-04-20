@@ -16,6 +16,7 @@ import torch
 from pipeline.overlay.calibration import is_camera_bbox_usable
 from pipeline.overlay.overlay_move_detector import find_move_between_positions
 from pipeline.overlay.replay import build_replay_board
+from pipeline.physical.auto_temporal_labels import auto_label_clip
 from pipeline.physical.shared import eval_dataset, splits
 from pipeline.shared import SQUARE_CLASS_NAMES
 
@@ -183,6 +184,22 @@ def save_transient_annotation(
         move_annotations,
         hand_occlusion_spans,
     )
+
+
+def auto_classify_transient_annotation(clip_path: str) -> dict[str, Any]:
+    resolved = _resolve_within_project(clip_path)
+    relative_clip_path = str(resolved.relative_to(_PROJECT_ROOT))
+    result = auto_label_clip(relative_clip_path)
+    payload = result.to_transient_payload()
+    return {
+        "clip_path": relative_clip_path,
+        "frame_count": result.frame_count,
+        "corners_method": result.corners_method,
+        "corners_confidence": result.corners_confidence,
+        "move_annotations": payload["move_annotations"],
+        "hand_occlusion_spans": payload["hand_occlusion_spans"],
+        "details": result.to_detail_payload(),
+    }
 
 
 def _list_clip_files(

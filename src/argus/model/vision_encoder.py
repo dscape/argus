@@ -20,9 +20,11 @@ from transformers import (
 )
 
 try:
-    from transformers import DINOv3ViTModel  # transformers >= 5.0
+    from transformers import DINOv3ViTModel as _ImportedDINOv3ViTModel  # transformers >= 5.0
 except ImportError:
-    DINOv3ViTModel = None  # type: ignore[assignment]
+    DINOv3ViTModel: Any = None
+else:
+    DINOv3ViTModel = _ImportedDINOv3ViTModel
 
 _WEIGHTS_ROOT = Path(__file__).resolve().parent.parent.parent.parent / "weights"
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)

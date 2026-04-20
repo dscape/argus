@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -439,28 +440,31 @@ class _NativeFrameLoader:
         self._capacity = capacity
         self._frames: OrderedDict[tuple[Path, int], np.ndarray] = OrderedDict()
         self._captures: dict[Path, cv2.VideoCapture] = {}
+        self._lock = threading.Lock()
 
     def load(self, *, source_video_id: str, source_frame_index: int) -> np.ndarray:
         video_path = resolve_source_video_path(source_video_id)
         key = (video_path, int(source_frame_index))
-        cached = self._frames.get(key)
-        if cached is not None:
-            self._frames.move_to_end(key)
-            return cached
-        capture = self._captures.get(video_path)
-        if capture is None:
-            capture = cv2.VideoCapture(str(video_path))
-            if not capture.isOpened():
-                raise ValueError(f"Failed to open video {video_path}")
-            self._captures[video_path] = capture
-        capture.set(cv2.CAP_PROP_POS_FRAMES, int(source_frame_index))
-        ok, frame = capture.read()
-        if not ok or frame is None:
-            raise ValueError(f"Failed to read frame {source_frame_index} from {video_path}")
-        self._frames[key] = frame
-        if len(self._frames) > self._capacity:
-            self._frames.popitem(last=False)
-        return frame
+        with self._lock:
+            cached = self._frames.get(key)
+            if cached is not None:
+                self._frames.move_to_end(key)
+                return cached.copy()
+            capture = self._captures.get(video_path)
+            if capture is None:
+                capture = cv2.VideoCapture(str(video_path))
+                if not capture.isOpened():
+                    raise ValueError(f"Failed to open video {video_path}")
+                self._captures[video_path] = capture
+            capture.set(cv2.CAP_PROP_POS_FRAMES, int(source_frame_index))
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                raise ValueError(f"Failed to read frame {source_frame_index} from {video_path}")
+            cached_frame = frame.copy()
+            self._frames[key] = cached_frame
+            if len(self._frames) > self._capacity:
+                self._frames.popitem(last=False)
+            return cached_frame.copy()
 
 
 _NATIVE_FRAME_LOADER = _NativeFrameLoader()

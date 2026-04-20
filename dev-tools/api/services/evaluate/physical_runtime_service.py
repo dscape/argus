@@ -87,9 +87,13 @@ def render_runtime_visualization(
                 "stateless_change_count": frame.stateless_change_count,
                 "stateless_error_count": frame.stateless_error_count,
                 "stateless_mean_confidence": round(frame.stateless_mean_confidence, 4),
+                "stateless_transition_kind": frame.stateless_transition_kind,
+                "stateless_transition_label": frame.stateless_transition_label,
                 "temporal_change_count": frame.temporal_change_count,
                 "temporal_error_count": frame.temporal_error_count,
                 "temporal_mean_confidence": round(frame.temporal_mean_confidence, 4),
+                "temporal_transition_kind": frame.temporal_transition_kind,
+                "temporal_transition_label": frame.temporal_transition_label,
                 "image_b64": _image_to_base64(frame_image),
             }
             for frame, frame_image in zip(visualized_frames, frame_images)
@@ -127,7 +131,11 @@ def list_runtime_models() -> list[dict[str, Any]]:
             candidates[_relative_to_project(path)] = path
 
     if _OUTPUTS_DIR.exists():
-        patterns = ("**/board_probe.pt", "**/linear_probe.pt", "**/physical_board_probe_ensemble*.pt")
+        patterns = (
+            "**/board_probe.pt",
+            "**/linear_probe.pt",
+            "**/physical_board_probe_ensemble*.pt",
+        )
         for pattern in patterns:
             for path in _OUTPUTS_DIR.glob(pattern):
                 if path.is_file():
@@ -171,12 +179,14 @@ def inspect_runtime_frame(
     panel_size: int = 240,
     device: str = "cpu",
     model_path: str | None = None,
+    include_images: bool = True,
 ) -> dict[str, Any]:
     results = inspect_runtime_frames(
         annotation_ids=[annotation_id],
         panel_size=panel_size,
         device=device,
         model_path=model_path,
+        include_images=include_images,
     )
     if len(results) != 1:
         raise ValueError(f"Expected exactly one result for {annotation_id}, got {len(results)}")
@@ -190,6 +200,7 @@ def inspect_runtime_frames(
     panel_size: int = 240,
     device: str = "cpu",
     model_path: str | None = None,
+    include_images: bool = True,
 ) -> list[dict[str, Any]]:
     if panel_size <= 0:
         raise ValueError(f"panel_size must be > 0, got {panel_size}")
@@ -239,6 +250,7 @@ def inspect_runtime_frames(
                 selected_row,
                 frame,
                 elapsed_ms=elapsed_ms_per_frame,
+                include_images=include_images,
             )
 
     return [results_by_annotation_id[annotation_id] for annotation_id in annotation_ids]
@@ -373,6 +385,14 @@ def get_physical_runtime_session(session_id: str) -> dict[str, Any] | None:
     model_path = _evaluation_model_path(evaluation_per_class, row[9])
     model_label = _evaluation_model_label(evaluation_per_class, row[9], model_path)
 
+    refreshed_results = _refresh_legacy_session_results(
+        session_id=session_id,
+        results=results,
+        model_path=model_path,
+    )
+    if refreshed_results is not None:
+        results = refreshed_results
+
     return {
         "id": row[0],
         "created_at": str(row[1]),
@@ -386,6 +406,88 @@ def get_physical_runtime_session(session_id: str) -> dict[str, Any] | None:
         "model_label": model_label,
         "model_path": model_path,
     }
+
+
+def _refresh_legacy_session_results(
+    *,
+    session_id: str,
+    results: list[dict[str, Any]],
+    model_path: str | None,
+) -> list[dict[str, Any]] | None:
+    if not results or not any(_runtime_result_needs_refresh(result) for result in results):
+        return None
+
+    annotation_ids = [
+        str(result.get("annotation_id"))
+        for result in results
+        if result.get("annotation_id") is not None
+    ]
+    if not annotation_ids:
+        return None
+
+    fresh_results = inspect_runtime_frames(
+        annotation_ids=annotation_ids,
+        model_path=model_path,
+        include_images=False,
+    )
+    fresh_by_id = {
+        str(result["annotation_id"]): result
+        for result in fresh_results
+    }
+    merged_results = [
+        _merge_runtime_results_for_refresh(
+            result,
+            fresh_by_id.get(str(result.get("annotation_id"))),
+        )
+        for result in results
+    ]
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE physical_runtime_sessions SET results = %s WHERE id = %s",
+                (json.dumps(merged_results), session_id),
+            )
+            conn.commit()
+    return merged_results
+
+
+def _runtime_result_needs_refresh(result: dict[str, Any]) -> bool:
+    geometry_square_quads = result.get("geometry_square_quads")
+    geometry_piece_bboxes = result.get("geometry_piece_bboxes")
+    return bool(
+        result.get("gt_fen") is None
+        or not isinstance(geometry_square_quads, dict)
+        or len(geometry_square_quads) == 0
+        or not isinstance(geometry_piece_bboxes, dict)
+        or len(geometry_piece_bboxes) == 0
+        or result.get("geometry_space") != "source_frame_normalized"
+        or result.get("image_render_mode") != "source_frame_raw"
+        or result.get("temporal_transition_kind") is None
+        or result.get("stateless_transition_kind") is None
+        or not isinstance(result.get("stateless_square_probabilities"), list)
+        or len(result.get("stateless_square_probabilities") or []) != 64
+        or (
+            result.get("image_b64") is None
+            and result.get("image_filename") is None
+            and result.get("thumbnail_b64") is None
+            and result.get("thumbnail_filename") is None
+        )
+    )
+
+
+def _merge_runtime_results_for_refresh(
+    stale_result: dict[str, Any],
+    fresh_result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if fresh_result is None:
+        return stale_result
+    merged = dict(stale_result)
+    merged.update(fresh_result)
+    for key in ("thumbnail_b64", "thumbnail_filename", "image_b64", "image_filename"):
+        if fresh_result.get(key) is None and stale_result.get(key) is not None:
+            merged[key] = stale_result[key]
+    return merged
 
 
 def list_physical_runtime_sessions(limit: int = 20) -> list[dict[str, Any]]:
@@ -459,6 +561,7 @@ def _runtime_result_from_frame(
     frame: VisualizedRuntimeFrame,
     *,
     elapsed_ms: float,
+    include_images: bool = True,
 ) -> dict[str, Any]:
     non_empty_square_count = sum(int(value != _EMPTY_CLASS_ID) for value in frame.gt_class_ids)
     temporal_non_empty_correct_count = _count_non_empty_correct(
@@ -483,6 +586,10 @@ def _runtime_result_from_frame(
         "gt_change_count": frame.gt_change_count,
         "stateless_change_count": frame.stateless_change_count,
         "temporal_change_count": frame.temporal_change_count,
+        "stateless_transition_kind": frame.stateless_transition_kind,
+        "stateless_transition_label": frame.stateless_transition_label,
+        "temporal_transition_kind": frame.temporal_transition_kind,
+        "temporal_transition_label": frame.temporal_transition_label,
         "gt_changed_squares": _mask_to_square_names(frame.gt_changed_mask),
         "stateless_changed_squares": _mask_to_square_names(frame.stateless_changed_mask),
         "temporal_changed_squares": _mask_to_square_names(frame.temporal_changed_mask),
@@ -496,6 +603,10 @@ def _runtime_result_from_frame(
         ),
         "stateless_square_confidences": [
             round(float(confidence), 4) for confidence in frame.stateless_confidences
+        ],
+        "stateless_square_probabilities": [
+            [round(float(probability), 4) for probability in square_probabilities]
+            for square_probabilities in frame.stateless_square_probabilities
         ],
         "temporal_square_confidences": [
             round(float(confidence), 4) for confidence in frame.temporal_confidences
@@ -524,8 +635,12 @@ def _runtime_result_from_frame(
         "stateless_mean_confidence": round(frame.stateless_mean_confidence, 4),
         "temporal_mean_confidence": round(frame.temporal_mean_confidence, 4),
         "elapsed_ms": elapsed_ms,
-        "thumbnail_b64": _image_to_base64(Image.fromarray(frame.crop_rgb)),
-        "image_b64": _image_to_base64(Image.fromarray(frame.source_rgb)),
+        "thumbnail_b64": (
+            _image_to_base64(Image.fromarray(frame.crop_rgb)) if include_images else None
+        ),
+        "image_b64": (
+            _image_to_base64(Image.fromarray(frame.source_rgb)) if include_images else None
+        ),
         "image_render_mode": "source_frame_raw",
         "image_width": int(frame.source_rgb.shape[1]),
         "image_height": int(frame.source_rgb.shape[0]),
@@ -690,7 +805,10 @@ def _evaluation_model_label(
     if isinstance(notes, str) and notes.strip():
         return notes.strip()
     if model_path is not None:
-        return _runtime_model_label(Path(PROJECT_ROOT / model_path), default_version=_default_runtime_version())
+        return _runtime_model_label(
+            Path(PROJECT_ROOT / model_path),
+            default_version=_default_runtime_version(),
+        )
     return None
 
 

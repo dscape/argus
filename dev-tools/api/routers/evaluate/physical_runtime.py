@@ -26,6 +26,7 @@ class InspectRuntimeFrameRequest(BaseModel):
     panel_size: int = 240
     device: str = "cpu"
     model_path: str | None = None
+    include_images: bool = True
 
 
 class InspectRuntimeFramesRequest(BaseModel):
@@ -33,6 +34,7 @@ class InspectRuntimeFramesRequest(BaseModel):
     panel_size: int = 240
     device: str = "cpu"
     model_path: str | None = None
+    include_images: bool = True
 
 
 class SavePhysicalRuntimeEvalRequest(BaseModel):
@@ -110,6 +112,7 @@ async def inspect_runtime_frame(body: InspectRuntimeFrameRequest):
             panel_size=body.panel_size,
             device=body.device,
             model_path=body.model_path,
+            include_images=body.include_images,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
@@ -126,6 +129,7 @@ async def inspect_runtime_frames(body: InspectRuntimeFramesRequest):
             panel_size=body.panel_size,
             device=body.device,
             model_path=body.model_path,
+            include_images=body.include_images,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))

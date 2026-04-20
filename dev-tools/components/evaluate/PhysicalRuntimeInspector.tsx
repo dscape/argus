@@ -287,6 +287,8 @@ export default function PhysicalRuntimeInspector({
         Object.keys(result.geometry_piece_bboxes).length === 0 ||
         result.geometry_space !== "source_frame_normalized" ||
         result.image_render_mode !== "source_frame_raw" ||
+        result.temporal_transition_kind == null ||
+        result.stateless_transition_kind == null ||
         (!result.image_b64 && !result.image_filename),
     );
     if (!needsHydration) return;
@@ -298,6 +300,7 @@ export default function PhysicalRuntimeInspector({
       initialSession.results.map((result) => result.annotation_id),
       {
         model_path: initialSession.model_path ?? undefined,
+        include_images: false,
       },
     )
       .then((freshResults) => {

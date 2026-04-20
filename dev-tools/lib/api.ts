@@ -1509,9 +1509,13 @@ export interface PhysicalRuntimeVisualizationFrame {
   stateless_change_count: number | null;
   stateless_error_count: number;
   stateless_mean_confidence: number;
+  stateless_transition_kind?: string | null;
+  stateless_transition_label?: string | null;
   temporal_change_count: number | null;
   temporal_error_count: number;
   temporal_mean_confidence: number;
+  temporal_transition_kind?: string | null;
+  temporal_transition_label?: string | null;
   image_b64: string;
 }
 
@@ -1553,12 +1557,17 @@ export interface PhysicalRuntimeEvalResult {
   gt_change_count: number | null;
   stateless_change_count: number | null;
   temporal_change_count: number | null;
+  stateless_transition_kind?: string | null;
+  stateless_transition_label?: string | null;
+  temporal_transition_kind?: string | null;
+  temporal_transition_label?: string | null;
   gt_changed_squares?: string[];
   stateless_changed_squares?: string[];
   temporal_changed_squares?: string[];
   stateless_error_squares?: string[];
   temporal_error_squares?: string[];
   stateless_square_confidences?: number[];
+  stateless_square_probabilities?: number[][];
   temporal_square_confidences?: number[];
   stateless_error_count: number;
   temporal_error_count: number;
@@ -1654,6 +1663,7 @@ export async function inspectPhysicalRuntimeFrame(
     panel_size?: number;
     device?: string;
     model_path?: string | null;
+    include_images?: boolean;
     signal?: AbortSignal;
   },
 ): Promise<PhysicalRuntimeEvalResult> {
@@ -1665,6 +1675,7 @@ export async function inspectPhysicalRuntimeFrame(
       panel_size: options?.panel_size,
       device: options?.device,
       model_path: options?.model_path,
+      include_images: options?.include_images,
     }),
     signal: options?.signal,
   });
@@ -1678,6 +1689,7 @@ export async function inspectPhysicalRuntimeFrames(
     panel_size?: number;
     device?: string;
     model_path?: string | null;
+    include_images?: boolean;
     signal?: AbortSignal;
   },
 ): Promise<PhysicalRuntimeEvalResult[]> {
@@ -1689,6 +1701,7 @@ export async function inspectPhysicalRuntimeFrames(
       panel_size: options?.panel_size,
       device: options?.device,
       model_path: options?.model_path,
+      include_images: options?.include_images,
     }),
     signal: options?.signal,
   });
@@ -1838,6 +1851,7 @@ export interface PhysicalFailureStudyFrame {
   decoded_fen: string;
   decoded_full_fen: string;
   stateless_fen: string;
+  tracker_input_fen?: string;
   decoded_move_uci: string | null;
   decoded_move_score?: number | null;
   decoded_stay_score?: number | null;
@@ -1854,6 +1868,9 @@ export interface PhysicalFailureStudyFrame {
   square_diagnostics?: PhysicalFailureStudySquareDiagnostic[];
   decoded_square_confidences?: number[];
   stateless_square_confidences?: number[];
+  stateless_square_probabilities?: number[][];
+  geometry_square_quads?: Record<string, PhysicalRuntimeGeometryQuad>;
+  geometry_piece_bboxes?: Record<string, PhysicalRuntimeGeometryBbox>;
   suggested_bucket?: string | null;
   image_path: string;
   offset_from_failure: number;
@@ -2213,6 +2230,30 @@ export async function savePhysicalEvalTransientAnnotation(body: {
   return res.json();
 }
 
+export interface AutoClassifyTransientAnnotationResult {
+  clip_path: string;
+  frame_count: number;
+  corners_method: string;
+  corners_confidence: number;
+  move_annotations: PhysicalTransientMoveAnnotation[];
+  hand_occlusion_spans: PhysicalHandOcclusionSpan[];
+}
+
+export async function autoClassifyPhysicalEvalTransientAnnotation(
+  clipPath: string,
+): Promise<AutoClassifyTransientAnnotationResult> {
+  const res = await fetch(
+    "/api/physical-eval/auto-classify-transient-annotation",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clip_path: clipPath }),
+    },
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function deletePhysicalEvalTransientAnnotation(
   clipPath: string,
 ): Promise<{ deleted: boolean }> {
@@ -2380,6 +2421,21 @@ export async function savePhysicalTrainTransientAnnotation(body: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function autoClassifyPhysicalTrainTransientAnnotation(
+  clipPath: string,
+): Promise<AutoClassifyTransientAnnotationResult> {
+  const res = await fetch(
+    "/api/physical-train/auto-classify-transient-annotation",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clip_path: clipPath }),
+    },
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

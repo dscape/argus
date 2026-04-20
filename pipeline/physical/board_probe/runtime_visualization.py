@@ -8,15 +8,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import chess
 import cv2
 import numpy as np
+import torch
 from PIL import Image, ImageDraw, ImageFont
 
+from pipeline.overlay.overlay_move_detector import find_move_between_positions
 from pipeline.physical.board_probe.board_data import (
     PhysicalEvalBoardDataset,
     PhysicalEvalBoardRow,
     load_annotated_board_frame_bgr,
 )
+from pipeline.physical.board_probe.decoder import decode_sequence_with_production_decoder
 from pipeline.physical.board_probe.runtime import (
     PhysicalBoardLogitsSequenceReader,
     board_observation_from_logits,
@@ -49,6 +53,7 @@ _CONTACT_SHEET_BG = (245, 245, 245)
 _INFERENCE_BATCH_SIZE = 16
 _GEOMETRY_PREVIEW_SIZE = 512
 _ANNOTATED_CLIP_CACHE: dict[Path, dict[str, Any]] = {}
+_CLIP_STATE_CACHE: dict[str, tuple[str, str | None] | None] = {}
 
 _CLASS_ID_TO_SYMBOL = {
     class_id: ("" if name == "empty" else name)
@@ -76,6 +81,13 @@ class VisualizedRuntimeFrame:
     gt_changed_mask: tuple[bool, ...]
     stateless_changed_mask: tuple[bool, ...]
     temporal_changed_mask: tuple[bool, ...]
+    stateless_square_probabilities: tuple[tuple[float, ...], ...] = field(
+        default_factory=lambda: tuple(tuple(0.0 for _ in range(13)) for _ in range(64))
+    )
+    stateless_transition_kind: str | None = None
+    stateless_transition_label: str | None = None
+    temporal_transition_kind: str | None = None
+    temporal_transition_label: str | None = None
     square_quads: tuple[tuple[tuple[float, float], ...], ...] = field(
         default_factory=lambda: tuple(((0.0, 0.0),) * 4 for _ in range(64))
     )
@@ -195,7 +207,7 @@ def render_visualized_runtime_frame(
 
     top = margin + header_height + panel_labels_height
     lefts = [margin + (panel_size + panel_gap) * index for index in range(4)]
-    labels = ["geometry + temporal errors", "ground truth", "stateless", "temporal"]
+    labels = ["geometry + decoded errors", "ground truth", "stateless", "decoded legal"]
     panels = [
         _render_crop_panel(
             frame,
@@ -337,17 +349,14 @@ def _collect_visualized_frames_for_indices(
             device=device,
             weights_path=weights_path,
         )
-    visualized_frames: list[VisualizedRuntimeFrame] = []
-    previous_gt: tuple[int, ...] | None = None
-    previous_stateless: tuple[int, ...] | None = None
-    previous_temporal: tuple[int, ...] | None = None
     max_selected_frame_index = max(selected_frame_indices)
-
     relevant_rows = [
         row
         for row in rows
         if row.frame_index is not None and int(row.frame_index) <= max_selected_frame_index
     ]
+
+    inference_rows: list[tuple[PhysicalEvalBoardRow, np.ndarray, torch.Tensor, torch.Tensor]] = []
     for start in range(0, len(relevant_rows), _INFERENCE_BATCH_SIZE):
         chunk_rows = relevant_rows[start : start + _INFERENCE_BATCH_SIZE]
         chunk_images = [_load_board_image(row) for row in chunk_rows]
@@ -364,79 +373,138 @@ def _collect_visualized_frames_for_indices(
         )
         if stateless_logits_list is None:
             raise ValueError("Runtime reader failed to load physical board logits")
-
         for row, image_bgr, stateless_logits in zip(
             chunk_rows,
             chunk_images,
             stateless_logits_list,
         ):
-            stateless_observation = board_observation_from_logits(stateless_logits)
-            temporal_logits = sequence_reader.smooth_logits(stateless_logits)
-            temporal_observation = board_observation_from_logits(temporal_logits)
+            inference_rows.append(
+                (
+                    row,
+                    image_bgr,
+                    stateless_logits,
+                    sequence_reader.smooth_logits(stateless_logits),
+                )
+            )
 
-            gt_class_ids = tuple(int(value) for value in row.labels)
-            stateless_class_ids = tuple(_fen_to_class_ids(stateless_observation.fen))
+    tracker_input_logits = [smoothed_logits for *_rest, smoothed_logits in inference_rows]
+    decoded_results = _decode_temporal_results(
+        rows=relevant_rows,
+        tracker_input_logits=tracker_input_logits,
+    )
+
+    visualized_frames: list[VisualizedRuntimeFrame] = []
+    previous_gt: tuple[int, ...] | None = None
+    previous_stateless: tuple[int, ...] | None = None
+    previous_temporal: tuple[int, ...] | None = None
+    previous_temporal_full_fen: str | None = None
+
+    for frame_index, (
+        row,
+        image_bgr,
+        stateless_logits,
+        smoothed_logits,
+    ) in enumerate(inference_rows):
+        stateless_observation = board_observation_from_logits(stateless_logits)
+        stateless_probabilities = torch.softmax(stateless_logits, dim=1)
+        gt_class_ids = tuple(int(value) for value in row.labels)
+        stateless_class_ids = tuple(_fen_to_class_ids(stateless_observation.fen))
+
+        temporal_transition_kind = "smoothed_logits"
+        temporal_transition_label = "smoothed"
+        if decoded_results is None:
+            temporal_observation = board_observation_from_logits(smoothed_logits)
             temporal_class_ids = tuple(_fen_to_class_ids(temporal_observation.fen))
+            temporal_confidences = tuple(temporal_observation.square_confidences)
+            temporal_full_fen = None
+        else:
+            decoded_result = decoded_results[frame_index]
+            temporal_class_ids = tuple(_fen_to_class_ids(decoded_result.fen))
+            temporal_confidences = _square_confidences_for_class_ids(
+                smoothed_logits,
+                temporal_class_ids,
+            )
+            temporal_full_fen = decoded_result.full_fen
+            if decoded_result.move_uci is None:
+                temporal_transition_kind = "stay"
+                temporal_transition_label = "stay"
+            else:
+                temporal_transition_kind = "legal_move"
+                temporal_transition_label = decoded_result.move_uci
 
-            if row.frame_index in selected_frame_indices:
-                crop_rgb, square_quads, piece_bboxes = _runtime_geometry_preview(
-                    image_bgr,
-                    corners=row.corners,
-                    preview_size=_GEOMETRY_PREVIEW_SIZE,
-                )
-                source_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-                source_square_quads, source_piece_bboxes = _runtime_source_geometry(
-                    image_bgr,
-                    corners=row.corners,
-                )
-                visualized_frames.append(
-                    VisualizedRuntimeFrame(
-                        frame_index=int(row.frame_index or 0),
-                        annotation_id=row.annotation_id,
-                        board_path=row.board_path,
-                        crop_rgb=crop_rgb,
-                        source_rgb=source_rgb,
-                        square_quads=square_quads,
-                        piece_bboxes=piece_bboxes,
-                        source_square_quads=source_square_quads,
-                        source_piece_bboxes=source_piece_bboxes,
-                        gt_class_ids=gt_class_ids,
-                        stateless_class_ids=stateless_class_ids,
-                        temporal_class_ids=temporal_class_ids,
-                        stateless_confidences=tuple(stateless_observation.square_confidences),
-                        temporal_confidences=tuple(temporal_observation.square_confidences),
-                        stateless_error_count=_count_differences(stateless_class_ids, gt_class_ids),
-                        temporal_error_count=_count_differences(temporal_class_ids, gt_class_ids),
-                        gt_change_count=(
-                            None
-                            if previous_gt is None
-                            else _count_differences(previous_gt, gt_class_ids)
-                        ),
-                        stateless_change_count=(
-                            None
-                            if previous_stateless is None
-                            else _count_differences(previous_stateless, stateless_class_ids)
-                        ),
-                        temporal_change_count=(
-                            None
-                            if previous_temporal is None
-                            else _count_differences(previous_temporal, temporal_class_ids)
-                        ),
-                        gt_changed_mask=_changed_mask(gt_class_ids, previous_gt),
-                        stateless_changed_mask=_changed_mask(
-                            stateless_class_ids,
-                            previous_stateless,
-                        ),
-                        temporal_changed_mask=_changed_mask(
-                            temporal_class_ids,
-                            previous_temporal,
-                        ),
-                    )
-                )
+        stateless_transition = _classify_transition(
+            previous_temporal_full_fen,
+            stateless_class_ids,
+        )
 
-            previous_gt = gt_class_ids
-            previous_stateless = stateless_class_ids
-            previous_temporal = temporal_class_ids
+        if row.frame_index in selected_frame_indices:
+            crop_rgb, square_quads, piece_bboxes = _runtime_geometry_preview(
+                image_bgr,
+                corners=row.corners,
+                preview_size=_GEOMETRY_PREVIEW_SIZE,
+            )
+            source_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+            source_square_quads, source_piece_bboxes = _runtime_source_geometry(
+                image_bgr,
+                corners=row.corners,
+            )
+            visualized_frames.append(
+                VisualizedRuntimeFrame(
+                    frame_index=int(row.frame_index or 0),
+                    annotation_id=row.annotation_id,
+                    board_path=row.board_path,
+                    crop_rgb=crop_rgb,
+                    source_rgb=source_rgb,
+                    square_quads=square_quads,
+                    piece_bboxes=piece_bboxes,
+                    source_square_quads=source_square_quads,
+                    source_piece_bboxes=source_piece_bboxes,
+                    gt_class_ids=gt_class_ids,
+                    stateless_class_ids=stateless_class_ids,
+                    temporal_class_ids=temporal_class_ids,
+                    stateless_confidences=tuple(stateless_observation.square_confidences),
+                    stateless_square_probabilities=tuple(
+                        tuple(float(value) for value in row_probs.cpu().tolist())
+                        for row_probs in stateless_probabilities
+                    ),
+                    temporal_confidences=temporal_confidences,
+                    stateless_error_count=_count_differences(stateless_class_ids, gt_class_ids),
+                    temporal_error_count=_count_differences(temporal_class_ids, gt_class_ids),
+                    gt_change_count=(
+                        None
+                        if previous_gt is None
+                        else _count_differences(previous_gt, gt_class_ids)
+                    ),
+                    stateless_change_count=(
+                        None
+                        if previous_stateless is None
+                        else _count_differences(previous_stateless, stateless_class_ids)
+                    ),
+                    temporal_change_count=(
+                        None
+                        if previous_temporal is None
+                        else _count_differences(previous_temporal, temporal_class_ids)
+                    ),
+                    gt_changed_mask=_changed_mask(gt_class_ids, previous_gt),
+                    stateless_changed_mask=_changed_mask(
+                        stateless_class_ids,
+                        previous_stateless,
+                    ),
+                    temporal_changed_mask=_changed_mask(
+                        temporal_class_ids,
+                        previous_temporal,
+                    ),
+                    stateless_transition_kind=stateless_transition.kind,
+                    stateless_transition_label=stateless_transition.label,
+                    temporal_transition_kind=temporal_transition_kind,
+                    temporal_transition_label=temporal_transition_label,
+                )
+            )
+
+        previous_gt = gt_class_ids
+        previous_stateless = stateless_class_ids
+        previous_temporal = temporal_class_ids
+        previous_temporal_full_fen = temporal_full_fen
 
     return visualized_frames
 
@@ -843,6 +911,175 @@ def _draw_closed_polyline(
     draw.line(points + [points[0]], fill=color, width=width)
 
 
+@dataclass(frozen=True)
+class _TransitionClassification:
+    kind: str
+    label: str | None = None
+
+
+def _decode_temporal_results(
+    *,
+    rows: list[PhysicalEvalBoardRow],
+    tracker_input_logits: list[torch.Tensor],
+) -> list[Any] | None:
+    clip_path = rows[0].clip_path if rows else None
+    initial_state = _load_initial_board_state(clip_path)
+    if initial_state is None:
+        return None
+    initial_board_fen, initial_side_to_move = initial_state
+    return decode_sequence_with_production_decoder(
+        tracker_input_logits,
+        initial_board_fen=initial_board_fen,
+        initial_side_to_move=initial_side_to_move,
+    )
+
+
+def _load_initial_board_state(clip_path: str | None) -> tuple[str, str | None] | None:
+    if clip_path is None:
+        return None
+    cached = _CLIP_STATE_CACHE.get(clip_path)
+    if clip_path in _CLIP_STATE_CACHE:
+        return cached
+
+    try:
+        clip = torch.load(_PROJECT_ROOT / clip_path, map_location="cpu", weights_only=False)
+    except (FileNotFoundError, OSError, RuntimeError):
+        _CLIP_STATE_CACHE[clip_path] = None
+        return None
+    if not isinstance(clip, dict):
+        _CLIP_STATE_CACHE[clip_path] = None
+        return None
+
+    initial_board_fen = clip.get("initial_board_fen")
+    if not isinstance(initial_board_fen, str):
+        _CLIP_STATE_CACHE[clip_path] = None
+        return None
+    raw_side_to_move = clip.get("initial_side_to_move")
+    side_to_move = raw_side_to_move if isinstance(raw_side_to_move, str) else None
+    state = (initial_board_fen, side_to_move)
+    _CLIP_STATE_CACHE[clip_path] = state
+    return state
+
+
+def _square_confidences_for_class_ids(
+    square_logits: torch.Tensor,
+    class_ids: tuple[int, ...],
+) -> tuple[float, ...]:
+    probabilities = torch.softmax(square_logits, dim=1)
+    indices = torch.arange(len(class_ids), device=probabilities.device)
+    target = torch.tensor(class_ids, dtype=torch.long, device=probabilities.device)
+    return tuple(float(value) for value in probabilities[indices, target].cpu().tolist())
+
+
+def _classify_transition(
+    previous_full_fen: str | None,
+    current_class_ids: tuple[int, ...],
+) -> _TransitionClassification:
+    if previous_full_fen is None:
+        return _TransitionClassification(kind="initial", label="initial")
+
+    previous_board = chess.Board(previous_full_fen)
+    current_fen = _class_ids_to_fen(current_class_ids)
+    if current_fen == previous_board.board_fen():
+        return _TransitionClassification(kind="stay", label="stay")
+
+    legal_move = find_move_between_positions(previous_board, current_fen)
+    if legal_move is not None:
+        return _TransitionClassification(kind="legal_move", label=legal_move.uci())
+
+    illegal_transfer = _single_piece_transfer_label(previous_board, current_fen)
+    if illegal_transfer is not None:
+        return _TransitionClassification(
+            kind="illegal_single_piece_transfer",
+            label=illegal_transfer,
+        )
+
+    return _TransitionClassification(kind="unexplained_disturbance")
+
+
+def _single_piece_transfer_label(previous_board: chess.Board, current_fen: str) -> str | None:
+    current_board = chess.Board()
+    try:
+        current_board.set_board_fen(current_fen)
+    except ValueError:
+        return None
+
+    changed_squares = [
+        square
+        for square in chess.SQUARES
+        if previous_board.piece_at(square) != current_board.piece_at(square)
+    ]
+    if len(changed_squares) != 2:
+        return None
+
+    source_square = next(
+        (
+            square
+            for square in changed_squares
+            if previous_board.piece_at(square) is not None
+            and current_board.piece_at(square) is None
+        ),
+        None,
+    )
+    target_square = next(
+        (
+            square
+            for square in changed_squares
+            if current_board.piece_at(square) is not None
+            and square != source_square
+        ),
+        None,
+    )
+    if source_square is None or target_square is None:
+        return None
+
+    source_piece = previous_board.piece_at(source_square)
+    target_piece = current_board.piece_at(target_square)
+    if source_piece is None or target_piece is None or source_piece.color != target_piece.color:
+        return None
+
+    promotion_suffix = ""
+    if source_piece.piece_type == chess.PAWN and chess.square_rank(target_square) in {0, 7}:
+        if target_piece.piece_type not in {
+            chess.QUEEN,
+            chess.ROOK,
+            chess.BISHOP,
+            chess.KNIGHT,
+        }:
+            return None
+        promotion_suffix = f"={target_piece.symbol().upper()}"
+    elif target_piece != source_piece:
+        return None
+
+    target_was_occupied = previous_board.piece_at(target_square) is not None
+    separator = "x" if target_was_occupied else "->"
+    return (
+        f"{chess.square_name(source_square)}{separator}{chess.square_name(target_square)}"
+        f"{promotion_suffix}"
+    )
+
+
+def _class_ids_to_fen(class_ids: tuple[int, ...]) -> str:
+    ranks: list[str] = []
+    for row in range(8):
+        empty_run = 0
+        rank_parts: list[str] = []
+        for col in range(8):
+            class_id = int(class_ids[row * 8 + col])
+            class_name = SQUARE_CLASS_NAMES[class_id]
+            if class_name == "empty":
+                empty_run += 1
+                continue
+            if empty_run > 0:
+                rank_parts.append(str(empty_run))
+                empty_run = 0
+            rank_parts.append(class_name)
+        if empty_run > 0:
+            rank_parts.append(str(empty_run))
+        ranks.append("".join(rank_parts) or "8")
+    return "/".join(ranks)
+
+
 def _fen_to_class_ids(fen: str) -> list[int]:
     placement = fen.split(" ", 1)[0]
     class_name_to_index = {name: index for index, name in enumerate(SQUARE_CLASS_NAMES)}
@@ -896,9 +1133,13 @@ def _frame_manifest_row(frame: VisualizedRuntimeFrame, *, image_path: Path) -> d
         "stateless_change_count": frame.stateless_change_count,
         "stateless_error_count": frame.stateless_error_count,
         "stateless_mean_confidence": round(frame.stateless_mean_confidence, 4),
+        "stateless_transition_kind": frame.stateless_transition_kind,
+        "stateless_transition_label": frame.stateless_transition_label,
         "temporal_change_count": frame.temporal_change_count,
         "temporal_error_count": frame.temporal_error_count,
         "temporal_mean_confidence": round(frame.temporal_mean_confidence, 4),
+        "temporal_transition_kind": frame.temporal_transition_kind,
+        "temporal_transition_label": frame.temporal_transition_label,
     }
 
 

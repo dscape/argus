@@ -507,6 +507,9 @@ def _collect_frame_payloads(
                     probabilities,
                     stateless_class_ids,
                 ),
+                "stateless_square_probabilities": _square_class_probabilities(
+                    probabilities,
+                ),
                 "decoded_square_confidences": _class_confidences(
                     probabilities,
                     decoded_class_ids,
@@ -1341,6 +1344,13 @@ def _class_confidences(
     indices = torch.tensor(class_ids, dtype=torch.long)
     values = probabilities.gather(1, indices.unsqueeze(1)).squeeze(1)
     return [round(float(value), 4) for value in values.tolist()]
+
+
+def _square_class_probabilities(probabilities: torch.Tensor) -> list[list[float]]:
+    return [
+        [round(float(probability), 4) for probability in square_probs]
+        for square_probs in probabilities.tolist()
+    ]
 
 
 def _count_differences(left: tuple[int, ...], right: tuple[int, ...]) -> int:

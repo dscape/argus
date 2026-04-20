@@ -1,6 +1,6 @@
 "use client";
 
-import { type CSSProperties, useMemo, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useState } from "react";
 
 import { ChessBoard } from "@/components/ChessBoard";
 import {
@@ -28,6 +28,55 @@ interface HoveredSquareState {
   fen?: string;
 }
 
+interface SquareEvidenceEntry {
+  square: string;
+  bbox: PhysicalRuntimeGeometryBbox | null;
+  gtClass: string;
+  statelessClass: string;
+  temporalClass: string;
+  top1Class: string | null;
+  top1Probability: number | null;
+  probabilities: Array<{ className: string; probability: number }>;
+}
+
+const SQUARE_CLASS_NAMES = [
+  "empty",
+  "P",
+  "N",
+  "B",
+  "R",
+  "Q",
+  "K",
+  "p",
+  "n",
+  "b",
+  "r",
+  "q",
+  "k",
+] as const;
+
+const SQUARE_CLASS_LABELS: Record<string, string> = {
+  empty: "empty",
+  P: "white pawn",
+  N: "white knight",
+  B: "white bishop",
+  R: "white rook",
+  Q: "white queen",
+  K: "white king",
+  p: "black pawn",
+  n: "black knight",
+  b: "black bishop",
+  r: "black rook",
+  q: "black queen",
+  k: "black king",
+};
+
+const BOARD_SQUARES = Array.from({ length: 64 }, (_value, index) => {
+  const file = String.fromCharCode("a".charCodeAt(0) + (index % 8));
+  const rank = 8 - Math.floor(index / 8);
+  return `${file}${rank}`;
+});
+
 function formatPercent(value: number | null | undefined): string {
   if (value == null) return "-";
   return `${(value * 100).toFixed(1)}%`;
@@ -52,6 +101,21 @@ function deltaLabel(recoveredSquares: number): string {
   if (recoveredSquares > 0) return `+${recoveredSquares} recovered vs single`;
   if (recoveredSquares < 0) return `${Math.abs(recoveredSquares)} worse vs single`;
   return "no change vs single";
+}
+
+function formatTransition(
+  kind: string | null | undefined,
+  label: string | null | undefined,
+): string {
+  if (kind === "stay") return "stay";
+  if (kind === "legal_move") return label ?? "legal move";
+  if (kind === "illegal_single_piece_transfer") {
+    return label ? `illegal ${label}` : "illegal single-piece transfer";
+  }
+  if (kind === "unexplained_disturbance") return "unexplained disturbance";
+  if (kind === "smoothed_logits") return "EMA-smoothed logits";
+  if (kind === "initial") return "initial";
+  return label ?? "-";
 }
 
 function quadPoints(quad: PhysicalRuntimeGeometryQuad): string {
@@ -159,6 +223,12 @@ function squareCoords(square: string): { row: number; col: number } | null {
   return { row, col };
 }
 
+function squareIndex(square: string): number | null {
+  const coords = squareCoords(square);
+  if (!coords) return null;
+  return coords.row * 8 + coords.col;
+}
+
 function pieceSymbolAtSquare(fen: string | undefined, square: string): string | null {
   if (!fen) return null;
   const coords = squareCoords(square);
@@ -179,17 +249,38 @@ function pieceSymbolAtSquare(fen: string | undefined, square: string): string | 
 
 function pieceLabel(symbol: string | null): string {
   if (!symbol) return "empty";
-  const white = symbol === symbol.toUpperCase();
-  const pieceNames: Record<string, string> = {
-    p: "pawn",
-    n: "knight",
-    b: "bishop",
-    r: "rook",
-    q: "queen",
-    k: "king",
-  };
-  const name = pieceNames[symbol.toLowerCase()] ?? symbol;
-  return `${white ? "white" : "black"} ${name}`;
+  return SQUARE_CLASS_LABELS[symbol] ?? symbol;
+}
+
+function boardClassAtSquare(fen: string | undefined, square: string): string {
+  return pieceSymbolAtSquare(fen, square) ?? "empty";
+}
+
+function compactClassLabel(className: string | null): string {
+  if (className == null || className === "empty") return "∅";
+  return className;
+}
+
+function probabilityRows(probabilities: number[] | undefined): Array<{
+  className: string;
+  probability: number;
+}> {
+  if (!probabilities || probabilities.length === 0) return [];
+  return probabilities
+    .map((probability, classIndex) => ({
+      className: SQUARE_CLASS_NAMES[classIndex] ?? `cls${classIndex}`,
+      probability,
+    }))
+    .sort((left, right) => right.probability - left.probability);
+}
+
+function defaultEvidenceSquare(result: PhysicalRuntimeEvalResult): string {
+  return (
+    result.stateless_error_squares?.[0] ??
+    result.temporal_error_squares?.[0] ??
+    result.gt_changed_squares?.[0] ??
+    BOARD_SQUARES[0]!
+  );
 }
 
 function GeometryOverlay({
@@ -344,6 +435,62 @@ function BoardPanel({
   );
 }
 
+function ProbabilityDistribution({
+  entry,
+}: {
+  entry: SquareEvidenceEntry | null;
+}) {
+  if (!entry) return null;
+
+  if (entry.probabilities.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground">
+        Raw stateless softmax probabilities are unavailable for this frame.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {entry.probabilities.map(({ className, probability }) => {
+        const tags: string[] = [];
+        if (className === entry.gtClass) tags.push("GT");
+        if (className === entry.statelessClass) tags.push("stateless");
+        if (className === entry.temporalClass) tags.push("temporal");
+        return (
+          <div
+            key={`${entry.square}-${className}`}
+            className="grid grid-cols-[96px_minmax(0,1fr)_52px_auto] items-center gap-2"
+          >
+            <div className="truncate text-xs text-muted-foreground">
+              {SQUARE_CLASS_LABELS[className] ?? className}
+            </div>
+            <div className="h-2 overflow-hidden rounded bg-muted">
+              <div
+                className="h-full rounded bg-foreground/80"
+                style={{ width: `${Math.max(probability, 0) * 100}%` }}
+              />
+            </div>
+            <div className="text-right font-mono text-xs">
+              {(probability * 100).toFixed(1)}%
+            </div>
+            <div className="flex min-h-5 flex-wrap justify-end gap-1">
+              {tags.map((tag) => (
+                <span
+                  key={`${entry.square}-${className}-${tag}`}
+                  className="rounded border px-1 py-0 text-[10px] text-muted-foreground"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function PhysicalRuntimeCard({
   result,
   pinned,
@@ -351,6 +498,18 @@ export default function PhysicalRuntimeCard({
   onPin,
 }: PhysicalRuntimeCardProps) {
   const [hoveredSquare, setHoveredSquare] = useState<HoveredSquareState | null>(null);
+  const [selectedEvidenceSquare, setSelectedEvidenceSquare] = useState<string>(() =>
+    defaultEvidenceSquare(result),
+  );
+  const [showSquareEvidence, setShowSquareEvidence] = useState(Boolean(pinned));
+
+  useEffect(() => {
+    setSelectedEvidenceSquare(defaultEvidenceSquare(result));
+  }, [result.annotation_id]);
+
+  useEffect(() => {
+    if (pinned) setShowSquareEvidence(true);
+  }, [pinned]);
 
   const imageSrc = detailImageSrc(result, sessionId);
   const clipLabel = result.clip_filename || result.annotation_id;
@@ -392,11 +551,51 @@ export default function PhysicalRuntimeCard({
     }
     return "16 / 9";
   }, [boardViewportBounds, result.image_height, result.image_width]);
+  const squareEvidenceEntries = useMemo<SquareEvidenceEntry[]>(() => {
+    return BOARD_SQUARES.map((square) => {
+      const index = squareIndex(square);
+      const probabilities =
+        index == null
+          ? []
+          : probabilityRows(result.stateless_square_probabilities?.[index]);
+      const top1 = probabilities[0] ?? null;
+      return {
+        square,
+        bbox: geometryPieceBboxes[square] ?? null,
+        gtClass: boardClassAtSquare(result.gt_fen, square),
+        statelessClass: boardClassAtSquare(result.stateless_fen, square),
+        temporalClass: boardClassAtSquare(result.temporal_fen, square),
+        top1Class: top1?.className ?? null,
+        top1Probability: top1?.probability ?? null,
+        probabilities,
+      };
+    });
+  }, [
+    geometryPieceBboxes,
+    result.gt_fen,
+    result.stateless_fen,
+    result.stateless_square_probabilities,
+    result.temporal_fen,
+  ]);
+  const activeEvidenceSquare = hoveredSquare?.square ?? selectedEvidenceSquare;
+  const activeEvidenceEntry = useMemo(
+    () =>
+      squareEvidenceEntries.find((entry) => entry.square === activeEvidenceSquare) ??
+      squareEvidenceEntries[0] ??
+      null,
+    [activeEvidenceSquare, squareEvidenceEntries],
+  );
 
   function handleBoardSquareHover(boardTitle: string, fen?: string) {
     return (square: string | null) => {
       setHoveredSquare(square ? { boardTitle, square, fen } : null);
     };
+  }
+
+  function handleEvidenceSquareHover(square: string | null) {
+    setHoveredSquare(
+      square ? { boardTitle: "Square evidence", square, fen: result.stateless_fen } : null,
+    );
   }
 
   return (
@@ -528,7 +727,7 @@ export default function PhysicalRuntimeCard({
           onSquareHover={handleBoardSquareHover("Stateless", result.stateless_fen)}
         />
         <BoardPanel
-          title="Temporal"
+          title="Decoded (legal)"
           subtitle={`${result.temporal_error_count} wrong · ${formatPercent(result.temporal_square_accuracy)}`}
           fen={result.temporal_fen}
           squareStyles={predictionSquareStyles(
@@ -541,13 +740,142 @@ export default function PhysicalRuntimeCard({
       </div>
 
       <div className="grid gap-2 text-sm text-muted-foreground md:grid-cols-2 xl:grid-cols-4">
-        <div>Temporal exact: {result.temporal_exact_match ? "yes" : "no"}</div>
+        <div>Decoded exact: {result.temporal_exact_match ? "yes" : "no"}</div>
         <div>Stateless exact: {result.stateless_exact_match ? "yes" : "no"}</div>
+        <div>
+          Decoded transition: {formatTransition(result.temporal_transition_kind, result.temporal_transition_label)}
+        </div>
+        <div>
+          Raw single-frame transition: {formatTransition(result.stateless_transition_kind, result.stateless_transition_label)}
+        </div>
         <div>
           Annotation: <code>{result.annotation_id}</code>
         </div>
         <div>Geometry: client overlay on raw source frame + piece-box pooling</div>
       </div>
+
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => setShowSquareEvidence((current) => !current)}
+          className="rounded border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {showSquareEvidence ? "Hide" : "Show"} raw square evidence
+        </button>
+      </div>
+
+      {showSquareEvidence ? (
+        <div className="rounded-lg border p-3 space-y-3">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Raw square evidence
+            </p>
+            <p className="text-xs text-muted-foreground">
+              These are projected piece-box crops from the raw source frame. The board probe pools
+              patch tokens inside each box; it does not classify 64 independent square PNGs.
+              Probabilities below are softmaxes from the raw per-frame stateless logits before legal
+              decoding.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-8 gap-1.5">
+            {squareEvidenceEntries.map((entry) => {
+              const cropStyle = entry.bbox ? projectedCropStyle(entry.bbox) : null;
+              const active = entry.square === activeEvidenceSquare;
+              const wrong = entry.statelessClass !== entry.gtClass;
+              const topLabel = compactClassLabel(entry.top1Class);
+              const topProb =
+                entry.top1Probability == null
+                  ? "-"
+                  : `${Math.round(entry.top1Probability * 100)}%`;
+
+              return (
+                <button
+                  key={entry.square}
+                  type="button"
+                  onClick={() => setSelectedEvidenceSquare(entry.square)}
+                  onMouseEnter={() => handleEvidenceSquareHover(entry.square)}
+                  onMouseLeave={() => handleEvidenceSquareHover(null)}
+                  className={`rounded border p-1 text-left transition-colors ${
+                    active
+                      ? "border-foreground bg-muted/20"
+                      : wrong
+                        ? "border-red-300/70 bg-red-500/5 hover:bg-red-500/10"
+                        : "border-border hover:bg-muted/20"
+                  }`}
+                >
+                  <div className="mb-1 flex items-center justify-between font-mono text-[10px]">
+                    <span>{entry.square}</span>
+                    <span>{topProb}</span>
+                  </div>
+                  <div className="relative aspect-square overflow-hidden rounded border bg-muted/20">
+                    {imageSrc && entry.bbox && cropStyle ? (
+                      <img
+                        src={imageSrc}
+                        alt={`${entry.square} projected piece crop`}
+                        className="absolute max-w-none select-none"
+                        style={cropStyle}
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center text-[10px] uppercase tracking-wide text-muted-foreground/60">
+                        empty
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-1 truncate text-center font-mono text-[10px] text-muted-foreground">
+                    {topLabel}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {activeEvidenceEntry ? (
+            <div className="space-y-3 rounded border p-3">
+              <div className="grid gap-3 sm:grid-cols-[96px_minmax(0,1fr)]">
+                <div className="relative aspect-square overflow-hidden rounded border bg-muted/20">
+                  {imageSrc && activeEvidenceEntry.bbox ? (
+                    <img
+                      src={imageSrc}
+                      alt={`${activeEvidenceEntry.square} projected piece crop`}
+                      className="absolute max-w-none select-none"
+                      style={projectedCropStyle(activeEvidenceEntry.bbox) ?? undefined}
+                    />
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center text-[10px] uppercase tracking-wide text-muted-foreground/60">
+                      empty
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Selected square
+                  </div>
+                  <div className="text-sm font-medium font-mono">
+                    {activeEvidenceEntry.square}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    GT {pieceLabel(pieceSymbolAtSquare(result.gt_fen, activeEvidenceEntry.square))}
+                    {" · "}
+                    stateless {pieceLabel(pieceSymbolAtSquare(result.stateless_fen, activeEvidenceEntry.square))}
+                    {" · "}
+                    temporal {pieceLabel(pieceSymbolAtSquare(result.temporal_fen, activeEvidenceEntry.square))}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    top-1 {pieceLabel(activeEvidenceEntry.top1Class)}
+                    {activeEvidenceEntry.top1Probability != null
+                      ? ` · ${(activeEvidenceEntry.top1Probability * 100).toFixed(1)}%`
+                      : ""}
+                  </div>
+                </div>
+              </div>
+
+              <ProbabilityDistribution entry={activeEvidenceEntry} />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

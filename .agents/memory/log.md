@@ -429,3 +429,64 @@ Updated `/annotate/physical` transient labeling UX so move-row selection no long
 ## 2026-04-19T07:57:40.803Z | prompt | high | User wants side-by-side comparison against Chesscog occupancy/piece classifiers
 
 User wants to compare Argus occupancy classification and piece classification against the Chesscog implementation/report (`~/dev/chesscog`, `~/dev/chesscog/docs/report.pdf`) using Argus data, with a side-by-side evaluation of both approaches.
+
+## 2026-04-19T18:44:48.271Z | prompt | high | User requests legal stay-or-one-move temporal constraint for physical board reader
+
+User says single-frame board-exact is far too low and the easiest win is to use temporal consistency plus known per-frame FEN continuity. Requirement: adjacent predicted boards must be either the same board or exactly one legal move from the previous board; never multiple moves. User also clarifies that move likelihood depends on game speed and that more than 50% of frames should be no-move, so the decoder should carry a strong stay prior rather than assuming constant movement. They pointed at `/evaluate/physical/17ff14855982` and objected to impossible temporal changes shown there.
+
+## 2026-04-19T19:30:00.193Z | decision | high | Runtime inspector now uses legal decoded board sequence instead of EMA-only temporal board
+
+Patched `pipeline/physical/board_probe/runtime_visualization.py` so the runtime inspector no longer treats EMA-smoothed per-frame logits as the temporal board. It now batches raw logits, applies the existing production legal decoder when clip initial state is available, and uses the decoded legal board sequence for `temporal_*`/decoded fields. Added transition labels: decoded frames expose `stay` vs legal move UCI; raw stateless frames are classified against the previous decoded board as `stay`, `legal_move`, `illegal_single_piece_transfer`, or `unexplained_disturbance`. Illegal single-piece transfer labeling handles promotion suffixes like `=Q`. Updated the physical runtime service/API/UI to surface these transition labels and to re-hydrate older saved sessions missing them.
+
+## 2026-04-19T19:32:21.110Z | experiment | high | Validation after legal-decoder runtime inspector patch
+
+Ran `.venv/bin/python3 -m pytest tests/pipeline/test_physical_runtime_visualization.py tests/dev_tools/test_physical_runtime_service.py` → pass. Added tests for legal decoder transition labeling and illegal single-piece transfer promotion labeling. Ran `cd dev-tools && npx tsc --noEmit` → pass. Ran `make test` → pass (`717 passed, 22 skipped`). `make typecheck` still fails on unrelated existing files (`src/argus/model/vision_encoder.py:25`, `src/argus/datagen/synth.py:131`). `make lint` still fails on unrelated existing files (`scripts/diagnose_classifier_val.py`, `scripts/eval_mixed_stack.py`, `src/argus/datagen/synth.py`). Direct service call for `clip_overlay_h2WrtkfwRl8_clip8_5_frame0267` now reports `temporal_transition_kind=stay`, `temporal_change_count=0`, `stateless_transition_kind=unexplained_disturbance`, and a sane decoded FEN instead of the previous impossible multi-queen board.
+
+## 2026-04-19T20:13:23.691Z | decision | high | Legacy physical runtime sessions now auto-refresh server-side; native frame video loaders serialized
+
+To make `/evaluate/physical/<session>` usable on old saved sessions, `get_physical_runtime_session()` now detects stale runtime results (missing geometry/image-mode/transition metadata), re-inspects those annotations server-side with `include_images=False`, merges fresh decoded fields while preserving stored session images, and persists the upgraded results back to `physical_runtime_sessions`. Also serialized native source-video frame access in `pipeline/physical/board_probe/board_data.py` and `pipeline/physical/two_stage/classifier_data.py` because shared OpenCV `VideoCapture` access was not thread-safe and was causing hangs/socket resets during concurrent dev-tools requests.
+
+## 2026-04-19T20:16:38.126Z | experiment | high | Final verification for legal-decoder runtime inspector and legacy session refresh
+
+Verified in browser at `http://localhost:3000/evaluate/physical/17ff14855982` that the saved session now upgrades to decoded legal results: temporal square `79.7%` (`51/64`), `+19 recovered vs single`, decoded transition `stay`, raw single-frame transition `unexplained disturbance`. The old impossible EMA-only board no longer appears on the page. Server-side session refresh persists upgraded results back to the DB, so subsequent loads do not need client-side legacy hydration. Ran `make test` again after the refresh/backfill/thread-safety changes → pass (`719 passed, 22 skipped`). `make typecheck` and `make lint` still fail only on unrelated pre-existing files outside this task (`src/argus/model/vision_encoder.py`, `src/argus/datagen/synth.py`, `scripts/diagnose_classifier_val.py`, `scripts/eval_mixed_stack.py`).
+
+## 2026-04-19T20:21:00.411Z | experiment | high | Current default physical tracker eval exceeds 5 percent board-exact
+
+Ran `.venv/bin/python3 scripts/eval_physical_board_tracker.py --output outputs/2026-04-19/physical_board_tracker_eval_current_defaults.json`. Current default settings (`temporal_mode=metadata`, `tracker_mode=production`, default `weights/physical/best.pt`) produced `board_exact_match=0.05680473372781065` on `845` evaluated boards, clearing the user’s `>5%` loop threshold. This matches the earlier promoted piecebox-mapped metadata result and confirms the runtime-inspector legal-decoder work is now aligned with a sequence path that already beats the requested floor.
+
+## 2026-04-19T21:53:34.585Z | experiment | medium | Failure-study bundle for current default 5.68 percent board-exact run
+
+Generated a fresh failure-study bundle for the current default tracker eval via `.venv/bin/python3 -m pipeline physical-board-failure-study --eval-report outputs/2026-04-19/physical_board_tracker_eval_current_defaults.json --output-dir outputs/2026-04-19/physical_board_failure_study_current_defaults`. The `/evaluate/failures` study label to select is `physical_board_failure_study_current_defaults`. Bundle summary: `temporal_mode=metadata`, `tracker_mode=production`, `report_path=outputs/2026-04-19/physical_board_tracker_eval_current_defaults.json`, `selected_episodes=8`, `total_episodes=8`, heuristic suggested buckets `temporal in-between / move execution ambiguity: 6` and `piece classifier / square evidence: 2`.
+
+## 2026-04-19T22:13:59.130Z | decision | high | Failure viewer hover inspector now exposes source-frame geometry and raw stateless square distrib...
+
+Updated `/evaluate/failures` so hovered GT/stateless/decoded squares now drive a hover inspector similar to `/evaluate/physical`: the viewer draws client-side piece-projection geometry over the raw source-frame snapshot, highlights the hovered square, and shows the projected piece-box crop used for board-probe token pooling. Failure-study bundles now record `stateless_square_probabilities` (softmax over raw per-frame stateless logits), and the viewer shows the full hovered-square class distribution with GT/stateless/decoded labels. The failure-study service now prefers native source-video frames and native full-frame corners via `pipeline.physical.board_probe.board_data` instead of clip-frame-only loading.
+
+## 2026-04-20T02:21:46.351Z | decision | medium | Expose runtime square-evidence crops and raw stateless softmax
+
+Added raw square-evidence inspection to `/evaluate/physical/<session>` runtime cards.
+
+- Runtime inspect results now include `stateless_square_probabilities` (64x13 softmax from raw per-frame stateless logits).
+- Cards can toggle a 64-square evidence grid showing projected piece-box crops used for token pooling, plus a selected-square probability breakdown.
+- Legacy runtime sessions auto-refresh server-side when these probabilities are missing so saved sessions gain the new inspection surface without re-running with inline images.
+
+Validation:
+- `cd dev-tools && npx tsc --noEmit`
+- `python3 -m py_compile dev-tools/api/services/evaluate/physical_runtime_service.py pipeline/physical/board_probe/runtime_visualization.py`
+- `make test` ✅
+- `make typecheck` still fails in unrelated pre-existing files: `src/argus/model/vision_encoder.py`, `src/argus/datagen/synth.py`
+- `make lint` still fails in unrelated pre-existing file: `scripts/diagnose_classifier_val.py`
+
+## 2026-04-20T07:24:54.846Z | decision | medium | Add 64-square evidence grid to failure viewer
+
+Extended `/evaluate/failures` with the same square-evidence surface used in runtime inspection.
+
+- Each failure-study frame now shows a 64-square projected evidence grid built from the raw source-frame piece-box crops.
+- Selecting or hovering a square shows the larger projected crop plus the raw per-frame stateless softmax distribution before legal decoding.
+- This uses existing `stateless_square_probabilities` from failure-study manifests; current default bundle already contains them.
+
+Validation:
+- `cd dev-tools && npx tsc --noEmit`
+- `make test`
+- `make typecheck`
+- `make lint`
