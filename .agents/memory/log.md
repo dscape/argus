@@ -490,3 +490,11 @@ Validation:
 - `make test`
 - `make typecheck`
 - `make lint`
+
+## 2026-04-21T20:59:28.311Z | prompt | high | Plan v2 template-matching study under study/templates-v2
+
+User proposed a new template-matching study under `study/templates-v2/` after v1 failed on `h2WrtkfwRl8` due to indistinguishable starting templates and DINO embeddings leaking clocks/bottles/adjacent pieces. Core additions: (1) geometric visibility gating from FEN + camera pose with per-piece cuboid rasterization and patch-grid visibility masks, (2) multi-frame class template aggregation from PGN-aligned frames with visibility/self-similarity quality weighting, and (3) a bank quality gate before eval. Stages: visibility masks, foreground isolation, masked patch-token embedding, multi-frame bank builder, quality gate, classifier, proposal-source import from `study/templates/proposals/`, eval harness extension, full eval on `2wWUKmCBr6A`, then `h2WrtkfwRl8`, then failure inspection. Constraints: keep all work under `study/templates-v2/`; core Argus is read-only; before coding, read `study/templates/RESULTS.md` and `study/FINAL_DECISION.md`; do not inspect prior failed files if encountered; stage acceptances require debug visualizations/contact sheets/preview artifacts and explicit human checkpoints.
+
+## 2026-04-21T21:16:12.345Z | experiment | medium | Templates-v2 stage 1 visibility masks implemented
+
+Implemented `study/templates-v2/geometry/visibility.py` from scratch without reusing prior failed v2 files. Stage 1 now builds piece-type cuboids from FEN, projects them with a single frame-level `pose.up_sign` invariant, rasterizes convex-hull silhouettes, sorts by camera-space depth, subtracts closer-piece unions, and maps visible regions into crop-aligned patch masks via `compute_frame_visibility(...)` and `build_square_patch_visibility_mask(...)`. Added targeted coverage in `tests/test_study_templates_v2_visibility.py` (synthetic front-pawn/back-rank occlusion + patch-grid downsampling checks). Generated 5 acceptance-style overlays plus manifest under `study/templates-v2/geometry/debug-stage1/`. Targeted `ruff` and `pytest` pass. Targeted `mypy` is clean for the new files; remaining mypy failures come from existing `pipeline/physical/piece_projection.py` return-type issues.

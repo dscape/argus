@@ -1,0 +1,111 @@
+[
+  {
+    "frame_id": "clip_overlay_h2WrtkfwRl8_clip8_2_frame0000",
+    "image_path": "study/eval/frames/clip_overlay_h2WrtkfwRl8_clip8_2_frame0000.jpg",
+    "output_path": "study/templates-v2/geometry/debug-stage1/01_clip_overlay_h2WrtkfwRl8_clip8_2_frame0000.png",
+    "category": "a-file-rook",
+    "piece_count": 30,
+    "board_fen": "rnbqkb1r/ppp2ppp/4n3/3pP3/3P1B2/5N2/PPP3PP/RN1QKB1R",
+    "min_visibility": 0.012087026591458501,
+    "max_visibility": 1.0,
+    "mean_visibility": 0.5588871863861061,
+    "annotated_squares": [
+      "c8",
+      "d4",
+      "d8",
+      "d1",
+      "b8",
+      "a1",
+      "h7",
+      "g7",
+      "h2",
+      "f7"
+    ]
+  },
+  {
+    "frame_id": "clip_overlay_h2WrtkfwRl8_clip8_5_frame0037",
+    "image_path": "study/eval/frames/clip_overlay_h2WrtkfwRl8_clip8_5_frame0037.jpg",
+    "output_path": "study/templates-v2/geometry/debug-stage1/02_clip_overlay_h2WrtkfwRl8_clip8_5_frame0037.png",
+    "category": "a-file-rook",
+    "piece_count": 26,
+    "board_fen": "3q1rk1/4bpp1/r1n1n2p/1p1pP3/p2P4/P3BNN1/1PQ2RPP/R5K1",
+    "min_visibility": 0.0,
+    "max_visibility": 1.0,
+    "mean_visibility": 0.6695973406014681,
+    "annotated_squares": [
+      "b2",
+      "f8",
+      "f3",
+      "f7",
+      "e3",
+      "d5",
+      "h6",
+      "g7",
+      "h2"
+    ]
+  },
+  {
+    "frame_id": "clip_overlay_h2WrtkfwRl8_clip8_5_frame0397",
+    "image_path": "study/eval/frames/clip_overlay_h2WrtkfwRl8_clip8_5_frame0397.jpg",
+    "output_path": "study/templates-v2/geometry/debug-stage1/03_clip_overlay_h2WrtkfwRl8_clip8_5_frame0397.png",
+    "category": "lateral-occlusion",
+    "piece_count": 22,
+    "board_fen": "4q3/4n1pk/r3nr1p/1p1pN3/p2P4/P3B1PQ/1P3RP1/5RK1",
+    "min_visibility": 0.0,
+    "max_visibility": 1.0,
+    "mean_visibility": 0.6447482615706737,
+    "annotated_squares": [
+      "g7",
+      "g3",
+      "d5",
+      "f1",
+      "e7",
+      "e6",
+      "h6",
+      "g2"
+    ]
+  },
+  {
+    "frame_id": "clip_overlay_e4lGbQp4pU4_clip70_9_frame0000",
+    "image_path": "study/eval/frames/clip_overlay_e4lGbQp4pU4_clip70_9_frame0000.jpg",
+    "output_path": "study/templates-v2/geometry/debug-stage1/04_clip_overlay_e4lGbQp4pU4_clip70_9_frame0000.png",
+    "category": "easy-stationary",
+    "piece_count": 16,
+    "board_fen": "2b4r/p4pk1/1b4p1/3B1P2/P6r/4N3/4R2P/2R4K",
+    "min_visibility": 0.0,
+    "max_visibility": 1.0,
+    "mean_visibility": 0.9272302480325405,
+    "annotated_squares": [
+      "f7",
+      "c1",
+      "c8",
+      "h8",
+      "h4",
+      "g7",
+      "g6",
+      "h2",
+      "f5"
+    ]
+  },
+  {
+    "frame_id": "clip_overlay_e4lGbQp4pU4_clip70_9_frame0076",
+    "image_path": "study/eval/frames/clip_overlay_e4lGbQp4pU4_clip70_9_frame0076.jpg",
+    "output_path": "study/templates-v2/geometry/debug-stage1/05_clip_overlay_e4lGbQp4pU4_clip70_9_frame0076.png",
+    "category": "easy-stationary",
+    "piece_count": 12,
+    "board_fen": "2b4r/p5k1/1b4p1/8/P7/4NR2/4R2P/7K",
+    "min_visibility": 0.4482051282051282,
+    "max_visibility": 1.0,
+    "mean_visibility": 0.9480760293783107,
+    "annotated_squares": [
+      "e3",
+      "c8",
+      "h8",
+      "g7",
+      "g6",
+      "h2",
+      "a7",
+      "a4"
+    ]
+  }
+]

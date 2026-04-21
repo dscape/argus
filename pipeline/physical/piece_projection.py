@@ -42,6 +42,7 @@ class CameraPose:
     R: np.ndarray  # (3, 3) rotation, board frame -> camera frame
     t: np.ndarray  # (3, 1) translation, board frame origin -> camera frame
     normal: np.ndarray  # (3,) board-plane normal in camera frame
+    up_sign: float  # +1/-1 chosen so lifted points move upward in the image
 
     @property
     def projection(self) -> np.ndarray:
@@ -182,13 +183,11 @@ def camera_pose_from_corners(
     IPPE on 4 coplanar points has a sign ambiguity -- two R/t solutions reproject
     the same corners. We run ``cv2.solvePnPGeneric`` to get both candidates and
     keep the one whose board-plane normal has the SMALLER z in camera coords.
-    That solution corresponds to the camera viewing the board from the +z side
-    of the board plane in our world frame (so ``piece_height > 0`` moves
-    upward, toward the camera, in image space).
 
-    Note: even after picking the "better" solution, the sign of piece lift in
-    world coords can still be positive or negative depending on the corner
-    winding order. ``project_piece_box`` handles that at projection time.
+    Corner winding can still flip the sign of world +z relative to image "up".
+    Resolve that empirically per frame: project a test point at ``(4, 4, 0)``
+    and another at ``(4, 4, 1)``, then choose ``up_sign`` so a lifted point has
+    a smaller image-space y coordinate.
     """
     image_points = np.asarray(corners, dtype=np.float32)
     if image_points.shape != (4, 2):
@@ -220,11 +219,38 @@ def camera_pose_from_corners(
         normal = R64 @ np.array([0.0, 0.0, 1.0])
         if float(t64[2, 0]) <= 0:
             continue
+        candidate = CameraPose(
+            K=K.astype(np.float64),
+            R=R64,
+            t=t64,
+            normal=normal,
+            up_sign=1.0,
+        )
         if best_pose is None or normal[2] < best_pose.normal[2]:
-            best_pose = CameraPose(K=K.astype(np.float64), R=R64, t=t64, normal=normal)
+            best_pose = candidate
     if best_pose is None:
         raise ValueError(f"solvePnPGeneric gave no front-facing solution for {corners}")
-    return best_pose
+    return CameraPose(
+        K=best_pose.K,
+        R=best_pose.R,
+        t=best_pose.t,
+        normal=best_pose.normal,
+        up_sign=_empirical_up_sign(best_pose),
+    )
+
+
+def _empirical_up_sign(pose: CameraPose) -> float:
+    test_points = np.array(
+        [
+            [4.0, 4.0, 0.0],
+            [4.0, 4.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    projected = project_points(pose, test_points)
+    base_y = float(projected[0, 1])
+    lifted_y = float(projected[1, 1])
+    return 1.0 if lifted_y <= base_y else -1.0
 
 
 def project_points(pose: CameraPose, points_3d: np.ndarray) -> np.ndarray:
@@ -289,15 +315,10 @@ def project_piece_box(
     (``piece_height`` above the board) corners. "Above" is determined from the
     recovered pose -- see below.
 
-    Sign convention: the annotation's corner winding order fixes which way
-    world +z points. For some annotations +z is "up" (away from board toward
-    camera), for others +z is "down" (into the ground). We detect this from
-    the pose: if the board-plane normal in camera coords points away from the
-    camera (``normal[2] > 0``), then world +z is into the ground, so we lift
-    the piece in -z instead. Either way, the image projection ends up with
-    the piece top on the camera-facing side of the board.
+    Sign convention: ``pose.up_sign`` is chosen empirically once per frame by
+    comparing a projected point at ``(4, 4, 0)`` with one at ``(4, 4, 1)`` and
+    picking the sign that makes lifted points move upward in the image.
     """
-    up_sign = -1.0 if float(pose.normal[2]) > 0 else 1.0
     base = np.array(
         [
             [col, row, 0.0],
@@ -308,7 +329,7 @@ def project_piece_box(
         dtype=np.float64,
     )
     top = base.copy()
-    top[:, 2] = up_sign * float(piece_height)
+    top[:, 2] = float(pose.up_sign) * float(piece_height)
     points = np.vstack([base, top])
     if corners is not None:
         return project_points_with_base_homography(pose, corners, points)

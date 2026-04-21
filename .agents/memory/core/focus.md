@@ -1,7 +1,0 @@
-- Primary objective: improve physical board-exact with a legal transition-constrained decoder replacing EMA-only temporal reading.
-- Immediate product/debug step: resolve or explicitly document any remaining geometry/route gap around runtime evaluation pages so inspection stays trustworthy and consistent with piece-projection contract.
-- Use failure-study label `physical_board_failure_study_current_defaults` to inspect the current default `5.68%` board-exact run; current split is mostly temporal ambiguity (`6/8`) vs piece/square evidence (`2/8`).
-- Secondary objective: keep `/evaluate/physical/<session>` visuals trustworthy for geometry inspection and matched to source-frame/client-projected overlays.
-- Parallel objective: continue corrected-native autoresearch only through one small decoder-only edit in `autoresearch/train.py`.
-- Immediate autoresearch next step: inspect `autoresearch/results.tsv`, `autoresearch/run.log`, `autoresearch/best_train.py`, and `autoresearch/train.py`; confirm `v1348` execution state; if it executed, recompute the next exact Decimal midpoint from the true executed bracket `[v1347 harmful, v1348 flat]` on the same compact shelf, then prepare exactly one short-named experiment.
-- Also verify the new failure-viewer 64-square evidence grid behaves consistently with runtime inspection and uses the existing `stateless_square_probabilities` surface without geometry regressions.

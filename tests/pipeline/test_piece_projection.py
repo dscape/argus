@@ -52,6 +52,25 @@ def test_camera_pose_roundtrip_recovers_known_pose() -> None:
     assert max_err < 1e-2, f"round-trip error {max_err:.3f} px should be near zero"
 
 
+def test_camera_pose_up_sign_uses_empirical_image_y_lift_direction() -> None:
+    corners = (
+        (594.9695434570312, 193.4929656982422),
+        (515.9441528320312, 396.70159912109375),
+        (26.26903533935547, 319.0871887207031),
+        (198.4314727783203, 137.04611206054688),
+    )
+
+    pose = camera_pose_from_corners(corners, K=_K)
+
+    heuristic_up_sign = -1.0 if float(pose.normal[2]) > 0 else 1.0
+    assert heuristic_up_sign != pose.up_sign
+    projected = project_points(
+        pose,
+        np.array([[4.0, 4.0, 0.0], [4.0, 4.0, float(pose.up_sign)]], dtype=np.float64),
+    )
+    assert projected[1, 1] < projected[0, 1]
+
+
 def test_project_piece_box_has_8_corners_with_base_and_top() -> None:
     rvec = np.array([np.radians(-45.0), 0.0, 0.0], dtype=np.float32)
     tvec = np.array([-4.0, -4.0, 10.0], dtype=np.float32)
