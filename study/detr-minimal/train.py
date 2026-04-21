@@ -18,7 +18,13 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from data import DetrBoardDataset, load_annotation_rows, load_replay_rows, select_rows
-from model import build_model, compute_losses, decode_predictions
+from model import (
+    MINIMAL_ARCHITECTURE,
+    build_model,
+    decode_predictions,
+    forward_with_loss,
+    normalize_architecture,
+)
 
 from argus.device import resolve_device
 
@@ -26,6 +32,9 @@ from argus.device import resolve_device
 def main() -> None:
     args = build_parser().parse_args()
     device = torch.device(resolve_device(args.device))
+    architecture = normalize_architecture(args.architecture)
+    num_queries = args.num_queries or (32 if architecture == MINIMAL_ARCHITECTURE else 300)
+    decoder_layers = args.decoder_layers or (3 if architecture == MINIMAL_ARCHITECTURE else 6)
     output_dir = (args.output_dir or (_THIS_DIR / "models" / timestamp_slug())).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -39,8 +48,16 @@ def main() -> None:
             f"Need non-empty train/val splits, got train={len(train_rows)} val={len(val_rows)}"
         )
 
-    train_dataset = DetrBoardDataset(rows=train_rows, image_size=args.image_size)
-    val_dataset = DetrBoardDataset(rows=val_rows, image_size=args.image_size)
+    train_dataset = DetrBoardDataset(
+        rows=train_rows,
+        image_size=args.image_size,
+        target_mode=architecture,
+    )
+    val_dataset = DetrBoardDataset(
+        rows=val_rows,
+        image_size=args.image_size,
+        target_mode=architecture,
+    )
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -57,14 +74,16 @@ def main() -> None:
     )
 
     model = build_model(
+        architecture=architecture,
         encoder_type=args.encoder_type,
         model_name=args.model_name,
+        rtdetr_model_name=args.rtdetr_model_name,
         freeze_encoder=args.freeze_encoder,
-        num_queries=args.num_queries,
-        decoder_layers=args.decoder_layers,
+        num_queries=num_queries,
+        decoder_layers=decoder_layers,
         dropout=args.dropout,
     ).to(device)
-    if args.unfreeze_last_n > 0:
+    if architecture == MINIMAL_ARCHITECTURE and args.unfreeze_last_n > 0:
         model.vision_encoder.unfreeze_last_n_layers(args.unfreeze_last_n)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -83,6 +102,8 @@ def main() -> None:
             model,
             val_loader,
             device=device,
+            architecture=architecture,
+            image_size=args.image_size,
             lambda_square=args.lambda_square,
             lambda_presence=args.lambda_presence,
         )
@@ -100,17 +121,11 @@ def main() -> None:
             running_samples = 0
             for images, targets in train_loader:
                 images = images.to(device)
-                prepared_targets = [
-                    {
-                        "piece_types": target["piece_types"].to(device),
-                        "square_indices": target["square_indices"].to(device),
-                    }
-                    for target in targets
-                ]
-                outputs = model(images)
-                loss, loss_terms = compute_losses(
-                    outputs,
-                    prepared_targets,
+                outputs, loss, loss_terms = forward_with_loss(
+                    model,
+                    images,
+                    targets,
+                    architecture=architecture,
                     lambda_square=args.lambda_square,
                     lambda_presence=args.lambda_presence,
                 )
@@ -125,6 +140,8 @@ def main() -> None:
                 model,
                 val_loader,
                 device=device,
+                architecture=architecture,
+                image_size=args.image_size,
                 lambda_square=args.lambda_square,
                 lambda_presence=args.lambda_presence,
             )
@@ -161,14 +178,8 @@ def main() -> None:
         }
 
     checkpoint = {
-        "architecture": "study_detr_minimal",
+        "architecture": architecture,
         "state_dict": best_state,
-        "encoder_config": {
-            "encoder_type": args.encoder_type,
-            "model_name": args.model_name,
-            "frozen": args.freeze_encoder,
-            "unfreeze_last_n": args.unfreeze_last_n,
-        },
         **model.checkpoint_config(),
         "image_size": args.image_size,
         "lambda_square": args.lambda_square,
@@ -179,7 +190,16 @@ def main() -> None:
         "best_val_per_square_accuracy": best_metric[1],
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }
-    checkpoint_path = output_dir / "detr_minimal.pt"
+    if architecture == MINIMAL_ARCHITECTURE:
+        checkpoint["encoder_config"] = {
+            "encoder_type": args.encoder_type,
+            "model_name": args.model_name,
+            "frozen": args.freeze_encoder,
+            "unfreeze_last_n": args.unfreeze_last_n,
+        }
+        checkpoint_path = output_dir / "detr_minimal.pt"
+    else:
+        checkpoint_path = output_dir / "rt_detr.pt"
     torch.save(checkpoint, checkpoint_path)
     history_path = output_dir / "history.json"
     history_path.write_text(json.dumps(history, indent=2))
@@ -246,6 +266,8 @@ def evaluate(
     loader: DataLoader,
     *,
     device: torch.device,
+    architecture: str,
+    image_size: int,
     lambda_square: float,
     lambda_presence: float,
 ) -> dict[str, float]:
@@ -258,32 +280,36 @@ def evaluate(
     with torch.no_grad():
         for images, targets in loader:
             images = images.to(device)
-            prepared_targets = [
-                {
-                    "piece_types": target["piece_types"].to(device),
-                    "square_indices": target["square_indices"].to(device),
-                }
-                for target in targets
-            ]
-            outputs = model(images)
-            loss, loss_terms = compute_losses(
-                outputs,
-                prepared_targets,
+            outputs, loss, loss_terms = forward_with_loss(
+                model,
+                images,
+                targets,
+                architecture=architecture,
                 lambda_square=lambda_square,
                 lambda_presence=lambda_presence,
             )
             total_loss += float(loss.item()) * int(images.shape[0])
-            decoded = decode_predictions(outputs)
+            decoded = decode_predictions(
+                outputs,
+                architecture=architecture,
+                square_boxes=[target["square_boxes"] for target in targets]
+                if architecture != MINIMAL_ARCHITECTURE
+                else None,
+                image_size=image_size if architecture != MINIMAL_ARCHITECTURE else None,
+            )
             for prediction, target in zip(decoded, targets):
-                gt_labels = [0] * 64
-                for piece_type, square_index in zip(
-                    target["piece_types"].tolist(), target["square_indices"].tolist()
-                ):
-                    from data import square_output_index_to_board_index
+                if architecture == MINIMAL_ARCHITECTURE:
+                    gt_labels = [0] * 64
+                    for piece_type, square_index in zip(
+                        target["piece_types"].tolist(), target["square_indices"].tolist()
+                    ):
+                        from data import square_output_index_to_board_index
 
-                    board_index = square_output_index_to_board_index(int(square_index))
-                    if board_index is not None:
-                        gt_labels[board_index] = int(piece_type)
+                        board_index = square_output_index_to_board_index(int(square_index))
+                        if board_index is not None:
+                            gt_labels[board_index] = int(piece_type)
+                else:
+                    gt_labels = target["board_labels"].tolist()
                 predicted_labels = prediction["board_labels"]
                 board_total += 1
                 if tuple(gt_labels) == tuple(predicted_labels):
@@ -302,7 +328,12 @@ def timestamp_slug() -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train the minimal DETR study.")
+    parser = argparse.ArgumentParser(description="Train the minimal DETR or RT-DETR study.")
+    parser.add_argument(
+        "--architecture",
+        choices=("minimal-detr", "rt-detr"),
+        default="minimal-detr",
+    )
     parser.add_argument("--source", choices=("replay", "annotations"), default="replay")
     parser.add_argument(
         "--clips-dir", type=Path, default=_PROJECT_ROOT / "data" / "argus" / "train_real"
@@ -317,12 +348,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--val-fraction", type=float, default=0.1)
     parser.add_argument("--encoder-type", type=str, default="dinov2")
     parser.add_argument("--model-name", type=str, default=None)
+    parser.add_argument("--rtdetr-model-name", type=str, default=None)
     parser.set_defaults(freeze_encoder=True)
     parser.add_argument("--freeze-encoder", dest="freeze_encoder", action="store_true")
     parser.add_argument("--train-encoder", dest="freeze_encoder", action="store_false")
     parser.add_argument("--unfreeze-last-n", type=int, default=0)
-    parser.add_argument("--num-queries", type=int, default=32)
-    parser.add_argument("--decoder-layers", type=int, default=3)
+    parser.add_argument("--num-queries", type=int, default=None)
+    parser.add_argument("--decoder-layers", type=int, default=None)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--lambda-square", type=float, default=2.0)

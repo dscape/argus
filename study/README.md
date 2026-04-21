@@ -56,10 +56,25 @@ Train:
 ./.venv/bin/python study/detr-minimal/train.py --source replay --max-rows 50000
 ```
 
+Train RT-DETR on the same study setup:
+
+```bash
+PYTORCH_ENABLE_MPS_FALLBACK=1 ./.venv/bin/python study/detr-minimal/train.py --architecture rt-detr --source replay --max-rows 50000
+```
+
+On this Mac/MPS environment RT-DETR backprop currently needs PyTorch's MPS CPU fallback because
+`aten::grid_sampler_2d_backward` is not implemented natively on MPS in the installed torch build.
+
 Eval:
 
 ```bash
 ./.venv/bin/python study/detr-minimal/eval.py --checkpoint <path/to/detr_minimal.pt>
+```
+
+Eval an RT-DETR checkpoint:
+
+```bash
+./.venv/bin/python study/detr-minimal/eval.py --checkpoint <path/to/rt_detr.pt>
 ```
 
 ## Study 3: geometric mask

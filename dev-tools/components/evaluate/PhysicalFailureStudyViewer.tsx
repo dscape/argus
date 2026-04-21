@@ -589,11 +589,11 @@ function ProbabilityDistribution({
                 </div>
                 <div className="h-2 overflow-hidden rounded bg-muted">
                   <div
-                    className="h-full rounded bg-foreground/80"
+                    className="h-full rounded bg-foreground/80 transition-[width] duration-150"
                     style={{ width: `${Math.max(probability, 0) * 100}%` }}
                   />
                 </div>
-                <div className="text-right font-mono text-xs">{(probability * 100).toFixed(1)}%</div>
+                <div className="text-right font-mono text-xs tabular-nums">{(probability * 100).toFixed(1)}%</div>
                 <div className="flex min-h-5 flex-wrap justify-end gap-1">
                   {badges.map((badge) => (
                     <Badge key={`${className}-${badge}`} variant="outline" className="px-1 py-0 text-[10px]">
@@ -667,7 +667,7 @@ function HoverInspector({
 
         <div className="space-y-3">
           <div className="grid min-h-[108px] grid-cols-[88px,1fr] gap-2 rounded-md border p-3">
-            <div className="relative aspect-square overflow-hidden rounded border bg-muted/20">
+            <div className="relative aspect-square overflow-hidden rounded-sm bg-muted/20 ring-1 ring-inset ring-black/10 dark:ring-white/10">
               {hasPreview ? (
                 <img
                   src={imageSrc!}
@@ -810,7 +810,7 @@ function SquareEvidencePanel({
                   })
                 }
                 onMouseLeave={() => onHoverSquare(null)}
-                className={`rounded border p-1 text-left transition-colors ${
+                className={`rounded-md border p-1 text-left transition-[color,background-color,border-color,transform] active:scale-[0.96] ${
                   active
                     ? "border-foreground bg-muted/20"
                     : wrong
@@ -818,11 +818,11 @@ function SquareEvidencePanel({
                       : "border-border hover:bg-muted/20"
                 }`}
               >
-                <div className="mb-1 flex items-center justify-between font-mono text-[10px]">
+                <div className="mb-1 flex items-center justify-between font-mono text-[10px] tabular-nums">
                   <span>{entry.square}</span>
                   <span>{topProb}</span>
                 </div>
-                <div className="relative aspect-square overflow-hidden rounded border bg-muted/20">
+                <div className="relative aspect-square overflow-hidden rounded-sm bg-muted/20 ring-1 ring-inset ring-black/10 dark:ring-white/10">
                   {imageSrc && entry.bbox && cropStyle ? (
                     <img
                       src={imageSrc}
@@ -848,7 +848,7 @@ function SquareEvidencePanel({
           {activeEntry ? (
             <>
               <div className="grid gap-3 sm:grid-cols-[96px_minmax(0,1fr)]">
-                <div className="relative aspect-square overflow-hidden rounded border bg-muted/20">
+                <div className="relative aspect-square overflow-hidden rounded-sm bg-muted/20 ring-1 ring-inset ring-black/10 dark:ring-white/10">
                   {imageSrc && activeEntry.bbox && activeCropStyle ? (
                     <img
                       src={imageSrc}
@@ -874,7 +874,7 @@ function SquareEvidencePanel({
                     {" · "}
                     decoded {pieceLabel(pieceSymbolAtSquare(frame.decoded_fen, activeEntry.square))}
                   </div>
-                  <div className="text-xs text-muted-foreground">
+                  <div className="text-xs text-muted-foreground tabular-nums">
                     top-1 {pieceLabel(activeEntry.top1Class)}
                     {activeEntry.top1Probability != null
                       ? ` · ${(activeEntry.top1Probability * 100).toFixed(1)}%`

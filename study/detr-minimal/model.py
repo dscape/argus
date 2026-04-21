@@ -3,20 +3,30 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import torch
 import torch.nn as nn
 from data import (
+    DETECTION_CLASS_COUNT,
     NO_PIECE_TYPE_INDEX,
     NO_SQUARE_INDEX,
     SQUARE_OUTPUT_NAMES,
     TYPE_CLASS_NAMES,
+    board_index_to_square_name,
+    detection_class_to_board_label,
     square_output_index_to_board_index,
 )
 from scipy.optimize import linear_sum_assignment
+from transformers import RTDetrConfig, RTDetrForObjectDetection
+from transformers.image_transforms import center_to_corners_format
 
 from argus.model.vision_encoder import VisionEncoder, default_model_name_for_encoder_type
+
+Architecture = Literal["minimal_detr", "rt_detr"]
+
+MINIMAL_ARCHITECTURE: Architecture = "minimal_detr"
+RTDETR_ARCHITECTURE: Architecture = "rt_detr"
 
 
 @dataclass(frozen=True)
@@ -89,47 +99,179 @@ class MinimalDetr(nn.Module):
         }
 
 
+class RtDetrStudyModel(nn.Module):
+    def __init__(
+        self,
+        *,
+        detector: RTDetrForObjectDetection,
+        pretrained_model_name: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.detector = detector
+        self.pretrained_model_name = pretrained_model_name
+
+    def forward(
+        self,
+        images: torch.Tensor,
+        *,
+        labels: list[dict[str, torch.Tensor]] | None = None,
+    ):
+        return self.detector(pixel_values=images, labels=labels)
+
+    def checkpoint_config(self) -> dict[str, Any]:
+        return {
+            "model_config": self.detector.config.to_dict(),
+            "pretrained_model_name": self.pretrained_model_name,
+        }
+
+
+def normalize_architecture(value: object) -> Architecture:
+    normalized = str(value or MINIMAL_ARCHITECTURE).strip().lower().replace("-", "_")
+    if normalized in {MINIMAL_ARCHITECTURE, "study_detr_minimal"}:
+        return MINIMAL_ARCHITECTURE
+    if normalized in {RTDETR_ARCHITECTURE, "rtdetr", "study_rtdetr"}:
+        return RTDETR_ARCHITECTURE
+    raise ValueError(f"Unsupported architecture: {value!r}")
+
+
 def build_model(
     *,
+    architecture: str = MINIMAL_ARCHITECTURE,
     encoder_type: str = "dinov2",
     model_name: str | None = None,
+    rtdetr_model_name: str | None = None,
     freeze_encoder: bool = True,
     num_queries: int = 32,
     decoder_layers: int = 3,
     dropout: float = 0.1,
-) -> MinimalDetr:
-    resolved_model_name = model_name or default_model_name_for_encoder_type(encoder_type)
-    encoder = VisionEncoder(
-        encoder_type=encoder_type,
-        model_name=resolved_model_name,
-        frozen=freeze_encoder,
+) -> nn.Module:
+    resolved_architecture = normalize_architecture(architecture)
+    if resolved_architecture == MINIMAL_ARCHITECTURE:
+        resolved_model_name = model_name or default_model_name_for_encoder_type(encoder_type)
+        encoder = VisionEncoder(
+            encoder_type=encoder_type,
+            model_name=resolved_model_name,
+            frozen=freeze_encoder,
+        )
+        return MinimalDetr(
+            vision_encoder=encoder,
+            config=MinimalDetrConfig(
+                num_queries=num_queries,
+                decoder_layers=decoder_layers,
+                dropout=dropout,
+            ),
+        )
+    return build_rtdetr_model(
+        model_name=rtdetr_model_name,
+        num_queries=num_queries,
+        decoder_layers=decoder_layers,
     )
-    return MinimalDetr(
-        vision_encoder=encoder,
-        config=MinimalDetrConfig(
+
+
+def build_rtdetr_model(
+    *,
+    model_name: str | None = None,
+    num_queries: int = 300,
+    decoder_layers: int = 6,
+) -> RtDetrStudyModel:
+    id2label = {index: name for index, name in enumerate(TYPE_CLASS_NAMES[1:])}
+    label2id = {name: index for index, name in id2label.items()}
+    if model_name is None:
+        config = RTDetrConfig(
+            num_labels=DETECTION_CLASS_COUNT,
             num_queries=num_queries,
             decoder_layers=decoder_layers,
-            dropout=dropout,
-        ),
+            id2label=id2label,
+            label2id=label2id,
+        )
+        detector = RTDetrForObjectDetection(config)
+        return RtDetrStudyModel(detector=detector, pretrained_model_name=None)
+
+    config = RTDetrConfig.from_pretrained(model_name)
+    config.num_labels = DETECTION_CLASS_COUNT
+    config.id2label = id2label
+    config.label2id = label2id
+    config.num_queries = num_queries
+    config.decoder_layers = decoder_layers
+    detector = RTDetrForObjectDetection.from_pretrained(
+        model_name,
+        config=config,
+        ignore_mismatched_sizes=True,
     )
+    return RtDetrStudyModel(detector=detector, pretrained_model_name=model_name)
 
 
-def load_checkpoint(checkpoint_path: str | Path, *, device: torch.device) -> MinimalDetr:
+def load_checkpoint(checkpoint_path: str | Path, *, device: torch.device) -> nn.Module:
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    encoder_cfg = payload["encoder_config"]
-    model_cfg = payload["model_config"]
-    model = build_model(
-        encoder_type=str(encoder_cfg.get("encoder_type", "dinov2")),
-        model_name=encoder_cfg.get("model_name"),
-        freeze_encoder=bool(encoder_cfg.get("frozen", True)),
-        num_queries=int(model_cfg.get("num_queries", 32)),
-        decoder_layers=int(model_cfg.get("decoder_layers", 3)),
-        dropout=float(model_cfg.get("dropout", 0.1)),
-    )
+    architecture = normalize_architecture(payload.get("architecture"))
+    if architecture == MINIMAL_ARCHITECTURE:
+        encoder_cfg = payload["encoder_config"]
+        model_cfg = payload["model_config"]
+        model = build_model(
+            architecture=architecture,
+            encoder_type=str(encoder_cfg.get("encoder_type", "dinov2")),
+            model_name=encoder_cfg.get("model_name"),
+            freeze_encoder=bool(encoder_cfg.get("frozen", True)),
+            num_queries=int(model_cfg.get("num_queries", 32)),
+            decoder_layers=int(model_cfg.get("decoder_layers", 3)),
+            dropout=float(model_cfg.get("dropout", 0.1)),
+        )
+    else:
+        config = RTDetrConfig.from_dict(payload["model_config"])
+        detector = RTDetrForObjectDetection(config)
+        model = RtDetrStudyModel(
+            detector=detector,
+            pretrained_model_name=payload.get("pretrained_model_name"),
+        )
     model.load_state_dict(payload["state_dict"])
     model.to(device)
     model.eval()
     return model
+
+
+def forward_with_loss(
+    model: nn.Module,
+    images: torch.Tensor,
+    targets: list[dict[str, torch.Tensor]],
+    *,
+    architecture: str,
+    lambda_square: float,
+    lambda_presence: float,
+) -> tuple[Any, torch.Tensor, dict[str, float]]:
+    resolved_architecture = normalize_architecture(architecture)
+    if resolved_architecture == MINIMAL_ARCHITECTURE:
+        outputs = model(images)
+        prepared_targets = [
+            {
+                "piece_types": target["piece_types"].to(images.device),
+                "square_indices": target["square_indices"].to(images.device),
+            }
+            for target in targets
+        ]
+        loss, loss_terms = compute_losses(
+            outputs,
+            prepared_targets,
+            lambda_square=lambda_square,
+            lambda_presence=lambda_presence,
+        )
+        return outputs, loss, loss_terms
+
+    prepared_labels = [
+        {
+            "class_labels": target["class_labels"].to(images.device),
+            "boxes": target["boxes"].to(images.device),
+        }
+        for target in targets
+    ]
+    outputs = model(images, labels=prepared_labels)
+    loss = outputs.loss
+    if loss is None:
+        raise RuntimeError("RT-DETR forward pass did not return a loss")
+    loss_terms = {"loss_total": float(loss.item())}
+    if outputs.loss_dict is not None:
+        for key, value in outputs.loss_dict.items():
+            loss_terms[str(key)] = float(value.item() if hasattr(value, "item") else value)
+    return outputs, loss, loss_terms
 
 
 def hungarian_match(
@@ -247,6 +389,29 @@ def compute_losses(
 
 
 def decode_predictions(
+    outputs: Any,
+    *,
+    architecture: str = MINIMAL_ARCHITECTURE,
+    presence_threshold: float = 0.5,
+    square_boxes: torch.Tensor | list[torch.Tensor] | None = None,
+    image_size: int | None = None,
+) -> list[dict[str, object]]:
+    resolved_architecture = normalize_architecture(architecture)
+    if resolved_architecture == MINIMAL_ARCHITECTURE:
+        return decode_minimal_detr_predictions(outputs, presence_threshold=presence_threshold)
+    if square_boxes is None:
+        raise ValueError("square_boxes are required to decode RT-DETR predictions")
+    if image_size is None:
+        raise ValueError("image_size is required to decode RT-DETR predictions")
+    return decode_rtdetr_predictions(
+        outputs,
+        score_threshold=presence_threshold,
+        square_boxes=square_boxes,
+        image_size=image_size,
+    )
+
+
+def decode_minimal_detr_predictions(
     outputs: dict[str, torch.Tensor],
     *,
     presence_threshold: float = 0.5,
@@ -295,6 +460,124 @@ def decode_predictions(
     return decoded
 
 
+def decode_rtdetr_predictions(
+    outputs: Any,
+    *,
+    score_threshold: float,
+    square_boxes: torch.Tensor | list[torch.Tensor],
+    image_size: int,
+) -> list[dict[str, object]]:
+    logits = outputs["logits"] if isinstance(outputs, dict) else outputs.logits
+    pred_boxes = outputs["pred_boxes"] if isinstance(outputs, dict) else outputs.pred_boxes
+    if logits is None or pred_boxes is None:
+        raise ValueError("RT-DETR outputs must include logits and pred_boxes")
+
+    scale = torch.tensor(
+        [image_size, image_size, image_size, image_size],
+        device=pred_boxes.device,
+        dtype=pred_boxes.dtype,
+    )
+    absolute_boxes = center_to_corners_format(pred_boxes) * scale
+    square_box_batch = normalize_square_boxes_batch(
+        square_boxes,
+        batch_size=absolute_boxes.shape[0],
+        device=absolute_boxes.device,
+        dtype=absolute_boxes.dtype,
+    )
+
+    decoded: list[dict[str, object]] = []
+    batch_size = logits.shape[0]
+    for batch_index in range(batch_size):
+        scores, class_indices = torch.sigmoid(logits[batch_index]).max(dim=-1)
+        order = torch.argsort(scores, descending=True)
+        board_labels = [0] * 64
+        piece_entries: list[tuple[float, str, str | None]] = []
+        occupied_squares: set[int] = set()
+        board_square_boxes = square_box_batch[batch_index]
+        for query_index in order.tolist():
+            score = float(scores[query_index].item())
+            if score < score_threshold:
+                continue
+            class_index = int(class_indices[query_index].item())
+            if class_index < 0 or class_index >= DETECTION_CLASS_COUNT:
+                continue
+            ious = box_iou(
+                absolute_boxes[batch_index, query_index].unsqueeze(0), board_square_boxes
+            )
+            square_index = int(ious.squeeze(0).argmax().item())
+            if float(ious[0, square_index].item()) <= 0.0 or square_index in occupied_squares:
+                continue
+            occupied_squares.add(square_index)
+            board_label = detection_class_to_board_label(class_index)
+            board_labels[square_index] = board_label
+            piece_entries.append(
+                (
+                    score,
+                    TYPE_CLASS_NAMES[board_label],
+                    board_index_to_square_name(square_index),
+                )
+            )
+        piece_entries.sort(key=lambda item: (-item[0], item[1], item[2] or ""))
+        decoded.append(
+            {
+                "board_labels": tuple(board_labels),
+                "pieces": tuple(
+                    (piece_name, square_name) for _score, piece_name, square_name in piece_entries
+                ),
+            }
+        )
+    return decoded
+
+
+def normalize_square_boxes_batch(
+    square_boxes: torch.Tensor | list[torch.Tensor],
+    *,
+    batch_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    if isinstance(square_boxes, torch.Tensor):
+        batch = square_boxes.unsqueeze(0) if square_boxes.ndim == 2 else square_boxes
+        if batch.shape != (batch_size, 64, 4):
+            raise ValueError(
+                f"Expected square_boxes with shape {(batch_size, 64, 4)}, got {tuple(batch.shape)}"
+            )
+        return batch.to(device=device, dtype=dtype)
+    if len(square_boxes) != batch_size:
+        raise ValueError(f"Expected {batch_size} square-box tensors, got {len(square_boxes)}")
+    tensors = [
+        (
+            value.to(device=device, dtype=dtype)
+            if isinstance(value, torch.Tensor)
+            else torch.tensor(value, device=device, dtype=dtype)
+        )
+        for value in square_boxes
+    ]
+    batch = torch.stack(tensors, dim=0)
+    if batch.shape != (batch_size, 64, 4):
+        raise ValueError(
+            f"Expected square_boxes with shape {(batch_size, 64, 4)}, got {tuple(batch.shape)}"
+        )
+    return batch
+
+
+def box_iou(boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
+    boxes1 = boxes1.to(torch.float32)
+    boxes2 = boxes2.to(torch.float32)
+    top_left = torch.maximum(boxes1[:, None, :2], boxes2[None, :, :2])
+    bottom_right = torch.minimum(boxes1[:, None, 2:], boxes2[None, :, 2:])
+    wh = (bottom_right - top_left).clamp_min(0.0)
+    intersection = wh[..., 0] * wh[..., 1]
+    area1 = (boxes1[:, 2] - boxes1[:, 0]).clamp_min(0.0) * (boxes1[:, 3] - boxes1[:, 1]).clamp_min(
+        0.0
+    )
+    area2 = (boxes2[:, 2] - boxes2[:, 0]).clamp_min(0.0) * (boxes2[:, 3] - boxes2[:, 1]).clamp_min(
+        0.0
+    )
+    union = area1[:, None] + area2[None, :] - intersection
+    return intersection / union.clamp_min(1e-6)
+
+
 def build_2d_sincos_position_embedding(
     *,
     height: int,
@@ -329,11 +612,19 @@ def mean_or_zero(values: list[torch.Tensor], *, device: torch.device) -> torch.T
 
 
 __all__ = [
+    "MINIMAL_ARCHITECTURE",
+    "RTDETR_ARCHITECTURE",
     "MinimalDetr",
     "MinimalDetrConfig",
+    "RtDetrStudyModel",
+    "box_iou",
     "build_model",
     "compute_losses",
     "decode_predictions",
+    "decode_minimal_detr_predictions",
+    "decode_rtdetr_predictions",
+    "forward_with_loss",
     "hungarian_match",
     "load_checkpoint",
+    "normalize_architecture",
 ]

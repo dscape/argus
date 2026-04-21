@@ -360,7 +360,7 @@ function HoveredSquarePreview({
 
   return (
     <div className="grid min-h-[108px] grid-cols-[88px,1fr] gap-2 rounded border p-2">
-      <div className="relative aspect-square overflow-hidden rounded border bg-muted/20">
+      <div className="relative aspect-square overflow-hidden rounded-sm bg-muted/20 ring-1 ring-inset ring-black/10 dark:ring-white/10">
         {hasPreview ? (
           <img
             src={imageSrc!}
@@ -467,11 +467,11 @@ function ProbabilityDistribution({
             </div>
             <div className="h-2 overflow-hidden rounded bg-muted">
               <div
-                className="h-full rounded bg-foreground/80"
+                className="h-full rounded bg-foreground/80 transition-[width] duration-150"
                 style={{ width: `${Math.max(probability, 0) * 100}%` }}
               />
             </div>
-            <div className="text-right font-mono text-xs">
+            <div className="text-right font-mono text-xs tabular-nums">
               {(probability * 100).toFixed(1)}%
             </div>
             <div className="flex min-h-5 flex-wrap justify-end gap-1">
@@ -607,7 +607,7 @@ export default function PhysicalRuntimeCard({
               <button
                 onClick={onPin}
                 title={pinned ? "Unpin from top" : "Pin to top"}
-                className={`flex-shrink-0 w-5 h-5 flex items-center justify-center rounded transition-colors ${
+                className={`relative flex-shrink-0 w-5 h-5 flex items-center justify-center rounded transition-[color,transform] active:scale-[0.96] before:absolute before:inset-y-[-10px] before:-left-[4px] before:-right-[6px] before:content-[''] ${
                   pinned
                     ? "text-foreground"
                     : "text-muted-foreground/40 hover:text-foreground"
@@ -622,7 +622,7 @@ export default function PhysicalRuntimeCard({
               {clipLabel} · f{result.frame_index.toString().padStart(4, "0")}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mt-0.5">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mt-0.5 tabular-nums">
             <span>{result.elapsed_ms.toFixed(1)}ms</span>
             <span>{deltaLabel(recoveredSquares)}</span>
             <span>single {result.stateless_error_count} wrong</span>
@@ -631,7 +631,7 @@ export default function PhysicalRuntimeCard({
         </div>
         <div className="text-right shrink-0">
           <span
-            className={`text-sm font-bold ${
+            className={`text-sm font-bold tabular-nums ${
               result.temporal_exact_match ? "text-green-600" : "text-red-600"
             }`}
           >
@@ -639,7 +639,7 @@ export default function PhysicalRuntimeCard({
               ? "✓ Exact"
               : `✗ ${result.temporal_error_count} wrong`}
           </span>
-          <div className="text-xs text-muted-foreground mt-0.5">
+          <div className="text-xs text-muted-foreground mt-0.5 tabular-nums">
             temp {formatPercent(result.temporal_square_accuracy)} · single {formatPercent(result.stateless_square_accuracy)}
           </div>
         </div>
@@ -758,14 +758,14 @@ export default function PhysicalRuntimeCard({
         <button
           type="button"
           onClick={() => setShowSquareEvidence((current) => !current)}
-          className="rounded border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          className="rounded border px-3 py-1.5 text-xs text-muted-foreground transition-[color,transform] hover:text-foreground active:scale-[0.96]"
         >
           {showSquareEvidence ? "Hide" : "Show"} raw square evidence
         </button>
       </div>
 
       {showSquareEvidence ? (
-        <div className="rounded-lg border p-3 space-y-3">
+        <div className="rounded-md border p-3 space-y-3">
           <div>
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
               Raw square evidence
@@ -796,7 +796,7 @@ export default function PhysicalRuntimeCard({
                   onClick={() => setSelectedEvidenceSquare(entry.square)}
                   onMouseEnter={() => handleEvidenceSquareHover(entry.square)}
                   onMouseLeave={() => handleEvidenceSquareHover(null)}
-                  className={`rounded border p-1 text-left transition-colors ${
+                  className={`rounded-md border p-1 text-left transition-[color,background-color,border-color,transform] active:scale-[0.96] ${
                     active
                       ? "border-foreground bg-muted/20"
                       : wrong
@@ -804,11 +804,11 @@ export default function PhysicalRuntimeCard({
                         : "border-border hover:bg-muted/20"
                   }`}
                 >
-                  <div className="mb-1 flex items-center justify-between font-mono text-[10px]">
+                  <div className="mb-1 flex items-center justify-between font-mono text-[10px] tabular-nums">
                     <span>{entry.square}</span>
                     <span>{topProb}</span>
                   </div>
-                  <div className="relative aspect-square overflow-hidden rounded border bg-muted/20">
+                  <div className="relative aspect-square overflow-hidden rounded-sm bg-muted/20 ring-1 ring-inset ring-black/10 dark:ring-white/10">
                     {imageSrc && entry.bbox && cropStyle ? (
                       <img
                         src={imageSrc}
@@ -834,7 +834,7 @@ export default function PhysicalRuntimeCard({
           {activeEvidenceEntry ? (
             <div className="space-y-3 rounded border p-3">
               <div className="grid gap-3 sm:grid-cols-[96px_minmax(0,1fr)]">
-                <div className="relative aspect-square overflow-hidden rounded border bg-muted/20">
+                <div className="relative aspect-square overflow-hidden rounded-sm bg-muted/20 ring-1 ring-inset ring-black/10 dark:ring-white/10">
                   {imageSrc && activeEvidenceEntry.bbox ? (
                     <img
                       src={imageSrc}
@@ -862,7 +862,7 @@ export default function PhysicalRuntimeCard({
                     {" · "}
                     temporal {pieceLabel(pieceSymbolAtSquare(result.temporal_fen, activeEvidenceEntry.square))}
                   </div>
-                  <div className="text-xs text-muted-foreground">
+                  <div className="text-xs text-muted-foreground tabular-nums">
                     top-1 {pieceLabel(activeEvidenceEntry.top1Class)}
                     {activeEvidenceEntry.top1Probability != null
                       ? ` · ${(activeEvidenceEntry.top1Probability * 100).toFixed(1)}%`

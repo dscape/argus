@@ -9,7 +9,10 @@ from typing import Any
 import cv2
 import numpy as np
 import torch
-from pipeline.physical.board_probe.board_data import preprocess_board_neighborhood_image
+from pipeline.physical.board_probe.board_data import (
+    prepare_board_neighborhood_geometry,
+    preprocess_board_neighborhood_image,
+)
 from pipeline.physical.shared.annotation_rows import load_annotated_oblique_rows
 from pipeline.physical.shared.real_board_data import load_real_board_rows
 from pipeline.physical.two_stage.classifier_data import NativeFrameLoader
@@ -38,6 +41,9 @@ TYPE_CLASS_NAMES = _TYPE_CLASS_NAMES
 TYPE_CLASS_TO_INDEX = {name: index for index, name in enumerate(TYPE_CLASS_NAMES)}
 SQUARE_OUTPUT_NAMES = _SQUARE_OUTPUT_NAMES
 SQUARE_OUTPUT_TO_INDEX = {name: index for index, name in enumerate(SQUARE_OUTPUT_NAMES)}
+DETECTION_CLASS_NAMES = TYPE_CLASS_NAMES[1:]
+DETECTION_CLASS_TO_INDEX = {name: index for index, name in enumerate(DETECTION_CLASS_NAMES)}
+DETECTION_CLASS_COUNT = len(DETECTION_CLASS_NAMES)
 
 
 @dataclass(frozen=True)
@@ -81,9 +87,13 @@ class DetrBoardDataset(Dataset[tuple[torch.Tensor, dict[str, torch.Tensor]]]):
         *,
         rows: list[BoardRow],
         image_size: int = 224,
+        target_mode: str = "minimal_detr",
     ) -> None:
+        if target_mode not in {"minimal_detr", "rt_detr"}:
+            raise ValueError(f"Unsupported target_mode: {target_mode}")
         self.rows = rows
         self.image_size = image_size
+        self.target_mode = target_mode
         self._clip_cache: dict[Path, dict[str, Any]] = {}
         self._native_loader = NativeFrameLoader()
 
@@ -97,15 +107,37 @@ class DetrBoardDataset(Dataset[tuple[torch.Tensor, dict[str, torch.Tensor]]]):
             clip_cache=self._clip_cache,
             native_loader=self._native_loader,
         )
-        image, _scaled_corners = preprocess_board_neighborhood_image(
+        if self.target_mode == "minimal_detr":
+            image, _scaled_corners = preprocess_board_neighborhood_image(
+                frame_bgr,
+                corners,
+                size=self.image_size,
+            )
+            type_targets, square_targets = labels_to_piece_targets(row.labels)
+            target = {
+                "piece_types": torch.tensor(type_targets, dtype=torch.long),
+                "square_indices": torch.tensor(square_targets, dtype=torch.long),
+            }
+            return image, target
+
+        image, _scaled_corners, square_boxes = prepare_board_neighborhood_geometry(
             frame_bgr,
             corners,
             size=self.image_size,
         )
-        type_targets, square_targets = labels_to_piece_targets(row.labels)
+        class_labels, boxes = labels_to_detection_targets(
+            row.labels,
+            square_boxes=square_boxes,
+            image_size=self.image_size,
+        )
+        box_tensor = torch.tensor(boxes, dtype=torch.float32)
+        if box_tensor.numel() == 0:
+            box_tensor = torch.empty((0, 4), dtype=torch.float32)
         target = {
-            "piece_types": torch.tensor(type_targets, dtype=torch.long),
-            "square_indices": torch.tensor(square_targets, dtype=torch.long),
+            "class_labels": torch.tensor(class_labels, dtype=torch.long),
+            "boxes": box_tensor,
+            "board_labels": torch.tensor(row.labels, dtype=torch.long),
+            "square_boxes": square_boxes.to(torch.float32),
         }
         return image, target
 
@@ -244,6 +276,69 @@ def labels_to_piece_targets(labels: tuple[int, ...]) -> tuple[tuple[int, ...], t
     return tuple(piece_types), tuple(square_indices)
 
 
+def board_label_to_detection_class(label: int) -> int:
+    if label <= 0 or label >= len(TYPE_CLASS_NAMES):
+        raise ValueError(
+            f"Expected placed piece label in [1, {len(TYPE_CLASS_NAMES) - 1}], got {label}"
+        )
+    return label - 1
+
+
+def detection_class_to_board_label(class_index: int) -> int:
+    if class_index < 0 or class_index >= DETECTION_CLASS_COUNT:
+        raise ValueError(
+            f"Expected detection class in [0, {DETECTION_CLASS_COUNT - 1}], got {class_index}"
+        )
+    return class_index + 1
+
+
+def labels_to_detection_targets(
+    labels: tuple[int, ...],
+    *,
+    square_boxes: torch.Tensor,
+    image_size: int,
+) -> tuple[tuple[int, ...], tuple[tuple[float, float, float, float], ...]]:
+    if square_boxes.shape != (64, 4):
+        raise ValueError(
+            f"Expected square_boxes with shape (64, 4), got {tuple(square_boxes.shape)}"
+        )
+    class_labels: list[int] = []
+    boxes: list[tuple[float, float, float, float]] = []
+    for square_index, label in enumerate(labels):
+        if label <= 0:
+            continue
+        class_labels.append(board_label_to_detection_class(int(label)))
+        boxes.append(
+            xyxy_box_to_normalized_cxcywh(square_boxes[square_index], image_size=image_size)
+        )
+    return tuple(class_labels), tuple(boxes)
+
+
+def xyxy_box_to_normalized_cxcywh(
+    box: torch.Tensor | np.ndarray,
+    *,
+    image_size: int,
+) -> tuple[float, float, float, float]:
+    if image_size <= 0:
+        raise ValueError(f"image_size must be > 0, got {image_size}")
+    if isinstance(box, np.ndarray):
+        values = [float(value) for value in box.tolist()]
+    else:
+        values = [float(value) for value in box.detach().cpu().tolist()]
+    xmin, ymin, xmax, ymax = values
+    width = max(xmax - xmin, 1e-6)
+    height = max(ymax - ymin, 1e-6)
+    center_x = xmin + (width / 2.0)
+    center_y = ymin + (height / 2.0)
+    scale = float(image_size)
+    return (
+        center_x / scale,
+        center_y / scale,
+        width / scale,
+        height / scale,
+    )
+
+
 def board_labels_from_eval_pieces(pieces: tuple[EvalPiece, ...]) -> tuple[int, ...]:
     labels = [0] * 64
     for piece in pieces:
@@ -372,6 +467,9 @@ def frame_tensor_to_bgr(frame: torch.Tensor) -> np.ndarray:
 
 __all__ = [
     "BoardRow",
+    "DETECTION_CLASS_COUNT",
+    "DETECTION_CLASS_NAMES",
+    "DETECTION_CLASS_TO_INDEX",
     "DetrBoardDataset",
     "EvalFrameRecord",
     "EvalPiece",
@@ -379,9 +477,12 @@ __all__ = [
     "NO_SQUARE_INDEX",
     "SQUARE_OUTPUT_NAMES",
     "TYPE_CLASS_NAMES",
+    "board_label_to_detection_class",
     "board_index_to_square_output_index",
     "board_labels_from_eval_pieces",
+    "detection_class_to_board_label",
     "labels_to_piece_targets",
+    "labels_to_detection_targets",
     "labels_to_piece_tuples",
     "load_annotation_rows",
     "load_eval_records",
@@ -391,4 +492,5 @@ __all__ = [
     "select_rows",
     "square_name_to_board_index",
     "square_output_index_to_board_index",
+    "xyxy_box_to_normalized_cxcywh",
 ]

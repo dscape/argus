@@ -85,3 +85,76 @@ def test_decode_predictions_deduplicates_square_and_keeps_hovering_piece() -> No
     board_index = detr_data.square_name_to_board_index("e4")
     assert decoded["board_labels"][board_index] == detr_data.TYPE_CLASS_TO_INDEX["R"]
     assert decoded["pieces"] == (("R", "e4"), ("q", None))
+
+
+def test_labels_to_detection_targets_convert_boxes_to_normalized_cxcywh() -> None:
+    labels = [0] * 64
+    labels[detr_data.square_name_to_board_index("e4")] = detr_data.TYPE_CLASS_TO_INDEX["R"]
+    labels[detr_data.square_name_to_board_index("d5")] = detr_data.TYPE_CLASS_TO_INDEX["q"]
+    square_boxes = torch.zeros((64, 4), dtype=torch.float32)
+    square_boxes[detr_data.square_name_to_board_index("e4")] = torch.tensor(
+        [80.0, 96.0, 112.0, 160.0]
+    )
+    square_boxes[detr_data.square_name_to_board_index("d5")] = torch.tensor(
+        [40.0, 48.0, 72.0, 120.0]
+    )
+
+    class_labels, boxes = detr_data.labels_to_detection_targets(
+        tuple(labels),
+        square_boxes=square_boxes,
+        image_size=224,
+    )
+
+    assert class_labels == (
+        detr_data.board_label_to_detection_class(detr_data.TYPE_CLASS_TO_INDEX["q"]),
+        detr_data.board_label_to_detection_class(detr_data.TYPE_CLASS_TO_INDEX["R"]),
+    )
+    assert boxes == (
+        (0.25, 0.375, 0.14285714285714285, 0.32142857142857145),
+        (0.42857142857142855, 0.5714285714285714, 0.14285714285714285, 0.2857142857142857),
+    )
+
+
+def test_decode_rtdetr_predictions_assigns_boxes_to_squares_and_deduplicates() -> None:
+    outputs = {
+        "logits": torch.full((1, 3, detr_data.DETECTION_CLASS_COUNT), -12.0),
+        "pred_boxes": torch.tensor(
+            [
+                [
+                    [96.0 / 224.0, 128.0 / 224.0, 32.0 / 224.0, 64.0 / 224.0],
+                    [96.0 / 224.0, 128.0 / 224.0, 30.0 / 224.0, 60.0 / 224.0],
+                    [56.0 / 224.0, 84.0 / 224.0, 32.0 / 224.0, 72.0 / 224.0],
+                ]
+            ],
+            dtype=torch.float32,
+        ),
+    }
+    outputs["logits"][0, 0, detr_data.DETECTION_CLASS_TO_INDEX["R"]] = 8.0
+    outputs["logits"][0, 1, detr_data.DETECTION_CLASS_TO_INDEX["N"]] = 7.0
+    outputs["logits"][0, 2, detr_data.DETECTION_CLASS_TO_INDEX["q"]] = 9.0
+
+    square_boxes = torch.zeros((64, 4), dtype=torch.float32)
+    square_boxes[detr_data.square_name_to_board_index("e4")] = torch.tensor(
+        [80.0, 96.0, 112.0, 160.0]
+    )
+    square_boxes[detr_data.square_name_to_board_index("d5")] = torch.tensor(
+        [40.0, 48.0, 72.0, 120.0]
+    )
+
+    decoded = detr_model.decode_predictions(
+        outputs,
+        architecture=detr_model.RTDETR_ARCHITECTURE,
+        presence_threshold=0.5,
+        square_boxes=square_boxes,
+        image_size=224,
+    )[0]
+
+    assert decoded["pieces"] == (("q", "d5"), ("R", "e4"))
+    assert (
+        decoded["board_labels"][detr_data.square_name_to_board_index("e4")]
+        == detr_data.TYPE_CLASS_TO_INDEX["R"]
+    )
+    assert (
+        decoded["board_labels"][detr_data.square_name_to_board_index("d5")]
+        == detr_data.TYPE_CLASS_TO_INDEX["q"]
+    )

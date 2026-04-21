@@ -1422,7 +1422,7 @@ function AnnotationContent({
             <button
               type="button"
               onClick={() => toggleFrameOccluded(selectedFrame)}
-              className={`absolute right-2 top-2 z-20 inline-flex items-center gap-1 rounded border px-2 py-1 text-[10px] font-medium shadow ${currentFrameOccluded ? "border-amber-500/60 bg-amber-500/90 text-black" : "border-black/30 bg-black/60 text-white hover:bg-black/70"}`}
+              className={`absolute right-2 top-2 z-20 inline-flex items-center gap-1 rounded border px-2 py-1 text-[10px] font-medium shadow transition-[background-color,color,transform] active:scale-[0.96] ${currentFrameOccluded ? "border-amber-500/60 bg-amber-500/90 text-black" : "border-black/30 bg-black/60 text-white hover:bg-black/70"}`}
               title={`Hand occlusion (${OCCLUSION_SHORTCUT_KEY})`}
             >
               {currentFrameOccluded ? "Hand occluded" : "Mark hand occluded"}
@@ -1593,7 +1593,7 @@ function AnnotationContent({
                   type="button"
                   onClick={() => void handleAutoClassify()}
                   disabled={autoClassifying || effectiveMoves.length === 0}
-                  className="inline-flex h-7 items-center justify-center gap-1 rounded border border-primary/60 bg-primary/10 px-2 text-[11px] font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
+                  className="inline-flex h-7 items-center justify-center gap-1 rounded border border-primary/60 bg-primary/10 px-2 text-[11px] font-medium text-primary transition-[background-color,transform] hover:bg-primary/20 active:scale-[0.96] disabled:opacity-40 disabled:active:scale-100"
                   title="Auto-classify touchstart/touchend and hand occlusion from the clip's frames"
                   data-testid="auto-classify-button"
                 >
@@ -1606,7 +1606,7 @@ function AnnotationContent({
                     setMoveStartFrame(activeMoveIndex, selectedFrame)
                   }
                   disabled={activeMoveIndex === null}
-                  className="inline-flex h-7 items-center justify-center gap-1 rounded border px-2 text-[11px] disabled:opacity-40"
+                  className="inline-flex h-7 items-center justify-center gap-1 rounded border px-2 text-[11px] transition-transform active:scale-[0.96] disabled:opacity-40 disabled:active:scale-100"
                   title={`touchstart (${TOUCHSTART_SHORTCUT_KEY})`}
                 >
                   touchstart
@@ -1619,7 +1619,7 @@ function AnnotationContent({
                     setMoveEndFrame(activeMoveIndex, selectedFrame)
                   }
                   disabled={activeMoveIndex === null}
-                  className="inline-flex h-7 items-center justify-center gap-1 rounded border px-2 text-[11px] disabled:opacity-40"
+                  className="inline-flex h-7 items-center justify-center gap-1 rounded border px-2 text-[11px] transition-transform active:scale-[0.96] disabled:opacity-40 disabled:active:scale-100"
                   title={`touchend (${TOUCHEND_SHORTCUT_KEY})`}
                 >
                   touchend

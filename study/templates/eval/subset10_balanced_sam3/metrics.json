@@ -1,0 +1,189 @@
+{
+  "a-file-rook": {
+    "count": 2,
+    "failure_examples": [
+      "study/templates/eval/subset10_balanced_sam3/failures/a-file-rook/clip_overlay_h2WrtkfwRl8_clip8_5_frame0037.png",
+      "study/templates/eval/subset10_balanced_sam3/failures/a-file-rook/clip_overlay_h2WrtkfwRl8_clip8_5_frame0039.png"
+    ],
+    "per_piece_f1": {
+      "B": 0.0,
+      "K": 0.0,
+      "N": 0.0,
+      "P": 0.0,
+      "Q": 0.0,
+      "R": 0.0,
+      "b": 0.6666666666666666,
+      "k": 0.0,
+      "n": 0.0,
+      "p": 0.0,
+      "q": 0.0,
+      "r": 0.0
+    },
+    "per_square_accuracy": 0.6015625,
+    "piece_f1_macro": 0.05555555555555555,
+    "placed_board_exact_match": 0.0,
+    "strict_piece_exact_match": 0.0
+  },
+  "dense-middlegame": {
+    "count": 2,
+    "failure_examples": [
+      "study/templates/eval/subset10_balanced_sam3/failures/dense-middlegame/clip_overlay_h2WrtkfwRl8_clip8_2_frame0034.png",
+      "study/templates/eval/subset10_balanced_sam3/failures/dense-middlegame/clip_overlay_h2WrtkfwRl8_clip8_2_frame0038.png"
+    ],
+    "per_piece_f1": {
+      "B": 0.0,
+      "K": 0.0,
+      "N": 0.0,
+      "P": 0.0,
+      "Q": 0.0,
+      "R": 0.0,
+      "b": 0.0,
+      "k": 0.0,
+      "n": 0.2857142857142857,
+      "p": 0.0,
+      "q": 0.0,
+      "r": 0.0
+    },
+    "per_square_accuracy": 0.5390625,
+    "piece_f1_macro": 0.023809523809523808,
+    "placed_board_exact_match": 0.0,
+    "strict_piece_exact_match": 0.0
+  },
+  "easy-stationary": {
+    "count": 1,
+    "failure_examples": [
+      "study/templates/eval/subset10_balanced_sam3/failures/easy-stationary/clip_overlay_e4lGbQp4pU4_clip70_9_frame0000.png"
+    ],
+    "per_piece_f1": {
+      "B": 0.0,
+      "K": 0.0,
+      "N": 0.0,
+      "P": 0.0,
+      "Q": 0.0,
+      "R": 0.0,
+      "b": 0.0,
+      "k": 0.0,
+      "n": 0.0,
+      "p": 0.0,
+      "q": 0.0,
+      "r": 0.0
+    },
+    "per_square_accuracy": 0.75,
+    "piece_f1_macro": 0.0,
+    "placed_board_exact_match": 0.0,
+    "strict_piece_exact_match": 0.0
+  },
+  "lateral-occlusion": {
+    "count": 2,
+    "failure_examples": [
+      "study/templates/eval/subset10_balanced_sam3/failures/lateral-occlusion/clip_overlay_h2WrtkfwRl8_clip8_5_frame0397.png",
+      "study/templates/eval/subset10_balanced_sam3/failures/lateral-occlusion/clip_overlay_h2WrtkfwRl8_clip8_5_frame0401.png"
+    ],
+    "per_piece_f1": {
+      "B": 0.0,
+      "K": 0.0,
+      "N": 0.0,
+      "P": 0.0,
+      "Q": 0.0,
+      "R": 0.0,
+      "b": 0.0,
+      "k": 0.0,
+      "n": 0.0,
+      "p": 0.0,
+      "q": 0.0,
+      "r": 0.0
+    },
+    "per_square_accuracy": 0.65625,
+    "piece_f1_macro": 0.0,
+    "placed_board_exact_match": 0.0,
+    "strict_piece_exact_match": 0.0
+  },
+  "low-camera-angle": {
+    "count": 2,
+    "failure_examples": [
+      "study/templates/eval/subset10_balanced_sam3/failures/low-camera-angle/clip_overlay_h2WrtkfwRl8_clip8_5_frame0054.png",
+      "study/templates/eval/subset10_balanced_sam3/failures/low-camera-angle/clip_overlay_h2WrtkfwRl8_clip8_5_frame0058.png"
+    ],
+    "per_piece_f1": {
+      "B": 0.0,
+      "K": 0.0,
+      "N": 0.0,
+      "P": 0.0,
+      "Q": 0.0,
+      "R": 0.0,
+      "b": 0.0,
+      "k": 0.0,
+      "n": 0.0,
+      "p": 0.0,
+      "q": 0.0,
+      "r": 0.0
+    },
+    "per_square_accuracy": 0.59375,
+    "piece_f1_macro": 0.0,
+    "placed_board_exact_match": 0.0,
+    "strict_piece_exact_match": 0.0
+  },
+  "macro": {
+    "per_square_accuracy": 0.640625,
+    "piece_f1_macro": 0.013227513227513227,
+    "placed_board_exact_match": 0.0,
+    "strict_piece_exact_match": 0.0
+  },
+  "mid-move": {
+    "count": 1,
+    "failure_examples": [
+      "study/templates/eval/subset10_balanced_sam3/failures/mid-move/clip_overlay_h2WrtkfwRl8_clip8_6_frame0006_transient.png"
+    ],
+    "per_piece_f1": {
+      "B": 0.0,
+      "K": 0.0,
+      "N": 0.0,
+      "P": 0.0,
+      "Q": 0.0,
+      "R": 0.0,
+      "b": 0.0,
+      "k": 0.0,
+      "n": 0.0,
+      "p": 0.0,
+      "q": 0.0,
+      "r": 0.0
+    },
+    "per_square_accuracy": 0.703125,
+    "piece_f1_macro": 0.0,
+    "placed_board_exact_match": 0.0,
+    "strict_piece_exact_match": 0.0
+  },
+  "overall": {
+    "count": 10,
+    "failure_examples": [
+      "study/templates/eval/subset10_balanced_sam3/failures/a-file-rook/clip_overlay_h2WrtkfwRl8_clip8_5_frame0037.png",
+      "study/templates/eval/subset10_balanced_sam3/failures/lateral-occlusion/clip_overlay_h2WrtkfwRl8_clip8_5_frame0397.png",
+      "study/templates/eval/subset10_balanced_sam3/failures/low-camera-angle/clip_overlay_h2WrtkfwRl8_clip8_5_frame0054.png",
+      "study/templates/eval/subset10_balanced_sam3/failures/dense-middlegame/clip_overlay_h2WrtkfwRl8_clip8_2_frame0034.png",
+      "study/templates/eval/subset10_balanced_sam3/failures/mid-move/clip_overlay_h2WrtkfwRl8_clip8_6_frame0006_transient.png",
+      "study/templates/eval/subset10_balanced_sam3/failures/easy-stationary/clip_overlay_e4lGbQp4pU4_clip70_9_frame0000.png",
+      "study/templates/eval/subset10_balanced_sam3/failures/a-file-rook/clip_overlay_h2WrtkfwRl8_clip8_5_frame0039.png",
+      "study/templates/eval/subset10_balanced_sam3/failures/lateral-occlusion/clip_overlay_h2WrtkfwRl8_clip8_5_frame0401.png",
+      "study/templates/eval/subset10_balanced_sam3/failures/low-camera-angle/clip_overlay_h2WrtkfwRl8_clip8_5_frame0058.png",
+      "study/templates/eval/subset10_balanced_sam3/failures/dense-middlegame/clip_overlay_h2WrtkfwRl8_clip8_2_frame0038.png"
+    ],
+    "per_piece_f1": {
+      "B": 0.0,
+      "K": 0.0,
+      "N": 0.0,
+      "P": 0.0,
+      "Q": 0.0,
+      "R": 0.0,
+      "b": 0.16666666666666666,
+      "k": 0.0,
+      "n": 0.09090909090909091,
+      "p": 0.0,
+      "q": 0.0,
+      "r": 0.0
+    },
+    "per_square_accuracy": 0.6234375,
+    "piece_f1_macro": 0.021464646464646464,
+    "placed_board_exact_match": 0.0,
+    "strict_piece_exact_match": 0.0
+  }
+}

@@ -25,7 +25,8 @@ from data import (
     preprocess_board_neighborhood_image,
     resolve_project_path,
 )
-from model import decode_predictions, load_checkpoint
+from model import MINIMAL_ARCHITECTURE, decode_predictions, load_checkpoint, normalize_architecture
+from pipeline.physical.board_probe.board_data import prepare_board_neighborhood_geometry
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 
@@ -87,6 +88,7 @@ class CategoryAccumulator:
 def main() -> None:
     args = build_parser().parse_args()
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    architecture = normalize_architecture(payload.get("architecture"))
     image_size = int(payload.get("image_size", 224))
     device = torch.device(args.device)
     model = load_checkpoint(args.checkpoint, device=device)
@@ -105,15 +107,29 @@ def main() -> None:
         image = cv2.imread(str(resolve_project_path(record.image_path)), cv2.IMREAD_COLOR)
         if image is None:
             raise ValueError(f"Failed to read eval image: {record.image_path}")
-        tensor, _scaled_corners = preprocess_board_neighborhood_image(
-            image,
-            record.corners,
-            size=image_size,
-        )
+        if architecture == MINIMAL_ARCHITECTURE:
+            tensor, _scaled_corners = preprocess_board_neighborhood_image(
+                image,
+                record.corners,
+                size=image_size,
+            )
+            square_boxes = None
+        else:
+            tensor, _scaled_corners, square_boxes = prepare_board_neighborhood_geometry(
+                image,
+                record.corners,
+                size=image_size,
+            )
         batch = tensor.unsqueeze(0).to(device)
         with torch.no_grad():
             outputs = model(batch)
-        decoded = decode_predictions(outputs, presence_threshold=args.presence_threshold)[0]
+        decoded = decode_predictions(
+            outputs,
+            architecture=architecture,
+            presence_threshold=args.score_threshold,
+            square_boxes=None if square_boxes is None else [square_boxes],
+            image_size=image_size if architecture != MINIMAL_ARCHITECTURE else None,
+        )[0]
         predicted_labels = tuple(int(value) for value in decoded["board_labels"])
         predicted_pieces = tuple(sorted(decoded["pieces"]))
         gt_pieces = placed_piece_tuples(record.pieces)
@@ -185,8 +201,13 @@ def main() -> None:
     metrics_path = output_dir / "metrics.json"
     metrics_path.write_text(json.dumps(category_metrics, indent=2, sort_keys=True))
     (output_dir / "per_frame.json").write_text(json.dumps(per_frame, indent=2))
-    results_path = _THIS_DIR / "RESULTS.md"
-    results_path.write_text(render_results_markdown(category_metrics))
+    if args.results_path is not None:
+        results_path = args.results_path.resolve()
+    elif architecture == MINIMAL_ARCHITECTURE:
+        results_path = _THIS_DIR / "RESULTS.md"
+    else:
+        results_path = output_dir / "RESULTS.md"
+    results_path.write_text(render_results_markdown(category_metrics, architecture=architecture))
 
     print(json.dumps(category_metrics["overall"], indent=2, sort_keys=True))
     print(f"wrote {metrics_path}")
@@ -237,7 +258,14 @@ def piece_summary(pieces: tuple[tuple[str, str | None], ...]) -> str:
     return ", ".join(f"{piece}@{square or 'no_square'}" for piece, square in pieces)
 
 
-def render_results_markdown(metrics: dict[str, dict[str, object]]) -> str:
+def render_results_markdown(
+    metrics: dict[str, dict[str, object]],
+    *,
+    architecture: str,
+) -> str:
+    title = (
+        "# Minimal DETR results" if architecture == MINIMAL_ARCHITECTURE else "# RT-DETR results"
+    )
     rows = []
     ordered_categories = [
         "a-file-rook",
@@ -263,7 +291,7 @@ def render_results_markdown(metrics: dict[str, dict[str, object]]) -> str:
             f"{float(row['piece_f1_macro']):.4f} |"
         )
     lines = [
-        "# Minimal DETR results",
+        title,
         "",
         (
             "| category | count | strict piece exact | placed board exact | "
@@ -290,10 +318,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--eval-labels", type=Path, default=_PROJECT_ROOT / "study" / "eval" / "labels.jsonl"
     )
     parser.add_argument("--device", type=str, default="cpu")
-    parser.add_argument("--presence-threshold", type=float, default=0.5)
+    parser.add_argument(
+        "--score-threshold",
+        "--presence-threshold",
+        dest="score_threshold",
+        type=float,
+        default=0.5,
+    )
     parser.add_argument("--failures-per-category", type=int, default=4)
     parser.add_argument("--run-name", type=str, default="latest")
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--results-path", type=Path, default=None)
     return parser
 
 

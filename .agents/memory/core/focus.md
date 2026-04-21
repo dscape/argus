@@ -4,3 +4,4 @@
 - Secondary objective: keep `/evaluate/physical/<session>` visuals trustworthy for geometry inspection and matched to source-frame/client-projected overlays.
 - Parallel objective: continue corrected-native autoresearch only through one small decoder-only edit in `autoresearch/train.py`.
 - Immediate autoresearch next step: inspect `autoresearch/results.tsv`, `autoresearch/run.log`, `autoresearch/best_train.py`, and `autoresearch/train.py`; confirm `v1348` execution state; if it executed, recompute the next exact Decimal midpoint from the true executed bracket `[v1347 harmful, v1348 flat]` on the same compact shelf, then prepare exactly one short-named experiment.
+- Also verify the new failure-viewer 64-square evidence grid behaves consistently with runtime inspection and uses the existing `stateless_square_probabilities` surface without geometry regressions.
