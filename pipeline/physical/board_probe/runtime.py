@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pipeline.board_inference import BoardState
 
 import numpy as np
 import torch
@@ -120,6 +123,26 @@ def board_observation_from_logits(
     timestamp_seconds: float = 0.0,
 ) -> BoardObservation:
     return _board_observation_from_logits(square_logits, timestamp_seconds=timestamp_seconds)
+
+
+def board_state_from_square_logits(
+    square_logits: np.ndarray | torch.Tensor,
+) -> BoardState:
+    """Return a globally-scored :class:`pipeline.board_inference.BoardState` for raw logits.
+
+    This is an **opt-in** alternative to the fast per-square argmax / ``constrained``
+    post-process used in :func:`board_observation_from_logits`. It does not change
+    the underlying probe or any default pipeline outputs.
+    """
+    from pipeline.board_inference import infer_board  # local import: optional path
+
+    if isinstance(square_logits, torch.Tensor):
+        array = square_logits.detach().to(torch.float32).cpu().numpy()
+    else:
+        array = np.asarray(square_logits, dtype=np.float32)
+    if array.shape != (64, 13):
+        raise ValueError(f"Expected (64, 13) square logits, got {array.shape}")
+    return infer_board(array)
 
 
 def read_board_observation_from_frame(
