@@ -71,3 +71,4 @@ Docker: `docker exec argus-dev-api python3 -m pipeline.cli <command>` or use `ma
 - If you change the overlay detector, run `scripts/visualize_overlay_tests.py` on every iteration and treat that visual output as mandatory validation
 - Before completing tasks: run `make typecheck`, `make lint`, `make test` — all must pass
 - Never put data in output. Always put data in the data/ folder
+- Never compute logits from rectified board or square crops; always use native full-frame piece-projection geometry. No exceptions. If a script is running on rectified board or square crops immediately tell the user and fix to full-frame piece-projection geometry.

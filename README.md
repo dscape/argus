@@ -25,6 +25,7 @@ Argus reconstructs PGN game records from tournament video by framing move recogn
 - [CLI Reference](#cli-reference)
 - [Configuration](#configuration)
 - [Database Schema](#database-schema)
+- [Physical Board-Reading Stack](#physical-board-reading-stack)
 - [Project Structure](#project-structure)
 - [Key Design Decisions](#key-design-decisions)
 
@@ -1022,6 +1023,48 @@ erDiagram
 
 ---
 
+## Physical Board-Reading Stack
+
+The active physical stack now lives entirely under `pipeline/physical/` and is split into three clear families:
+
+1. **`board_probe/` — production reader family**
+   - frozen-encoder board probe
+   - piece-projection geometry only
+   - promoted default decoder: **v282** (`beam8 + props16 + top2` hybrid lookahead + segmental)
+2. **`two_stage/` — experimental projected-square successor**
+   - occupancy classifier gates a piece classifier
+   - runtime, training data, and review all use projected crops from `piece_projection.py`
+3. **Whole-board long-shot lane — removed**
+   - the direct whole-board reader and `autoresearch_wholeboard/` were deleted because that lane stayed in a static-copy / no-move regime and was not worth carrying through the cleanup
+
+### Directory map
+
+```text
+pipeline/physical/
+├── piece_projection.py      # sole image-geometry contract
+├── board_probe/             # production reader family
+├── two_stage/               # projected occupancy + piece classifiers
+└── shared/                  # annotation, dataset, split, localizer helpers
+```
+
+### Sole geometry contract
+
+`pipeline/physical/piece_projection.py` is now the only supported source of board/square image geometry for the physical stack. If a physical reader needs a board-neighborhood crop, per-square quad, per-square bbox, or projected piece/occupancy crop, it must come from `piece_projection.py`. Geometry-specific legacy helpers were removed instead of kept as compatibility layers.
+
+### Removed and why
+
+- **Whole-board reader lane**
+  - removed: `direct_board_reader.py`, `prepare_direct_board_reader_dataset.py`, `train_direct_board_reader.py`, `autoresearch_wholeboard/`
+  - why: whole-board experiments stayed effectively stuck in a static-copy regime
+- **Oblique geometry / joint-reader lane**
+  - removed: `oblique_board_data.py`, `oblique_square_context.py`, `joint_board_reader.py`, `end_to_end_joint_board_reader.py`
+  - why: board/square geometry is now centralized in `piece_projection.py`, and the joint-reader checkpoint bridge was deleted instead of preserved
+- **Legacy crop helpers**
+  - removed: `square_crop.py`, `square_data.py`
+  - why: two-stage crops now come directly from projected geometry, and square-class constants live in shared modules instead of a legacy geometry file
+
+---
+
 ## Project Structure
 
 ```
@@ -1038,6 +1081,11 @@ argus/
 │   │   ├── best.pt                             #     Current best checkpoint
 │   │   ├── v1r1.pt                             #     Versioned detector checkpoint
 │   │   └── metadata.json                       #     Detector version + training details
+│   ├── physical/                               #   Physical board-probe runtime + metadata
+│   │   ├── best.pt                             #     Current promoted board-probe checkpoint
+│   │   ├── v8r1.pt                             #     Versioned checkpoint after piece_projection refactor
+│   │   ├── metadata.json                       #     Runtime metadata + promoted decoder config
+│   │   └── square_classifier/                  #     Two-stage occupancy/piece checkpoints
 │   ├── otb_yolo/                               #   Default runtime OTB detector
 │   └── yolo_base/                              #   Bootstrap Ultralytics checkpoints for YOLO training
 ├── configs/                                    # Configuration
@@ -1134,6 +1182,11 @@ argus/
 │   │   ├── calibration.py                      #     Per-channel layout config
 │   │   ├── auto_calibration.py                 #     Auto-propose calibration (theme, orientation, camera)
 │   │   └── diagnostics.py                      #     test_image, test_reader, inspect_clip
+│   ├── physical/                               #   OTB physical-board readers and datasets
+│   │   ├── piece_projection.py                 #     Sole geometry contract for the physical stack
+│   │   ├── board_probe/                        #     Production reader family + promoted decoder defaults
+│   │   ├── two_stage/                          #     Experimental projected-square successor
+│   │   └── shared/                             #     Annotation, split, localizer, dataset helpers
 ├── dev-tools/                                  # Dev Tools: inspection web UI
 │   ├── Dockerfile.api                          #   FastAPI container
 │   ├── Dockerfile.ui                           #   Next.js container

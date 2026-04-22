@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from pipeline.physical import splits
+from pipeline.physical.shared import splits
 
 
 def test_ensure_annotation_layout_migrated_moves_legacy_eval_into_val(
@@ -82,6 +82,36 @@ def test_ensure_annotation_layout_migrated_moves_legacy_eval_into_val(
 
     split_manifest = json.loads((data_root / "source_video_splits.json").read_text())
     assert split_manifest["source_video_splits"] == {"demo": "val"}
+
+
+def test_ensure_annotation_layout_migrated_recovers_from_empty_split_manifest(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / "repo"
+    data_root = project_root / "data" / "physical"
+    source_video_splits_path = data_root / "source_video_splits.json"
+    source_video_splits_path.parent.mkdir(parents=True, exist_ok=True)
+    source_video_splits_path.write_text("")
+
+    monkeypatch.setattr(splits, "_PROJECT_ROOT", project_root)
+    monkeypatch.setattr(splits, "_DATA_ROOT", data_root)
+    monkeypatch.setattr(splits, "_SOURCE_VIDEO_SPLITS_PATH", source_video_splits_path)
+    monkeypatch.setattr(
+        splits,
+        "_CANONICAL_ROOTS",
+        {"train": data_root / "train", "val": data_root / "val"},
+    )
+    monkeypatch.setattr(
+        splits,
+        "_LEGACY_ROOTS",
+        {"train": data_root / "train_manual", "val": data_root / "eval"},
+    )
+
+    splits.ensure_annotation_layout_migrated()
+
+    split_manifest = json.loads(source_video_splits_path.read_text())
+    assert split_manifest["source_video_splits"] == {}
 
 
 def test_ensure_source_video_splits_assigned_persists_auto_assignments(

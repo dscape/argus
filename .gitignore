@@ -50,7 +50,6 @@ runs/
 
 # Blender
 *.blend1
-.blender-server.pid
 
 # Next.js / Node
 node_modules/
@@ -61,8 +60,12 @@ next-env.d.ts
 # Local cache (Blender tarball, etc.)
 .cache/
 .pi/
-autoresearch/
+autoresearch/snapshots
+autoresearch/session-store
 autoresearch_wholeboard/
+autoresearch/STOP
+autoresearch/*.out
+
 .agents/memory/compactions/
 
 # Misc
@@ -70,3 +73,4 @@ autoresearch_wholeboard/
 .env
 weights/dinov2-base/
 /.agents/memory/attachments/
+*.pid

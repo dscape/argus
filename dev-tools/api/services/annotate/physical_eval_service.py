@@ -16,7 +16,8 @@ import torch
 from pipeline.overlay.calibration import is_camera_bbox_usable
 from pipeline.overlay.overlay_move_detector import find_move_between_positions
 from pipeline.overlay.replay import build_replay_board
-from pipeline.physical import eval_dataset, splits
+from pipeline.physical.auto_temporal_labels import auto_label_clip
+from pipeline.physical.shared import eval_dataset, splits
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 from api.services.data import clip_service
@@ -110,7 +111,7 @@ def detect_corners(
     *,
     padding_px: int = 0,
 ) -> dict[str, Any] | None:
-    from pipeline.physical.board_localizer import localize_board
+    from pipeline.physical.shared.board_localizer import localize_board
 
     image_rgb = _get_clip_frame_rgb(session_id, frame_index, padding_px=padding_px)
     image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
@@ -132,7 +133,7 @@ def track_corners(
     *,
     padding_px: int = 0,
 ) -> dict[str, Any] | None:
-    from pipeline.physical.board_localizer import track_corners as _track
+    from pipeline.physical.shared.board_localizer import track_corners as _track
 
     source_rgb = _get_clip_frame_rgb(session_id, source_frame_index, padding_px=padding_px)
     target_rgb = _get_clip_frame_rgb(session_id, target_frame_index, padding_px=padding_px)
@@ -185,6 +186,22 @@ def save_transient_annotation(
     )
 
 
+def auto_classify_transient_annotation(clip_path: str) -> dict[str, Any]:
+    resolved = _resolve_within_project(clip_path)
+    relative_clip_path = str(resolved.relative_to(_PROJECT_ROOT))
+    result = auto_label_clip(relative_clip_path)
+    payload = result.to_transient_payload()
+    return {
+        "clip_path": relative_clip_path,
+        "frame_count": result.frame_count,
+        "corners_method": result.corners_method,
+        "corners_confidence": result.corners_confidence,
+        "move_annotations": payload["move_annotations"],
+        "hand_occlusion_spans": payload["hand_occlusion_spans"],
+        "details": result.to_detail_payload(),
+    }
+
+
 def _list_clip_files(
     dataset_module: Any,
     clips_dir: str,
@@ -217,6 +234,7 @@ def _list_clip_files(
         annotated_frame_count = saved_frame_counts.get(relative_clip_path, 0)
         num_frames = _get_clip_num_frames(path) if annotated_frame_count > 0 else None
         fully_annotated = bool(num_frames and annotated_frame_count >= num_frames)
+        transient_status = _transient_annotation_status(dataset_module, relative_clip_path)
         clips.append(
             {
                 "filename": path.name,
@@ -228,6 +246,7 @@ def _list_clip_files(
                 "annotated_frame_count": annotated_frame_count,
                 "num_frames": num_frames,
                 "fully_annotated": fully_annotated,
+                **transient_status,
                 "assigned_split": assigned_split,
             }
         )
@@ -242,6 +261,54 @@ def _list_clip_files(
 
 def _get_annotation_summary(dataset_module: Any) -> dict[str, Any]:
     return dataset_module.get_annotation_summary()
+
+
+def _transient_annotation_status(
+    dataset_module: Any,
+    clip_path: str,
+) -> dict[str, Any]:
+    annotation = dataset_module.load_transient_annotation(clip_path)
+    if not isinstance(annotation, dict):
+        return {
+            "has_transient_annotation": False,
+            "touch_annotated_move_count": 0,
+            "total_move_count": None,
+            "transient_annotation_complete": False,
+        }
+
+    move_annotations = annotation.get("move_annotations")
+    if not isinstance(move_annotations, list):
+        move_annotations = []
+
+    touch_annotated_move_count = 0
+    for move_annotation in move_annotations:
+        if not isinstance(move_annotation, dict):
+            continue
+        start_frame_index = move_annotation.get("start_frame_index")
+        end_frame_index = move_annotation.get("end_frame_index")
+        if (
+            isinstance(start_frame_index, int)
+            and isinstance(end_frame_index, int)
+            and end_frame_index >= start_frame_index
+        ):
+            touch_annotated_move_count += 1
+
+    raw_total_move_count = annotation.get("total_moves")
+    total_move_count = (
+        raw_total_move_count
+        if isinstance(raw_total_move_count, int)
+        else len(move_annotations)
+    )
+    transient_annotation_complete = (
+        total_move_count > 0 and touch_annotated_move_count >= total_move_count
+    )
+
+    return {
+        "has_transient_annotation": True,
+        "touch_annotated_move_count": touch_annotated_move_count,
+        "total_move_count": total_move_count,
+        "transient_annotation_complete": transient_annotation_complete,
+    }
 
 
 def _get_frame_annotation(

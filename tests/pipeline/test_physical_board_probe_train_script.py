@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import scripts.train_physical_board_probe as train_physical_board_probe
 import torch
-from pipeline.physical.real_board_data import PhysicalRealBoardRow
+from pipeline.physical.shared.real_board_data import PhysicalRealBoardRow
 from scripts.train_physical_board_probe import (
     build_synthetic_dataset,
     resolve_selection_metric,
@@ -78,9 +78,13 @@ def test_build_synthetic_dataset_routes_clip_frames_without_generation(
         def __len__(self) -> int:
             return 1
 
-        def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
             assert index == 0
-            return torch.zeros((3, 64, 64)), torch.zeros((64,), dtype=torch.long)
+            return (
+                torch.zeros((3, 64, 64)),
+                torch.zeros((64,), dtype=torch.long),
+                torch.zeros((4, 2), dtype=torch.float32),
+            )
 
     monkeypatch.setattr(
         train_physical_board_probe,
@@ -90,7 +94,7 @@ def test_build_synthetic_dataset_routes_clip_frames_without_generation(
 
     dataset = build_synthetic_dataset(
         synthetic_clips_dir=Path("data/argus/train"),
-        board_input_mode="oblique_board",
+        board_input_mode="piece_projection_board",
         num_positions=1,
         image_size=64,
         seed=7,
@@ -108,7 +112,7 @@ def test_build_synthetic_dataset_routes_clip_frames_without_generation(
     assert corners.shape == (4, 2)
 
 
-def test_build_synthetic_dataset_supports_oblique_board_crop(
+def test_build_synthetic_dataset_supports_piece_projection_board(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class StubClipDataset:
@@ -118,9 +122,13 @@ def test_build_synthetic_dataset_supports_oblique_board_crop(
         def __len__(self) -> int:
             return 1
 
-        def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
             assert index == 0
-            return torch.zeros((3, 64, 64)), torch.zeros((64,), dtype=torch.long)
+            return (
+                torch.zeros((3, 64, 64)),
+                torch.zeros((64,), dtype=torch.long),
+                torch.zeros((4, 2), dtype=torch.float32),
+            )
 
     monkeypatch.setattr(
         train_physical_board_probe,
@@ -130,12 +138,13 @@ def test_build_synthetic_dataset_supports_oblique_board_crop(
 
     dataset = build_synthetic_dataset(
         synthetic_clips_dir=Path("data/argus/train"),
-        board_input_mode="oblique_board_crop",
+        board_input_mode="piece_projection_board",
         num_positions=1,
         image_size=64,
         seed=7,
     )
 
-    image, labels = dataset[0]
+    image, labels, corners = dataset[0]
     assert image.shape == (3, 64, 64)
     assert labels.shape == (64,)
+    assert corners.shape == (4, 2)

@@ -1,0 +1,82 @@
+{
+  "best_val_accuracy": 0.4013229290475944,
+  "checkpoint": "weights/study2_argus_on_chesscog_crops/piece/piece_classifier.pt",
+  "class_names": [
+    "P",
+    "N",
+    "B",
+    "R",
+    "Q",
+    "K",
+    "p",
+    "n",
+    "b",
+    "r",
+    "q",
+    "k"
+  ],
+  "encoder_type": "dinov2",
+  "history": [
+    {
+      "epoch": 0,
+      "train_accuracy": 0.4649325284090909,
+      "train_loss": 1.6464059935374693,
+      "val_accuracy": 0.4013229290475944
+    },
+    {
+      "epoch": 1,
+      "train_accuracy": 0.6218927556818182,
+      "train_loss": 1.2114247608591209,
+      "val_accuracy": 0.36850808743734176
+    },
+    {
+      "epoch": 2,
+      "train_accuracy": 0.6694779829545454,
+      "train_loss": 1.081960446455262,
+      "val_accuracy": 0.35217818200609785
+    },
+    {
+      "epoch": 3,
+      "train_accuracy": 0.6929154829545454,
+      "train_loss": 1.0298766998404807,
+      "val_accuracy": 0.35207482817425456
+    }
+  ],
+  "initialize_checkpoint": null,
+  "input_size": 200,
+  "model_name": "facebook/dinov2-base",
+  "num_classes": 12,
+  "task": "piece",
+  "train_class_distribution": {
+    "B": 417,
+    "K": 568,
+    "N": 906,
+    "P": 3007,
+    "Q": 346,
+    "R": 608,
+    "b": 625,
+    "empty": 0,
+    "k": 568,
+    "n": 399,
+    "p": 2603,
+    "q": 344,
+    "r": 923
+  },
+  "train_count": 11314,
+  "val_class_distribution": {
+    "B": 1015,
+    "K": 845,
+    "N": 990,
+    "P": 4615,
+    "Q": 709,
+    "R": 1514,
+    "b": 770,
+    "empty": 0,
+    "k": 845,
+    "n": 1313,
+    "p": 4513,
+    "q": 709,
+    "r": 1513
+  },
+  "val_count": 19351
+}

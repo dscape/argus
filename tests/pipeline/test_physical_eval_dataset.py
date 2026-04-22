@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 import numpy as np
-import pipeline.physical.eval_dataset as eval_dataset
+import pipeline.physical.shared.eval_dataset as eval_dataset
 
 
 def _gradient_board(size: int = 128) -> np.ndarray:

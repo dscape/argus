@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 import torch.nn as nn
-from pipeline.physical.two_stage_board_reader import read_board
+from pipeline.physical.two_stage.reader import read_board
 
 _CORNERS = ((10.0, 20.0), (90.0, 20.0), (90.0, 100.0), (10.0, 100.0))
 

@@ -32,6 +32,7 @@ def get_status() -> dict[str, Any]:
         "num_clips": _current_job["num_clips"],
         "completed": _current_job["completed"],
         "output_dir": _current_job["output_dir"],
+        "broadcast_bias": _current_job.get("broadcast_bias"),
         "error": _current_job.get("error"),
     }
 
@@ -44,6 +45,7 @@ def start_generation(
     frames_per_move: int = 4,
     seed: int = 42,
     quality: str = "training",
+    broadcast_bias: float = 0.0,
 ) -> dict[str, Any]:
     """Start a generation job in a background thread. Returns job info."""
     global _current_job, _cancel_event
@@ -64,11 +66,22 @@ def start_generation(
         "completed": 0,
         "output_dir": output_dir,
         "error": None,
+        "broadcast_bias": broadcast_bias,
     }
 
     thread = threading.Thread(
         target=_run_generation,
-        args=(job_id, num_clips, abs_output, image_size, clip_length, frames_per_move, seed, quality),
+        args=(
+            job_id,
+            num_clips,
+            abs_output,
+            image_size,
+            clip_length,
+            frames_per_move,
+            seed,
+            quality,
+            broadcast_bias,
+        ),
         daemon=True,
     )
     thread.start()
@@ -85,6 +98,7 @@ def _run_generation(
     frames_per_move: int,
     seed: int,
     quality: str,
+    broadcast_bias: float,
 ) -> None:
     """Background thread target: run generate_dataset()."""
     global _current_job
@@ -107,6 +121,7 @@ def _run_generation(
             frames_per_move=frames_per_move,
             seed=seed,
             quality=quality,
+            broadcast_bias=broadcast_bias,
             on_progress=on_progress,
             cancel_check=cancel_check,
         )

@@ -2,12 +2,6 @@ from pathlib import Path
 
 import pytest
 import torch
-from pipeline.physical.joint_board_reader import (
-    JointBoardReaderConfig,
-    PhysicalJointBoardReader,
-    argus_overrides_from_joint_board_reader_checkpoint,
-    argus_square_reader_state_dict_from_joint_board_reader_checkpoint,
-)
 
 import argus.model.vision_encoder as vision_encoder_module
 from argus.model.argus_model import ArgusModel
@@ -242,65 +236,3 @@ def test_argus_model_forward_supports_oblique_square_queries() -> None:
     assert output.square_logits is not None
     assert output.square_logits.shape == (1, 2, 64, 13)
     assert output.move_logits.shape == (1, 2, 1, 1970)
-
-
-def test_argus_model_can_load_joint_board_reader_square_reader_weights() -> None:
-    weights = Path("weights/yolo_base/yolo11n.pt")
-    assert weights.exists()
-
-    joint_reader = PhysicalJointBoardReader(
-        embed_dim=448,
-        config=JointBoardReaderConfig(
-            input_size=224,
-            num_classes=13,
-            num_heads=8,
-            dropout=0.0,
-            mlp_ratio=4.0,
-            head_type="pos_mlp",
-            hidden_dim=64,
-            transformer_layers=1,
-            transformer_heads=8,
-            transformer_ff_dim=128,
-        ),
-    )
-    checkpoint = {
-        "state_dict": joint_reader.state_dict(),
-        "encoder_config": {
-            "encoder_type": "yolo",
-            "model_name": str(weights),
-            "feature_layer_indices": [16, 19, 22],
-        },
-        "reader_config": joint_reader.checkpoint_config(),
-    }
-
-    model_kwargs = {
-        "vision_encoder_type": "yolo",
-        "vision_encoder_name": str(weights),
-        "vision_embed_dim": None,
-        "frozen_vision": True,
-        "temporal_d_model": 128,
-        "temporal_n_layers": 1,
-        "temporal_d_state": 32,
-        "temporal_expand": 2,
-        "move_vocab_size": 1970,
-        "pooling_type": "square_attention",
-        "square_pool_size": 8,
-        "square_head_enabled": True,
-        "use_detector": False,
-        "vision_feature_layer_indices": [16, 19, 22],
-        "vision_output_grid_size": 14,
-    }
-    model_kwargs.update(argus_overrides_from_joint_board_reader_checkpoint(checkpoint))
-    model = ArgusModel(**model_kwargs)
-
-    load_result = model.load_state_dict(
-        argus_square_reader_state_dict_from_joint_board_reader_checkpoint(checkpoint),
-        strict=False,
-    )
-
-    assert load_result.unexpected_keys == []
-    assert not [
-        key
-        for key in load_result.missing_keys
-        if key.startswith("square_tokenizer") or key.startswith("square_head")
-    ]

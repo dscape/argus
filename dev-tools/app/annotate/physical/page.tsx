@@ -6,7 +6,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { ClipGallery } from "@/components/data/ClipGallery";
-import { listPhysicalEvalClips, listPhysicalTrainClips, type PhysicalEvalClip } from "@/lib/api";
+import {
+  listPhysicalEvalClips,
+  listPhysicalTrainClips,
+  type PhysicalEvalClip,
+} from "@/lib/api";
 import type { SyntheticClipFile } from "@/lib/types";
 
 type PhysicalAnnotationSplit = "val" | "train";
@@ -43,15 +47,18 @@ export default function PhysicalAnnotationIndexPage() {
     setLoading(true);
     void (async () => {
       try {
-        const data = split === "train"
-          ? await listPhysicalTrainClips()
-          : await listPhysicalEvalClips();
+        const data =
+          split === "train"
+            ? await listPhysicalTrainClips()
+            : await listPhysicalEvalClips();
         if (!cancelled) {
           setClips(data.clips);
         }
       } catch (error) {
         if (!cancelled) {
-          toast.error(error instanceof Error ? error.message : "Failed to load clips");
+          toast.error(
+            error instanceof Error ? error.message : "Failed to load clips",
+          );
         }
       } finally {
         if (!cancelled) {
@@ -65,18 +72,29 @@ export default function PhysicalAnnotationIndexPage() {
     };
   }, [split]);
 
-  const filteredClips = useMemo(() => clips.filter((clip) => {
-    if (statusFilter === "complete" && !clip.fully_annotated) return false;
-    if (statusFilter === "incomplete" && clip.fully_annotated) return false;
-    const nf = clip.num_frames ?? 0;
-    if (frameFilter === "lt100" && nf >= 100) return false;
-    if (frameFilter === "lt500" && nf >= 500) return false;
-    if (frameFilter === "gt500" && nf < 500) return false;
-    return true;
-  }), [clips, statusFilter, frameFilter]);
+  const filteredClips = useMemo(
+    () =>
+      clips.filter((clip) => {
+        if (statusFilter === "complete" && !clip.transient_annotation_complete)
+          return false;
+        if (statusFilter === "incomplete" && clip.transient_annotation_complete)
+          return false;
+        const nf = clip.num_frames ?? 0;
+        if (frameFilter === "lt100" && nf >= 100) return false;
+        if (frameFilter === "lt500" && nf >= 500) return false;
+        if (frameFilter === "gt500" && nf < 500) return false;
+        return true;
+      }),
+    [clips, statusFilter, frameFilter],
+  );
 
   const galleryClips = useMemo(
-    () => filteredClips.map((clip) => ({ filename: clip.filename, size_mb: clip.size_mb, modified: clip.modified_at })),
+    () =>
+      filteredClips.map((clip) => ({
+        filename: clip.filename,
+        size_mb: clip.size_mb,
+        modified: clip.modified_at,
+      })),
     [filteredClips],
   );
 
@@ -86,27 +104,43 @@ export default function PhysicalAnnotationIndexPage() {
     return map;
   }, [clips]);
 
-  const renderOverlay = useCallback((clip: SyntheticClipFile) => {
-    const meta = clipMetaByFilename.get(clip.filename);
-    if (!meta) return null;
-    return (
-      <>
-        {meta.fully_annotated && (
-          <CheckCircle2 className="absolute left-1.5 top-1.5 h-4 w-4 text-green-500 drop-shadow" />
-        )}
-        {meta.annotated_frame_count > 0 && !meta.fully_annotated && (
-          <span className="absolute left-1.5 top-1.5 rounded bg-black/60 px-1 py-0.5 text-[9px] font-medium text-white">
-            {meta.annotated_frame_count}/{meta.num_frames ?? "?"}
-          </span>
-        )}
-      </>
-    );
-  }, [clipMetaByFilename]);
+  const renderOverlay = useCallback(
+    (clip: SyntheticClipFile) => {
+      const meta = clipMetaByFilename.get(clip.filename);
+      if (!meta) return null;
+      return (
+        <>
+          {meta.transient_annotation_complete && (
+            <CheckCircle2 className="absolute left-1.5 top-1.5 h-4 w-4 text-green-500 drop-shadow" />
+          )}
+          {!meta.transient_annotation_complete &&
+            meta.total_move_count !== null && (
+              <span className="absolute left-1.5 top-1.5 rounded bg-black/60 px-1 py-0.5 text-[9px] font-medium text-white">
+                {meta.touch_annotated_move_count}/{meta.total_move_count} moves
+              </span>
+            )}
+          {!meta.transient_annotation_complete &&
+            meta.total_move_count === null &&
+            meta.annotated_frame_count > 0 && (
+              <span className="absolute left-1.5 top-1.5 rounded bg-black/60 px-1 py-0.5 text-[9px] font-medium text-white">
+                {meta.annotated_frame_count}/{meta.num_frames ?? "?"}
+              </span>
+            )}
+        </>
+      );
+    },
+    [clipMetaByFilename],
+  );
 
-  const completedCount = useMemo(() => clips.filter((c) => c.fully_annotated).length, [clips]);
+  const completedCount = useMemo(
+    () => clips.filter((clip) => clip.transient_annotation_complete).length,
+    [clips],
+  );
 
   if (loading) {
-    return <div className="text-sm text-muted-foreground">Loading clips...</div>;
+    return (
+      <div className="text-sm text-muted-foreground">Loading clips...</div>
+    );
   }
 
   return (
@@ -118,7 +152,11 @@ export default function PhysicalAnnotationIndexPage() {
             value={split}
             onChange={(event) => {
               router.replace(
-                buildSplitUrl(pathname, searchParams, normalizeSplit(event.target.value)),
+                buildSplitUrl(
+                  pathname,
+                  searchParams,
+                  normalizeSplit(event.target.value),
+                ),
               );
             }}
             className="h-9 rounded-md border bg-background px-3 text-sm shadow-sm outline-none transition-colors focus:border-ring"
@@ -153,16 +191,21 @@ export default function PhysicalAnnotationIndexPage() {
           </select>
         </label>
         <span className="text-sm text-muted-foreground">
-          {filteredClips.length}/{clips.length} clips ({completedCount} complete)
+          {filteredClips.length}/{clips.length} clips ({completedCount}{" "}
+          complete)
         </span>
       </div>
 
       <details className="text-xs text-muted-foreground">
-        <summary className="cursor-pointer hover:text-foreground">How to add more clips</summary>
+        <summary className="cursor-pointer hover:text-foreground">
+          How to add more clips
+        </summary>
         <p className="mt-1 pl-4">
-          Open a video from the <strong>Videos</strong> page, use the <strong>Calibrate</strong> tab to
-          auto-calibrate clips, then go to the <strong>Inspect</strong> tab and click <strong>Save to training</strong> on
-          clips you want to annotate. They will appear here.
+          Open a video from the <strong>Videos</strong> page, use the{" "}
+          <strong>Calibrate</strong> tab to auto-calibrate clips, then go to the{" "}
+          <strong>Inspect</strong> tab and click{" "}
+          <strong>Save to training</strong> on clips you want to annotate. They
+          will appear here.
         </p>
       </details>
 

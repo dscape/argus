@@ -189,7 +189,7 @@ def cmd_split_clips(args):
 
 def cmd_physical_split_clips(args):
     """Prepare a physical train/val dataset while excluding held-out validation videos."""
-    from pipeline.physical.training_dataset import export_physical_training_dataset
+    from pipeline.physical.shared.training_dataset import export_physical_training_dataset
 
     manifest = export_physical_training_dataset(
         args.clips_dir,
@@ -212,7 +212,7 @@ def cmd_physical_split_clips(args):
 
 def cmd_physical_visualize_runtime(args):
     """Render a frame-by-frame visualization of the physical runtime reader."""
-    from pipeline.physical.runtime_visualization import visualize_runtime_sequence
+    from pipeline.physical.board_probe.runtime_visualization import visualize_runtime_sequence
 
     summary = visualize_runtime_sequence(
         clip_path=args.clip_path,
@@ -231,7 +231,7 @@ def cmd_physical_visualize_runtime(args):
 
 def cmd_physical_board_failure_study(args):
     """Render a manual-review bundle for board_exact tracker failures."""
-    from pipeline.physical.board_tracker_failure_study import (
+    from pipeline.physical.board_probe.failure_study import (
         TrackerFailureStudyConfig,
         create_tracker_failure_study,
         load_config_from_eval_report,
@@ -1722,7 +1722,7 @@ def main():
     p.add_argument(
         "--observation-input",
         type=str,
-        choices=["rectified_board", "original_oblique"],
+        choices=["piece_projection_board"],
         default=None,
         help="Input representation to inspect (overrides --eval-report)",
     )
@@ -1742,7 +1742,7 @@ def main():
     p.add_argument(
         "--tracker-mode",
         type=str,
-        choices=["greedy", "lookahead"],
+        choices=["greedy", "lookahead", "production"],
         default=None,
         help="Tracker mode to inspect (overrides --eval-report)",
     )

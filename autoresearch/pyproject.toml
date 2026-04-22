@@ -1,0 +1,10 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "argus-autoresearch"
+version = "0.1.0"
+description = "Local autoresearch-style decoder workspace for Argus"
+requires-python = ">=3.10"
+dependencies = []

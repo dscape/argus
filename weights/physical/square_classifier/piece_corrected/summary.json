@@ -1,0 +1,64 @@
+{
+  "best_val_accuracy": 0.7343806521626789,
+  "checkpoint": "weights/physical/square_classifier/piece_corrected/piece_classifier.pt",
+  "class_names": [
+    "P",
+    "N",
+    "B",
+    "R",
+    "Q",
+    "K",
+    "p",
+    "n",
+    "b",
+    "r",
+    "q",
+    "k"
+  ],
+  "encoder_type": "dinov2",
+  "history": [
+    {
+      "epoch": 0,
+      "train_accuracy": 0.9974327195467422,
+      "train_loss": 0.007887680313561313,
+      "val_accuracy": 0.7343806521626789
+    }
+  ],
+  "initialize_checkpoint": "weights/physical/square_classifier/piece_corrected/piece_classifier.pt",
+  "input_size": 224,
+  "model_name": "facebook/dinov2-base",
+  "num_classes": 12,
+  "task": "piece",
+  "train_class_distribution": {
+    "B": 417,
+    "K": 568,
+    "N": 906,
+    "P": 3007,
+    "Q": 346,
+    "R": 608,
+    "b": 625,
+    "empty": 0,
+    "k": 568,
+    "n": 399,
+    "p": 2603,
+    "q": 344,
+    "r": 923
+  },
+  "train_count": 11314,
+  "val_class_distribution": {
+    "B": 1015,
+    "K": 845,
+    "N": 990,
+    "P": 4615,
+    "Q": 709,
+    "R": 1514,
+    "b": 770,
+    "empty": 0,
+    "k": 845,
+    "n": 1313,
+    "p": 4513,
+    "q": 709,
+    "r": 1513
+  },
+  "val_count": 19351
+}

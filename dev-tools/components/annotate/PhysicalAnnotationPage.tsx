@@ -5,9 +5,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ChessBoard } from "@/components/ChessBoard";
 import { chessPieceSvg } from "@/components/chess-pieces";
-import { PhysicalTransientAnnotationPanel } from "@/components/annotate/PhysicalTransientAnnotationPanel";
 import { Badge } from "@/components/ui/badge";
+import { usePhysicalTransientAnnotations } from "@/hooks/usePhysicalTransientAnnotations";
 import {
+  autoClassifyPhysicalEvalTransientAnnotation,
+  autoClassifyPhysicalTrainTransientAnnotation,
   clipCameraFrameUrl,
   clipFrameUrl,
   clipSourceVideoUrl,
@@ -62,6 +64,11 @@ const PANEL_STATUS_CLASS =
   "inline-flex h-5 min-w-[5rem] items-center justify-center rounded border px-1.5 text-[9px] leading-none whitespace-nowrap";
 const PRIMARY_SAVE_BUTTON_CLASS =
   "inline-flex h-6 min-w-[8.75rem] items-center justify-center rounded border bg-primary px-2.5 text-[9px] font-medium text-primary-foreground whitespace-nowrap transition-colors hover:bg-primary/90 disabled:opacity-40";
+const SHORTCUT_KEY_CLASS =
+  "ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded border border-zinc-300/80 bg-zinc-100 px-1 font-mono text-[10px] font-medium leading-none text-zinc-600 shadow-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300";
+const TOUCHSTART_SHORTCUT_KEY = "i";
+const TOUCHEND_SHORTCUT_KEY = "o";
+const OCCLUSION_SHORTCUT_KEY = "p";
 const LIVE_RECTIFY_DELAY_MS = 75;
 const MIN_CAMERA_BBOX_AREA_RATIO = 0.02;
 const MAX_CAMERA_BBOX_AREA_RATIO = 0.25;
@@ -92,12 +99,6 @@ function squareName(idx: number): string {
 
 function cornerLabel(idx: number): string {
   return ["a8", "h8", "h1", "a1"][idx] ?? String(idx + 1);
-}
-
-function labelToken(label: number | null): string {
-  if (label == null) return "";
-  if (label === 0) return "\u00B7";
-  return SQUARE_CLASS_NAMES[label];
 }
 
 function emptyLabels(): Array<number | null> {
@@ -155,6 +156,15 @@ function moveLabel(index: number, move: DetectedMove): string {
   return `#${index + 1} ${move.san || move.uci}`;
 }
 
+function moveTouchAnnotationComplete(annotation: {
+  start_frame_index: number | null;
+  end_frame_index: number | null;
+}): boolean {
+  return (
+    annotation.start_frame_index !== null && annotation.end_frame_index !== null
+  );
+}
+
 function normalizeAnnotationLabels(
   labels: Array<number | null>,
 ): Array<number | null> {
@@ -198,6 +208,7 @@ interface PhysicalAnnotationSplitConfig {
   deleteAnnotation: typeof deletePhysicalEvalAnnotation;
   detectCorners: typeof detectPhysicalEvalCorners;
   trackCorners: typeof trackPhysicalEvalCorners;
+  autoClassifyTransientAnnotation: typeof autoClassifyPhysicalEvalTransientAnnotation;
 }
 
 const SPLIT_CONFIG: Record<
@@ -215,6 +226,7 @@ const SPLIT_CONFIG: Record<
     deleteAnnotation: deletePhysicalEvalAnnotation,
     detectCorners: detectPhysicalEvalCorners,
     trackCorners: trackPhysicalEvalCorners,
+    autoClassifyTransientAnnotation: autoClassifyPhysicalEvalTransientAnnotation,
   },
   train: {
     indexHref: "/annotate/physical?split=train",
@@ -227,6 +239,7 @@ const SPLIT_CONFIG: Record<
     deleteAnnotation: deletePhysicalTrainAnnotation,
     detectCorners: detectPhysicalTrainCorners,
     trackCorners: trackPhysicalTrainCorners,
+    autoClassifyTransientAnnotation: autoClassifyPhysicalTrainTransientAnnotation,
   },
 };
 
@@ -423,6 +436,56 @@ function AnnotationContent({
   const effectiveMoves = moveCorrections?.moves ?? clipInfo.moves;
   const effectiveTotalMoves =
     moveCorrections?.total_moves ?? clipInfo.total_moves;
+  const [activeMoveIndex, setActiveMoveIndex] = useState<number | null>(null);
+  const {
+    saving: transientSaving,
+    hasInvalidMoveLabels: hasInvalidTransientMoveLabels,
+    moveAnnotations,
+    setMoveStartFrame,
+    setMoveEndFrame,
+    clearMoveStartFrame,
+    clearMoveEndFrame,
+    isFrameOccluded,
+    toggleFrameOccluded,
+    replaceDraftFromAutoLabel,
+  } = usePhysicalTransientAnnotations({
+    split,
+    clipPath,
+    effectiveMoves,
+    frameCount,
+  });
+  const [autoClassifying, setAutoClassifying] = useState(false);
+  const handleAutoClassify = useCallback(async () => {
+    if (autoClassifying) return;
+    setAutoClassifying(true);
+    try {
+      const result = await splitConfig.autoClassifyTransientAnnotation(clipPath);
+      replaceDraftFromAutoLabel(
+        result.move_annotations.map((annotation) => ({
+          move_index: annotation.move_index,
+          uci: annotation.uci,
+          start_frame_index: annotation.start_frame_index,
+          end_frame_index: annotation.end_frame_index,
+          is_capture: annotation.is_capture,
+        })),
+        result.hand_occlusion_spans,
+      );
+      toast.success(
+        `Auto-classified ${result.move_annotations.length} move${result.move_annotations.length === 1 ? "" : "s"} (${result.corners_method}, conf ${result.corners_confidence.toFixed(2)})`,
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Auto-classify failed",
+      );
+    } finally {
+      setAutoClassifying(false);
+    }
+  }, [
+    autoClassifying,
+    clipPath,
+    replaceDraftFromAutoLabel,
+    splitConfig,
+  ]);
   const replayFen = effectiveFrameReplayFens[selectedFrame] ?? null;
 
   // Load source video
@@ -464,6 +527,21 @@ function AnnotationContent({
   );
   const selectedMove =
     selectedMoveIndex >= 0 ? effectiveMoves[selectedMoveIndex] : null;
+  const currentFrameOccluded = isFrameOccluded(selectedFrame);
+
+  useEffect(() => {
+    if (effectiveMoves.length === 0) {
+      setActiveMoveIndex(null);
+      return;
+    }
+    setActiveMoveIndex((current) => {
+      if (current === null) {
+        return selectedMoveIndex >= 0 ? selectedMoveIndex : 0;
+      }
+      return Math.min(current, effectiveMoves.length - 1);
+    });
+  }, [effectiveMoves.length, selectedMoveIndex]);
+
   const displayedReplayFen = selectedMove?.fen_after ?? replayFen;
   const previousFrameDisplayedFen = useMemo(() => {
     if (selectedFrame <= 0) return null;
@@ -486,20 +564,123 @@ function AnnotationContent({
     );
   }, [effectiveFrameReplayFens, effectiveMoves, frameCount, selectedFrame]);
 
-  const previousMoveFrame = useMemo(() => {
-    for (let i = effectiveMoves.length - 1; i >= 0; i--) {
-      if (effectiveMoves[i].frame_index < selectedFrame)
-        return effectiveMoves[i].frame_index;
+  const previousMoveIndex = useMemo(() => {
+    for (let i = effectiveMoves.length - 1; i >= 0; i -= 1) {
+      if (effectiveMoves[i].frame_index < selectedFrame) return i;
     }
     return null;
   }, [effectiveMoves, selectedFrame]);
 
-  const nextMoveFrame = useMemo(() => {
-    for (const m of effectiveMoves) {
-      if (m.frame_index > selectedFrame) return m.frame_index;
+  const nextMoveIndex = useMemo(() => {
+    for (let i = 0; i < effectiveMoves.length; i += 1) {
+      if (effectiveMoves[i].frame_index > selectedFrame) return i;
     }
     return null;
   }, [effectiveMoves, selectedFrame]);
+
+  const goToMoveIndex = useCallback(
+    (moveIndex: number | null) => {
+      if (moveIndex === null) return;
+      const move = effectiveMoves[moveIndex];
+      if (!move) return;
+      setActiveMoveIndex(moveIndex);
+      setSelectedFrame(move.frame_index);
+    },
+    [effectiveMoves],
+  );
+
+  const stepFrameBackward = useCallback(() => {
+    setSelectedFrame((frame) => Math.max(0, frame - 1));
+  }, []);
+
+  const stepFrameForward = useCallback(() => {
+    setSelectedFrame((frame) => Math.min(frameCount - 1, frame + 1));
+  }, [frameCount]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target instanceof HTMLButtonElement ||
+        target instanceof HTMLVideoElement ||
+        target instanceof HTMLAnchorElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        stepFrameBackward();
+        return;
+      }
+
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        stepFrameForward();
+        return;
+      }
+
+      if (event.key === "ArrowUp") {
+        if (previousMoveIndex === null) return;
+        event.preventDefault();
+        goToMoveIndex(previousMoveIndex);
+        return;
+      }
+
+      if (event.key === "ArrowDown") {
+        if (nextMoveIndex === null) return;
+        event.preventDefault();
+        goToMoveIndex(nextMoveIndex);
+        return;
+      }
+
+      if (event.repeat) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      if (key === TOUCHSTART_SHORTCUT_KEY) {
+        if (activeMoveIndex === null) return;
+        event.preventDefault();
+        setMoveStartFrame(activeMoveIndex, selectedFrame);
+        return;
+      }
+
+      if (key === TOUCHEND_SHORTCUT_KEY) {
+        if (activeMoveIndex === null) return;
+        event.preventDefault();
+        setMoveEndFrame(activeMoveIndex, selectedFrame);
+        return;
+      }
+
+      if (key === OCCLUSION_SHORTCUT_KEY) {
+        event.preventDefault();
+        toggleFrameOccluded(selectedFrame);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    activeMoveIndex,
+    selectedFrame,
+    goToMoveIndex,
+    nextMoveIndex,
+    previousMoveIndex,
+    setMoveEndFrame,
+    setMoveStartFrame,
+    stepFrameBackward,
+    stepFrameForward,
+    toggleFrameOccluded,
+  ]);
 
   const rawMetadata = clipInfo.metadata as Record<string, unknown> | undefined;
   const metadataCameraBbox = asNumberList(rawMetadata?.camera_bbox, 4);
@@ -1119,12 +1300,9 @@ function AnnotationContent({
             <button
               type="button"
               className={NAV_MOVE_BUTTON_CLASS}
-              disabled={previousMoveFrame === null}
-              onClick={() =>
-                previousMoveFrame !== null &&
-                setSelectedFrame(previousMoveFrame)
-              }
-              title="Previous move"
+              disabled={previousMoveIndex === null}
+              onClick={() => goToMoveIndex(previousMoveIndex)}
+              title="Previous move (↑)"
             >
               &larr; Move
             </button>
@@ -1132,8 +1310,8 @@ function AnnotationContent({
               type="button"
               className={NAV_STEP_BUTTON_CLASS}
               disabled={selectedFrame <= 0}
-              onClick={() => setSelectedFrame((f) => Math.max(0, f - 1))}
-              title="Step back"
+              onClick={stepFrameBackward}
+              title="Step back (←)"
             >
               &lt;
             </button>
@@ -1144,21 +1322,17 @@ function AnnotationContent({
               type="button"
               className={NAV_STEP_BUTTON_CLASS}
               disabled={selectedFrame >= frameCount - 1}
-              onClick={() =>
-                setSelectedFrame((f) => Math.min(frameCount - 1, f + 1))
-              }
-              title="Step forward"
+              onClick={stepFrameForward}
+              title="Step forward (→)"
             >
               &gt;
             </button>
             <button
               type="button"
               className={NAV_MOVE_BUTTON_CLASS}
-              disabled={nextMoveFrame === null}
-              onClick={() =>
-                nextMoveFrame !== null && setSelectedFrame(nextMoveFrame)
-              }
-              title="Next move"
+              disabled={nextMoveIndex === null}
+              onClick={() => goToMoveIndex(nextMoveIndex)}
+              title="Next move (↓)"
             >
               Move &rarr;
             </button>
@@ -1245,6 +1419,18 @@ function AnnotationContent({
             )}
           </div>
           <div className="relative overflow-hidden rounded border">
+            <button
+              type="button"
+              onClick={() => toggleFrameOccluded(selectedFrame)}
+              className={`absolute right-2 top-2 z-20 inline-flex items-center gap-1 rounded border px-2 py-1 text-[10px] font-medium shadow transition-[background-color,color,transform] active:scale-[0.96] ${currentFrameOccluded ? "border-amber-500/60 bg-amber-500/90 text-black" : "border-black/30 bg-black/60 text-white hover:bg-black/70"}`}
+              title={`Hand occlusion (${OCCLUSION_SHORTCUT_KEY})`}
+            >
+              {currentFrameOccluded ? "Hand occluded" : "Mark hand occluded"}
+              <kbd className={SHORTCUT_KEY_CLASS}>{OCCLUSION_SHORTCUT_KEY}</kbd>
+            </button>
+            {currentFrameOccluded && (
+              <div className="pointer-events-none absolute inset-0 z-10 border-2 border-amber-500/80" />
+            )}
             <img
               ref={imageRef}
               src={frameUrl}
@@ -1390,32 +1576,163 @@ function AnnotationContent({
               </div>
             </div>
           )}
-          {effectiveMoves.length > 0 && (
-            <div className="flex min-h-0 flex-1 flex-col space-y-1">
-              <div className="shrink-0 text-[10px] font-medium">Moves</div>
-              <div className="min-h-0 flex-1 overflow-y-auto space-y-0.5 rounded border p-1">
-                {effectiveMoves.map((move, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => setSelectedFrame(move.frame_index)}
-                    className={`w-full text-left rounded px-1.5 py-0.5 text-[11px] ${move.frame_index === selectedFrame ? "bg-primary/10 font-medium" : "hover:bg-muted/50"}`}
-                  >
-                    #{i + 1}{" "}
-                    <span className="font-medium">{move.san || move.uci}</span>
-                    {move.is_manual && (
-                      <span className="ml-1 text-[10px] text-amber-600">
-                        manual
-                      </span>
-                    )}{" "}
-                    <span className="text-muted-foreground">
-                      f{move.frame_index}
-                    </span>
-                  </button>
-                ))}
+          <div className="flex min-h-0 flex-1 flex-col space-y-1">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded border p-2">
+              {hasInvalidTransientMoveLabels && (
+                <span className="text-[10px] text-amber-700 dark:text-amber-300">
+                  Invalid touch range
+                </span>
+              )}
+              <div className="ml-auto flex flex-wrap items-center gap-1">
+                {transientSaving && (
+                  <span className="px-1 text-[10px] text-muted-foreground">
+                    Saving…
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void handleAutoClassify()}
+                  disabled={autoClassifying || effectiveMoves.length === 0}
+                  className="inline-flex h-7 items-center justify-center gap-1 rounded border border-primary/60 bg-primary/10 px-2 text-[11px] font-medium text-primary transition-[background-color,transform] hover:bg-primary/20 active:scale-[0.96] disabled:opacity-40 disabled:active:scale-100"
+                  title="Auto-classify touchstart/touchend and hand occlusion from the clip's frames"
+                  data-testid="auto-classify-button"
+                >
+                  {autoClassifying ? "Auto-classifying…" : "Auto-classify"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    activeMoveIndex !== null &&
+                    setMoveStartFrame(activeMoveIndex, selectedFrame)
+                  }
+                  disabled={activeMoveIndex === null}
+                  className="inline-flex h-7 items-center justify-center gap-1 rounded border px-2 text-[11px] transition-transform active:scale-[0.96] disabled:opacity-40 disabled:active:scale-100"
+                  title={`touchstart (${TOUCHSTART_SHORTCUT_KEY})`}
+                >
+                  touchstart
+                  <kbd className={SHORTCUT_KEY_CLASS}>{TOUCHSTART_SHORTCUT_KEY}</kbd>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    activeMoveIndex !== null &&
+                    setMoveEndFrame(activeMoveIndex, selectedFrame)
+                  }
+                  disabled={activeMoveIndex === null}
+                  className="inline-flex h-7 items-center justify-center gap-1 rounded border px-2 text-[11px] transition-transform active:scale-[0.96] disabled:opacity-40 disabled:active:scale-100"
+                  title={`touchend (${TOUCHEND_SHORTCUT_KEY})`}
+                >
+                  touchend
+                  <kbd className={SHORTCUT_KEY_CLASS}>{TOUCHEND_SHORTCUT_KEY}</kbd>
+                </button>
               </div>
             </div>
-          )}
+
+            <div className="min-h-0 flex-1 overflow-y-auto space-y-0.5 rounded border p-1">
+              {effectiveMoves.length === 0 ? (
+                <div className="px-1.5 py-2 text-[11px] text-muted-foreground">
+                  No replay moves available for this clip.
+                </div>
+              ) : (
+                effectiveMoves.map((move, i) => {
+                  const annotation = moveAnnotations[i];
+                  const moveComplete = annotation
+                    ? moveTouchAnnotationComplete(annotation)
+                    : false;
+                  return (
+                    <div
+                      key={i}
+                      onClick={() => {
+                        setActiveMoveIndex(i);
+                      }}
+                      className={`flex cursor-pointer items-center justify-between gap-2 rounded px-1.5 py-1 text-[11px] ${activeMoveIndex === i ? "bg-primary/10 font-medium" : "hover:bg-muted/50"}`}
+                    >
+                      <span className="min-w-0">
+                        #{i + 1}{" "}
+                        <span className="font-medium">
+                          {move.san || move.uci}
+                        </span>
+                        {move.is_manual && (
+                          <span className="ml-1 text-[10px] text-amber-600">
+                            manual
+                          </span>
+                        )}
+                      </span>
+                      <div className="flex shrink-0 items-center gap-1 font-mono text-[10px]">
+                        {!moveComplete && (
+                          <span className="text-amber-600">!</span>
+                        )}
+                        {annotation &&
+                          annotation.start_frame_index !== null && (
+                            <div className="relative pr-1">
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedFrame(
+                                    annotation.start_frame_index!,
+                                  );
+                                }}
+                                className="rounded border px-1.5 py-0.5 text-muted-foreground hover:bg-muted"
+                              >
+                                f{annotation.start_frame_index}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  clearMoveStartFrame(i);
+                                }}
+                                className="absolute -right-1 -top-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border bg-background text-[9px] leading-none text-muted-foreground hover:text-foreground"
+                                title="Clear touch start"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          )}
+                        {moveComplete && (
+                          <span className="text-muted-foreground">&gt;</span>
+                        )}
+                        {moveComplete && (
+                          <span className="text-muted-foreground">
+                            f{annotation?.move_frame_index}
+                          </span>
+                        )}
+                        {moveComplete && (
+                          <span className="text-muted-foreground">&gt;</span>
+                        )}
+                        {annotation && annotation.end_frame_index !== null && (
+                          <div className="relative pr-1">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setSelectedFrame(annotation.end_frame_index!);
+                              }}
+                              className="rounded border px-1.5 py-0.5 text-muted-foreground hover:bg-muted"
+                            >
+                              f{annotation.end_frame_index}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                clearMoveEndFrame(i);
+                              }}
+                              className="absolute -right-1 -top-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border bg-background text-[9px] leading-none text-muted-foreground hover:text-foreground"
+                              title="Clear touch end"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Right: Physical board annotation */}
@@ -1572,15 +1889,6 @@ function AnnotationContent({
           </div>
         </div>
       </div>
-
-      <PhysicalTransientAnnotationPanel
-        split={split}
-        clipPath={clipPath}
-        effectiveMoves={effectiveMoves}
-        selectedFrame={selectedFrame}
-        setSelectedFrame={setSelectedFrame}
-        frameCount={frameCount}
-      />
 
       {/* Frame slider */}
       <div className="flex items-center gap-2">

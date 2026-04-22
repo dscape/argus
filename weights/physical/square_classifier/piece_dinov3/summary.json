@@ -1,0 +1,82 @@
+{
+  "best_val_accuracy": 0.46157821301224744,
+  "checkpoint": "weights/physical/square_classifier/piece_dinov3/piece_classifier.pt",
+  "class_names": [
+    "P",
+    "N",
+    "B",
+    "R",
+    "Q",
+    "K",
+    "p",
+    "n",
+    "b",
+    "r",
+    "q",
+    "k"
+  ],
+  "encoder_type": "dinov3",
+  "history": [
+    {
+      "epoch": 0,
+      "train_accuracy": 0.5250531161473088,
+      "train_loss": 1.593777968424238,
+      "val_accuracy": 0.44504159991731695
+    },
+    {
+      "epoch": 1,
+      "train_accuracy": 0.7091890934844193,
+      "train_loss": 1.0484409264734718,
+      "val_accuracy": 0.45961449020722445
+    },
+    {
+      "epoch": 2,
+      "train_accuracy": 0.7584100566572238,
+      "train_loss": 0.8835113774615712,
+      "val_accuracy": 0.45470518319466696
+    },
+    {
+      "epoch": 3,
+      "train_accuracy": 0.7788597733711048,
+      "train_loss": 0.820257377860904,
+      "val_accuracy": 0.46157821301224744
+    }
+  ],
+  "initialize_checkpoint": null,
+  "input_size": 224,
+  "model_name": "facebook/dinov3-vitb16-pretrain-lvd1689m",
+  "num_classes": 12,
+  "task": "piece",
+  "train_class_distribution": {
+    "B": 417,
+    "K": 568,
+    "N": 906,
+    "P": 3007,
+    "Q": 346,
+    "R": 608,
+    "b": 625,
+    "empty": 0,
+    "k": 568,
+    "n": 399,
+    "p": 2603,
+    "q": 344,
+    "r": 923
+  },
+  "train_count": 11314,
+  "val_class_distribution": {
+    "B": 1015,
+    "K": 845,
+    "N": 990,
+    "P": 4615,
+    "Q": 709,
+    "R": 1514,
+    "b": 770,
+    "empty": 0,
+    "k": 845,
+    "n": 1313,
+    "p": 4513,
+    "q": 709,
+    "r": 1513
+  },
+  "val_count": 19351
+}

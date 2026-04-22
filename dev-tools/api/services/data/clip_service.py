@@ -466,6 +466,7 @@ def inspect(session_id: str) -> dict[str, Any]:
         "source_video_id",
         "source_channel_handle",
         "training_target_timing",
+        "camera_profile",
     ]:
         value = clip.get(key)
         if isinstance(value, (str, bool, int, float)) or value is None:
@@ -476,6 +477,9 @@ def inspect(session_id: str) -> dict[str, Any]:
         "sampled_video_fps",
         "num_moves",
         "estimated_otb_delay_seconds",
+        "camera_base_elevation_deg",
+        "camera_base_azimuth_deg",
+        "camera_broadcast_bias",
     ]:
         value = clip.get(key)
         if isinstance(value, (bool, int, float)) or value is None:

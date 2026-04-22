@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 import torch
-from pipeline.physical.training_dataset import export_physical_training_dataset
+from pipeline.physical.shared.training_dataset import export_physical_training_dataset
 
 
 def _write_clip(path: Path) -> None:
@@ -25,7 +25,7 @@ def test_export_physical_training_dataset_requires_held_out_videos(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        "pipeline.physical.training_dataset.get_held_out_source_video_ids",
+        "pipeline.physical.shared.training_dataset.get_held_out_source_video_ids",
         lambda: [],
     )
 
@@ -43,7 +43,7 @@ def test_export_physical_training_dataset_excludes_held_out_videos(
     _write_clip(clips_dir / "clip_overlay_7RaBQag34Hk_clip26_0.pt")
 
     monkeypatch.setattr(
-        "pipeline.physical.training_dataset.get_held_out_source_video_ids",
+        "pipeline.physical.shared.training_dataset.get_held_out_source_video_ids",
         lambda: ["2wWUKmCBr6A"],
     )
 

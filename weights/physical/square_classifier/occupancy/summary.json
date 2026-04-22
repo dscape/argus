@@ -1,0 +1,54 @@
+{
+  "best_val_accuracy": 0.8333394970414201,
+  "checkpoint": "weights/physical/square_classifier/occupancy/occupancy_classifier.pt",
+  "class_names": [
+    "empty",
+    "occupied"
+  ],
+  "encoder_type": "dinov2",
+  "history": [
+    {
+      "epoch": 0,
+      "train_accuracy": 0.9929302376760564,
+      "train_loss": 0.021691715126917827,
+      "val_accuracy": 0.8333394970414201
+    }
+  ],
+  "initialize_checkpoint": "weights/physical/square_classifier/occupancy/occupancy_classifier.pt",
+  "input_size": 112,
+  "model_name": "facebook/dinov2-base",
+  "num_classes": 2,
+  "task": "occupancy",
+  "train_class_distribution": {
+    "B": 417,
+    "K": 568,
+    "N": 906,
+    "P": 3007,
+    "Q": 346,
+    "R": 608,
+    "b": 625,
+    "empty": 25038,
+    "k": 568,
+    "n": 399,
+    "p": 2603,
+    "q": 344,
+    "r": 923
+  },
+  "train_count": 36352,
+  "val_class_distribution": {
+    "B": 1015,
+    "K": 845,
+    "N": 990,
+    "P": 4615,
+    "Q": 709,
+    "R": 1514,
+    "b": 770,
+    "empty": 34729,
+    "k": 845,
+    "n": 1313,
+    "p": 4513,
+    "q": 709,
+    "r": 1513
+  },
+  "val_count": 54080
+}

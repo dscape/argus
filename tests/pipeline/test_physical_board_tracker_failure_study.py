@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import chess
 import numpy as np
 import torch
-from pipeline.physical.board_data import PhysicalEvalBoardRow
-from pipeline.physical.board_tracker_failure_study import (
+from pipeline.physical.board_probe.board_data import PhysicalEvalBoardRow
+from pipeline.physical.board_probe.failure_study import (
     TrackerFailureStudyConfig,
     create_tracker_failure_study,
 )
@@ -27,6 +27,7 @@ def _row(
         board_path=f"data/physical/val/boards/{annotation_id}.png",
         labels=tuple(board_to_class_ids(board)),
         source_video_id=source_video_id,
+        corners=((0.0, 0.0), (7.0, 0.0), (7.0, 7.0), (0.0, 7.0)),
         clip_path=clip_path,
         frame_index=frame_index,
     )
@@ -55,7 +56,7 @@ def test_create_tracker_failure_study_writes_episode_bundle(monkeypatch, tmp_pat
         2: _logits_for_board(board),
     }
 
-    import pipeline.physical.board_tracker_failure_study as failure_study
+    import pipeline.physical.board_probe.failure_study as failure_study
 
     monkeypatch.setattr(
         failure_study,
@@ -175,7 +176,7 @@ def test_max_per_video_caps_selection(monkeypatch, tmp_path) -> None:
     # All frames decode to the starting board, so each "frame1" is a failure.
     logits_by_annotation = {row.annotation_id: _logits_for_board(board) for row in rows}
 
-    import pipeline.physical.board_tracker_failure_study as failure_study
+    import pipeline.physical.board_probe.failure_study as failure_study
 
     monkeypatch.setattr(
         failure_study,

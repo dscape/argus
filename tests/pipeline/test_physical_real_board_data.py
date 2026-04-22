@@ -5,7 +5,7 @@ import json
 import chess
 import numpy as np
 import torch
-from pipeline.physical.real_board_data import (
+from pipeline.physical.shared.real_board_data import (
     PhysicalRealBoardDataset,
     PhysicalRealBoardRow,
     build_excluded_move_neighborhood,
@@ -100,7 +100,7 @@ def test_infer_channel_corner_templates_reads_eval_annotations(tmp_path) -> None
         )
     )
 
-    import pipeline.physical.real_board_data as real_board_data
+    import pipeline.physical.shared.real_board_data as real_board_data
 
     original_root = real_board_data._PROJECT_ROOT
     real_board_data._PROJECT_ROOT = project_root
@@ -112,7 +112,7 @@ def test_infer_channel_corner_templates_reads_eval_annotations(tmp_path) -> None
     assert templates["@demo"] == ((1.0, 1.0), (11.0, 1.0), (11.0, 11.0), (1.0, 11.0))
 
 
-def test_physical_real_board_dataset_loads_rectified_frame(tmp_path) -> None:
+def test_physical_real_board_dataset_loads_board_neighborhood_frame(tmp_path) -> None:
     project_root = tmp_path
     clip_path = project_root / "data" / "argus" / "train_real" / "clip_overlay_demo_clip0_0.pt"
     clip_path.parent.mkdir(parents=True)
@@ -134,15 +134,16 @@ def test_physical_real_board_dataset_loads_rectified_frame(tmp_path) -> None:
         image_size=32,
     )
 
-    import pipeline.physical.real_board_data as real_board_data
+    import pipeline.physical.shared.real_board_data as real_board_data
 
     original_root = real_board_data._PROJECT_ROOT
     real_board_data._PROJECT_ROOT = project_root
     try:
-        image, targets = dataset[0]
+        image, targets, piece_bboxes = dataset[0]
     finally:
         real_board_data._PROJECT_ROOT = original_root
 
     assert image.shape == (3, 32, 32)
     assert targets.shape == (64,)
+    assert piece_bboxes.shape == (64, 4)
     assert np.isfinite(image.numpy()).all()

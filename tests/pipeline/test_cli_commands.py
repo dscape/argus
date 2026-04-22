@@ -200,7 +200,7 @@ class TestPhysicalSplitClipsCommand:
     """Test the physical-split-clips CLI command."""
 
     def test_reports_split_counts_and_exclusions(self, monkeypatch, capsys):
-        import pipeline.physical.training_dataset as training_dataset
+        import pipeline.physical.shared.training_dataset as training_dataset
 
         monkeypatch.setattr(
             training_dataset,
@@ -237,7 +237,7 @@ class TestPhysicalBoardFailureStudyCommand:
     """Test the physical-board-failure-study CLI command."""
 
     def test_prints_failure_study_summary(self, monkeypatch, capsys):
-        import pipeline.physical.board_tracker_failure_study as failure_study
+        import pipeline.physical.board_probe.failure_study as failure_study
 
         monkeypatch.setattr(
             failure_study,

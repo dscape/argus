@@ -31,6 +31,11 @@ def test_list_clip_files_returns_relative_project_paths(tmp_path, monkeypatch) -
         "ensure_source_video_splits_assigned",
         lambda _source_video_ids: {"demo": "val"},
     )
+    monkeypatch.setattr(
+        physical_eval_service.eval_dataset,
+        "load_transient_annotation",
+        lambda _clip_path: None,
+    )
 
     result = physical_eval_service.list_clip_files("data/argus/train_real")
 
@@ -41,6 +46,10 @@ def test_list_clip_files_returns_relative_project_paths(tmp_path, monkeypatch) -
     assert result["clips"][0]["annotated_frame_count"] == 0
     assert result["clips"][0]["num_frames"] is None
     assert result["clips"][0]["fully_annotated"] is False
+    assert result["clips"][0]["has_transient_annotation"] is False
+    assert result["clips"][0]["touch_annotated_move_count"] == 0
+    assert result["clips"][0]["total_move_count"] is None
+    assert result["clips"][0]["transient_annotation_complete"] is False
     assert result["clips"][0]["assigned_split"] == "val"
 
 
@@ -68,12 +77,27 @@ def test_list_clip_files_marks_fully_annotated_clips(tmp_path, monkeypatch) -> N
         lambda: {"data/argus/train_real/clip_overlay_demo_clip12_0.pt": 5},
     )
     monkeypatch.setattr(physical_eval_service, "_get_clip_num_frames", lambda _path: 5)
+    monkeypatch.setattr(
+        physical_eval_service.eval_dataset,
+        "load_transient_annotation",
+        lambda _clip_path: {
+            "total_moves": 2,
+            "move_annotations": [
+                {"start_frame_index": 3, "end_frame_index": 4},
+                {"start_frame_index": 7, "end_frame_index": 9},
+            ],
+        },
+    )
 
     result = physical_eval_service.list_clip_files("data/argus/train_real")
 
     assert result["clips"][0]["annotated_frame_count"] == 5
     assert result["clips"][0]["num_frames"] == 5
     assert result["clips"][0]["fully_annotated"] is True
+    assert result["clips"][0]["has_transient_annotation"] is True
+    assert result["clips"][0]["touch_annotated_move_count"] == 2
+    assert result["clips"][0]["total_move_count"] == 2
+    assert result["clips"][0]["transient_annotation_complete"] is True
     assert result["clips"][0]["assigned_split"] == "val"
 
 

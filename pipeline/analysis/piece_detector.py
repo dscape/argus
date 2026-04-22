@@ -29,7 +29,7 @@ def _detect_with_square_classifier(
     corners: tuple[tuple[float, float], ...] | list[list[float]] | None = None,
     sequence_reader: Any | None = None,
 ) -> BoardState | None:
-    from pipeline.physical.square_classifier import read_fen_from_frame
+    from pipeline.physical.board_probe.runtime import read_fen_from_frame
 
     try:
         if sequence_reader is None:

@@ -3,12 +3,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
-from pipeline.physical.board_localizer import localize_board
+from pipeline.physical.shared.board_localizer import localize_board
 
 
 def test_localize_board_prefers_otb_yolo(monkeypatch) -> None:
     monkeypatch.setattr(
-        "pipeline.physical.board_localizer.detect_otb_yolo",
+        "pipeline.physical.shared.board_localizer.detect_otb_yolo",
         lambda *_args, **_kwargs: SimpleNamespace(
             found=True,
             bbox=(10, 20, 30, 40),
@@ -25,7 +25,7 @@ def test_localize_board_prefers_otb_yolo(monkeypatch) -> None:
 
 def test_localize_board_falls_back_to_alternation_search(monkeypatch) -> None:
     monkeypatch.setattr(
-        "pipeline.physical.board_localizer.detect_otb_yolo",
+        "pipeline.physical.shared.board_localizer.detect_otb_yolo",
         lambda *_args, **_kwargs: SimpleNamespace(found=False, bbox=None, confidence=0.0),
     )
 

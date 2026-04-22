@@ -1,0 +1,94 @@
+{
+  "best_val_accuracy": 0.74750658880678,
+  "checkpoint": "weights/physical/square_classifier/piece_unfreeze2/piece_classifier.pt",
+  "class_names": [
+    "P",
+    "N",
+    "B",
+    "R",
+    "Q",
+    "K",
+    "p",
+    "n",
+    "b",
+    "r",
+    "q",
+    "k"
+  ],
+  "encoder_type": "dinov2",
+  "history": [
+    {
+      "epoch": 0,
+      "train_accuracy": 0.9841536827195467,
+      "train_loss": 0.055542389207073384,
+      "val_accuracy": 0.6998604723270115
+    },
+    {
+      "epoch": 1,
+      "train_accuracy": 0.9869865439093485,
+      "train_loss": 0.04074895017428809,
+      "val_accuracy": 0.7129864089711127
+    },
+    {
+      "epoch": 2,
+      "train_accuracy": 0.9934490084985835,
+      "train_loss": 0.024989911283885138,
+      "val_accuracy": 0.7143816857009974
+    },
+    {
+      "epoch": 3,
+      "train_accuracy": 0.9928293201133145,
+      "train_loss": 0.022994684092837343,
+      "val_accuracy": 0.7198594387886931
+    },
+    {
+      "epoch": 4,
+      "train_accuracy": 0.9975212464589235,
+      "train_loss": 0.008713656952410076,
+      "val_accuracy": 0.74750658880678
+    },
+    {
+      "epoch": 5,
+      "train_accuracy": 0.9984950424929179,
+      "train_loss": 0.006237840359323053,
+      "val_accuracy": 0.7238385613146607
+    }
+  ],
+  "initialize_checkpoint": "weights/physical/square_classifier/piece_corrected/piece_classifier.pt",
+  "input_size": 224,
+  "model_name": "facebook/dinov2-base",
+  "num_classes": 12,
+  "task": "piece",
+  "train_class_distribution": {
+    "B": 417,
+    "K": 568,
+    "N": 906,
+    "P": 3007,
+    "Q": 346,
+    "R": 608,
+    "b": 625,
+    "empty": 0,
+    "k": 568,
+    "n": 399,
+    "p": 2603,
+    "q": 344,
+    "r": 923
+  },
+  "train_count": 11314,
+  "val_class_distribution": {
+    "B": 1015,
+    "K": 845,
+    "N": 990,
+    "P": 4615,
+    "Q": 709,
+    "R": 1514,
+    "b": 770,
+    "empty": 0,
+    "k": 845,
+    "n": 1313,
+    "p": 4513,
+    "q": 709,
+    "r": 1513
+  },
+  "val_count": 19351
+}

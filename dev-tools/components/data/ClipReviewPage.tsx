@@ -682,6 +682,19 @@ function ClipReviewContent({
                 value={formatMaybeSeconds(metadata.segment_end_time_seconds)}
               />
               <MetadataRow label="Sampled fps" value={formatMaybeNumber(metadata.sampled_video_fps)} />
+              <MetadataRow label="Camera profile" value={metadata.camera_profile} />
+              <MetadataRow
+                label="Camera elevation"
+                value={formatMaybeNumber(metadata.camera_base_elevation_deg)}
+              />
+              <MetadataRow
+                label="Camera azimuth"
+                value={formatMaybeNumber(metadata.camera_base_azimuth_deg)}
+              />
+              <MetadataRow
+                label="Broadcast bias"
+                value={formatMaybeNumber(metadata.camera_broadcast_bias)}
+              />
               <MetadataRow label="Initial FEN" value={metadata.initial_board_fen} mono multiline />
               <MetadataRow label="Final FEN" value={clipInfo.final_fen} mono multiline />
               <MetadataRow label="Stored moves" value={formatMaybeNumber(metadata.num_moves)} />

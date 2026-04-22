@@ -20,17 +20,13 @@ from transformers import AutoConfig
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.overlay.replay import build_replay_board
-from pipeline.physical.joint_board_reader import (
-    argus_overrides_from_joint_board_reader_checkpoint,
-    argus_square_reader_state_dict_from_joint_board_reader_checkpoint,
-)
-from pipeline.physical.move_data import (
+from pipeline.physical.board_probe.square_probe import evaluate_probe
+from pipeline.physical.shared.move_data import (
     build_real_move_window_clips,
     load_eval_move_sequences,
     load_real_move_sequences,
 )
-from pipeline.physical.real_board_data import load_real_board_rows
-from pipeline.physical.square_probe import evaluate_probe
+from pipeline.physical.shared.real_board_data import load_real_board_rows
 from pipeline.shared import SQUARE_CLASS_NAMES, board_to_class_ids
 from scripts.eval_physical_board_tracker import (
     FramePrediction,
@@ -172,11 +168,6 @@ def main() -> None:
         train_parts.append(
             RepeatDataset(synthetic_train_dataset, repeats=args.synthetic_train_repeat)
         )
-        if args.observation_mode == "native_oblique":
-            logger.info(
-                "native_oblique training with synthetic data keeps synthetic clips in their "
-                "existing synthetic view/domain; only real clips use source-video native crops"
-            )
         if not real_val_source_video_ids:
             val_dataset = MoveLossMaskDataset(
                 ArgusDataset(
@@ -205,7 +196,7 @@ def main() -> None:
             move_target_pre_frames=args.move_target_pre_frames,
             detect_target_radius=args.detect_target_radius,
             detect_target_decay=args.detect_target_decay,
-            oblique_crop_margin=args.oblique_crop_margin,
+            board_crop_margin=args.board_crop_margin,
         )
         if real_train_clips:
             real_train_dataset = MoveLossMaskDataset(
@@ -243,7 +234,7 @@ def main() -> None:
                 move_target_pre_frames=args.move_target_pre_frames,
                 detect_target_radius=args.detect_target_radius,
                 detect_target_decay=args.detect_target_decay,
-                oblique_crop_margin=args.oblique_crop_margin,
+                board_crop_margin=args.board_crop_margin,
             )
             if real_val_clips:
                 val_dataset = MoveLossMaskDataset(
@@ -308,13 +299,13 @@ def main() -> None:
                 ),
                 exclude_selection_source_video_ids=False,
                 observation_mode=args.observation_mode,
-                oblique_crop_margin=args.oblique_crop_margin,
+                board_crop_margin=args.board_crop_margin,
             )
         else:
             selection_sequences = load_eval_move_sequences(
                 image_size=args.image_size,
                 observation_mode=args.observation_mode,
-                oblique_crop_margin=args.oblique_crop_margin,
+                board_crop_margin=args.board_crop_margin,
             )
         if args.selection_max_clips > 0:
             selection_sequences = selection_sequences[: args.selection_max_clips]
@@ -324,16 +315,6 @@ def main() -> None:
             selection_sequence_source,
         )
 
-    if (
-        args.initialize_move_model_checkpoint is not None
-        and args.initialize_square_reader_checkpoint is not None
-    ):
-        raise ValueError(
-            "--initialize-move-model-checkpoint and --initialize-square-reader-checkpoint "
-            "are mutually exclusive"
-        )
-
-    joint_board_reader_checkpoint = None
     initial_model_checkpoint = None
     if args.initialize_move_model_checkpoint is not None:
         initial_model_checkpoint = torch.load(
@@ -370,40 +351,11 @@ def main() -> None:
             "square_query_mlp_ratio": args.square_query_mlp_ratio,
             "use_detector": False,
         }
-        if args.initialize_square_reader_checkpoint is not None:
-            joint_board_reader_checkpoint = torch.load(
-                args.initialize_square_reader_checkpoint,
-                map_location="cpu",
-                weights_only=False,
-            )
-            model_kwargs.update(
-                argus_overrides_from_joint_board_reader_checkpoint(joint_board_reader_checkpoint)
-            )
 
     model = ArgusModel(**model_kwargs)
     initialized_square_reader_adaptation = resolve_square_reader_adaptation_mode(args)
     if initial_model_checkpoint is not None:
         model.load_state_dict(initial_model_checkpoint["model_state_dict"])
-        configure_square_reader_adaptation(model, initialized_square_reader_adaptation)
-    elif joint_board_reader_checkpoint is not None:
-        translated_state_dict = argus_square_reader_state_dict_from_joint_board_reader_checkpoint(
-            joint_board_reader_checkpoint
-        )
-        load_result = model.load_state_dict(translated_state_dict, strict=False)
-        unexpected_keys = sorted(load_result.unexpected_keys)
-        if unexpected_keys:
-            raise ValueError(
-                f"Unexpected square-reader initialization keys: {', '.join(unexpected_keys)}"
-            )
-        missing_square_keys = sorted(
-            key
-            for key in load_result.missing_keys
-            if key.startswith("square_tokenizer") or key.startswith("square_head")
-        )
-        if missing_square_keys:
-            raise ValueError(
-                f"Square-reader initialization missed model keys: {', '.join(missing_square_keys)}"
-            )
         configure_square_reader_adaptation(model, initialized_square_reader_adaptation)
 
     total_steps = (
@@ -539,9 +491,7 @@ def main() -> None:
         "initialize_move_model_checkpoint": None
         if args.initialize_move_model_checkpoint is None
         else str(args.initialize_move_model_checkpoint),
-        "initialize_square_reader_checkpoint": None
-        if args.initialize_square_reader_checkpoint is None
-        else str(args.initialize_square_reader_checkpoint),
+        "board_crop_margin": args.board_crop_margin,
         "freeze_initialized_square_reader": args.freeze_initialized_square_reader,
         "initialized_square_reader_adaptation": initialized_square_reader_adaptation,
         "train_move_loss_mode": args.train_move_loss_mode,
@@ -590,8 +540,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--augment", action="store_true")
     parser.add_argument(
         "--observation-mode",
-        choices=("rectified", "oblique", "native_oblique"),
-        default="oblique",
+        choices=("piece_projection_board",),
+        default="piece_projection_board",
     )
     parser.add_argument(
         "--train-move-loss-mode",
@@ -614,7 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--real-negative-window-stride", type=int, default=8)
     parser.add_argument("--real-max-negative-windows-per-clip", type=int, default=4)
     parser.add_argument("--real-move-positive-window-repeat", type=int, default=1)
-    parser.add_argument("--oblique-crop-margin", type=float, default=0.18)
+    parser.add_argument("--board-crop-margin", type=float, default=0.18)
     parser.add_argument(
         "--vision-encoder-type",
         choices=("dinov2", "siglip", "siglip2", "yolo"),
@@ -646,7 +596,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--square-query-dropout", type=float, default=0.0)
     parser.add_argument("--square-query-mlp-ratio", type=float, default=4.0)
     parser.add_argument("--initialize-move-model-checkpoint", type=Path, default=None)
-    parser.add_argument("--initialize-square-reader-checkpoint", type=Path, default=None)
     parser.add_argument("--freeze-initialized-square-reader", action="store_true")
     parser.add_argument(
         "--initialized-square-reader-adaptation",
@@ -868,7 +817,7 @@ def decoded_selection_key(metrics: dict[str, float]) -> tuple[float, ...]:
 def selection_segmental_board_drop_worst_frames(args: argparse.Namespace) -> int:
     if args.selection_segmental_board_drop_worst_frames >= 0:
         return int(args.selection_segmental_board_drop_worst_frames)
-    return 2 if args.observation_mode == "native_oblique" else 0
+    return 0
 
 
 def evaluate_decoded_selection_metrics(

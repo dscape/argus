@@ -13,11 +13,12 @@ from typing import Any
 import cv2
 
 from pipeline.paths import PROJECT_ROOT
-from pipeline.physical.board_tracker_failure_study import BUCKETS
-from pipeline.physical.oblique_square_context import (
-    _load_clip_frame_bgr,
-    load_annotated_oblique_rows,
+from pipeline.physical.board_probe.board_data import (
+    load_annotated_board_frame_bgr,
+    load_annotated_board_rows,
 )
+from pipeline.physical.board_probe.failure_study import BUCKETS
+from pipeline.physical.piece_projection import project_piece_bboxes, project_square_base_quad
 
 _OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 
@@ -240,6 +241,7 @@ def _merge_annotations(bundle: dict[str, Any]) -> list[dict[str, Any]]:
         row.get("episode_id", ""): row for row in csv_rows if row.get("episode_id")
     }
     raw_snapshot_paths: dict[str, str | None] = {}
+    geometry_payloads: dict[str, dict[str, Any] | None] = {}
     clip_cache: dict[Path, dict[str, Any]] = {}
 
     entries: list[dict[str, Any]] = []
@@ -256,6 +258,7 @@ def _merge_annotations(bundle: dict[str, Any]) -> list[dict[str, Any]]:
                 entry.get("failing_frame") or {},
                 study_dir=bundle["study_dir"],
                 raw_snapshot_paths=raw_snapshot_paths,
+                geometry_payloads=geometry_payloads,
                 clip_cache=clip_cache,
             )
             entry["preceding_frames"] = [
@@ -263,6 +266,7 @@ def _merge_annotations(bundle: dict[str, Any]) -> list[dict[str, Any]]:
                     frame,
                     study_dir=bundle["study_dir"],
                     raw_snapshot_paths=raw_snapshot_paths,
+                    geometry_payloads=geometry_payloads,
                     clip_cache=clip_cache,
                 )
                 for frame in entry.get("preceding_frames") or []
@@ -277,6 +281,7 @@ def _merge_annotations(bundle: dict[str, Any]) -> list[dict[str, Any]]:
                 entry,
                 study_dir=bundle["study_dir"],
                 raw_snapshot_paths=raw_snapshot_paths,
+                geometry_payloads=geometry_payloads,
                 clip_cache=clip_cache,
             )
             entry["failing_frame"] = {**normalized, "is_failing_frame": True}
@@ -309,7 +314,7 @@ def _annotation_rows_by_id() -> dict[str, Any]:
         annotations_path = annotation_root / "board_annotations.jsonl"
         if not annotations_path.exists():
             continue
-        for row in load_annotated_oblique_rows(annotation_root):
+        for row in load_annotated_board_rows(annotation_root):
             rows_by_id[row.annotation_id] = row
     return rows_by_id
 
@@ -337,7 +342,7 @@ def _raw_snapshot_path(
         snapshots_dir.mkdir(parents=True, exist_ok=True)
         snapshot_path = snapshots_dir / f"{annotation_id}.png"
         if not snapshot_path.exists():
-            frame_bgr = _load_clip_frame_bgr(row, clip_cache=clip_cache)
+            frame_bgr = load_annotated_board_frame_bgr(row, clip_cache=clip_cache)
             encoded, buffer = cv2.imencode(".png", frame_bgr)
             if not encoded:
                 raise ValueError(f"Failed to encode raw snapshot for {annotation_id}")
@@ -354,6 +359,7 @@ def _normalize_frame(
     *,
     study_dir: Path,
     raw_snapshot_paths: dict[str, str | None],
+    geometry_payloads: dict[str, dict[str, Any] | None],
     clip_cache: dict[Path, dict[str, Any]],
 ) -> dict[str, Any]:
     legal = frame.get("legal_from_previous_decoded")
@@ -366,6 +372,11 @@ def _normalize_frame(
     processed_image_path = frame.get("board_path")
     if not isinstance(processed_image_path, str) or not processed_image_path.strip():
         processed_image_path = None
+    geometry_payload = _geometry_payload(
+        annotation_id=annotation_id,
+        geometry_payloads=geometry_payloads,
+        clip_cache=clip_cache,
+    )
     return {
         **frame,
         "annotation_id": annotation_id,
@@ -385,6 +396,7 @@ def _normalize_frame(
         "decoded_fen": str(frame.get("decoded_fen") or ""),
         "decoded_full_fen": str(frame.get("decoded_full_fen") or ""),
         "stateless_fen": str(frame.get("stateless_fen") or ""),
+        "tracker_input_fen": str(frame.get("tracker_input_fen") or ""),
         "decoded_move_uci": frame.get("decoded_move_uci"),
         "decoded_move_score": frame.get("decoded_move_score"),
         "decoded_stay_score": frame.get("decoded_stay_score"),
@@ -401,11 +413,84 @@ def _normalize_frame(
         "square_diagnostics": square_diagnostics,
         "decoded_square_confidences": frame.get("decoded_square_confidences") or [],
         "stateless_square_confidences": frame.get("stateless_square_confidences") or [],
+        "stateless_square_probabilities": frame.get("stateless_square_probabilities") or [],
+        "geometry_square_quads": geometry_payload.get("geometry_square_quads") or {},
+        "geometry_piece_bboxes": geometry_payload.get("geometry_piece_bboxes") or {},
         "suggested_bucket": frame.get("suggested_bucket"),
         "image_path": str(frame.get("image_path") or ""),
         "offset_from_failure": int(frame.get("offset_from_failure", 0) or 0),
         "is_failing_frame": bool(frame.get("is_failing_frame")),
     }
+
+
+def _geometry_payload(
+    *,
+    annotation_id: str,
+    geometry_payloads: dict[str, dict[str, Any] | None],
+    clip_cache: dict[Path, dict[str, Any]],
+) -> dict[str, Any]:
+    if not annotation_id:
+        return {}
+    cached = geometry_payloads.get(annotation_id)
+    if annotation_id in geometry_payloads:
+        return cached or {}
+
+    try:
+        row = _annotation_rows_by_id().get(annotation_id)
+        if row is None:
+            geometry_payloads[annotation_id] = None
+            return {}
+        frame_bgr = load_annotated_board_frame_bgr(row, clip_cache=clip_cache)
+        geometry_payloads[annotation_id] = _frame_geometry_payload(frame_bgr, corners=row.corners)
+    except Exception:
+        geometry_payloads[annotation_id] = None
+        return {}
+
+    return geometry_payloads[annotation_id] or {}
+
+
+def _frame_geometry_payload(
+    frame_bgr: Any,
+    *,
+    corners: tuple[tuple[float, float], ...] | list[list[float]],
+) -> dict[str, Any]:
+    height, width = frame_bgr.shape[:2]
+    width_denom = max(float(width - 1), 1.0)
+    height_denom = max(float(height - 1), 1.0)
+
+    geometry_square_quads = {
+        _square_name(index): [
+            [
+                _clamp_unit(float(point[0]) / width_denom),
+                _clamp_unit(float(point[1]) / height_denom),
+            ]
+            for point in project_square_base_quad(corners, row=index // 8, col=index % 8)
+        ]
+        for index in range(64)
+    }
+    geometry_piece_bboxes = {
+        _square_name(index): [
+            _clamp_unit(float(bbox[0]) / width_denom),
+            _clamp_unit(float(bbox[1]) / height_denom),
+            _clamp_unit(float(bbox[2]) / width_denom),
+            _clamp_unit(float(bbox[3]) / height_denom),
+        ]
+        for index, bbox in enumerate(project_piece_bboxes(corners, frame_shape=frame_bgr.shape))
+    }
+    return {
+        "geometry_square_quads": geometry_square_quads,
+        "geometry_piece_bboxes": geometry_piece_bboxes,
+    }
+
+
+def _clamp_unit(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def _square_name(square_index: int) -> str:
+    file_name = chr(ord("a") + (square_index % 8))
+    rank = 8 - square_index // 8
+    return f"{file_name}{rank}"
 
 
 def _load_report_metrics(report_path: Path | None) -> dict[str, Any] | None:

@@ -206,3 +206,20 @@ async def save_transient_annotation(body: SaveTransientAnnotationRequest):
         [move.model_dump() for move in body.move_annotations],
         [span.model_dump() for span in body.hand_occlusion_spans],
     )
+
+
+class AutoClassifyTransientAnnotationRequest(BaseModel):
+    clip_path: str
+
+
+@router.post("/auto-classify-transient-annotation")
+async def auto_classify_transient_annotation(body: AutoClassifyTransientAnnotationRequest):
+    try:
+        return await run_in_threadpool(
+            physical_eval_service.auto_classify_transient_annotation,
+            body.clip_path,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))

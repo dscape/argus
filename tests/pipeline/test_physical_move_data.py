@@ -8,7 +8,7 @@ import chess
 import cv2
 import numpy as np
 import torch
-from pipeline.physical.move_data import (
+from pipeline.physical.shared.move_data import (
     _build_real_clip_sample,
     _build_replay_supervision_targets,
     _infer_annotated_moves,
@@ -136,7 +136,7 @@ def test_infer_annotated_moves_recovers_single_legal_transition() -> None:
     assert detect_targets == [0.0, 1.0]
 
 
-def test_load_eval_move_sequences_supports_native_oblique(
+def test_load_eval_move_sequences_supports_piece_projection_board(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -144,6 +144,12 @@ def test_load_eval_move_sequences_supports_native_oblique(
     annotation_root = tmp_path / "physical_val"
     annotation_root.mkdir(parents=True)
     labels = board_to_class_ids(board)
+    raw_corners = [[0, 0], [9, 0], [9, 9], [0, 9]]
+    native_corners = [[1, 2], [18, 2], [18, 17], [1, 17]]
+    native_bbox = [10, 20, 20, 20]
+    expected_full_corners = tuple(
+        (float(x + native_bbox[0]), float(y + native_bbox[1])) for x, y in native_corners
+    )
     (annotation_root / "board_annotations.jsonl").write_text(
         json.dumps(
             {
@@ -151,44 +157,78 @@ def test_load_eval_move_sequences_supports_native_oblique(
                 "clip_path": "unused_clip.pt",
                 "frame_index": 0,
                 "source_video_id": "video123",
-                "corners": [[0, 0], [223, 0], [223, 223], [0, 223]],
+                "corners": raw_corners,
                 "labels": labels,
+                "rectified_board_path": "data/physical/val/boards/clip_frame0000.jpg",
                 "corner_space": "clip_frame",
-                "clip_frame_size": [224, 224],
-                "native_corners": [[0, 0], [19, 0], [19, 19], [0, 19]],
-                "native_image_bbox": [0, 0, 20, 20],
+                "clip_frame_size": [20, 20],
+                "native_corners": native_corners,
+                "native_image_bbox": native_bbox,
                 "source_frame_index": 0,
             }
         )
         + "\n"
     )
 
-    video_path = tmp_path / "video123.avi"
-    _write_test_video(video_path, [np.full((20, 20, 3), 180, dtype=np.uint8)])
+    video_path = tmp_path / "video.avi"
+    _write_test_video(video_path, [np.full((40, 60, 3), 180, dtype=np.uint8)])
 
-    import pipeline.physical.move_data as move_data
+    import pipeline.physical.board_probe.board_data as board_data
+    import pipeline.physical.shared.move_data as move_data
 
-    monkeypatch.setattr(move_data, "_get_video_path", lambda video_id: str(video_path))
+    captured: list[tuple[np.ndarray, tuple[tuple[float, float], ...], int, float]] = []
+
+    def fake_prepare_board_neighborhood_image(
+        image_bgr: np.ndarray,
+        corners: tuple[tuple[float, float], ...] | list[list[float]],
+        *,
+        size: int,
+        crop_margin: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        captured.append(
+            (
+                image_bgr,
+                tuple((float(x), float(y)) for x, y in corners),
+                size,
+                crop_margin,
+            )
+        )
+        return (
+            torch.zeros((3, size, size), dtype=torch.float32),
+            torch.tensor(corners, dtype=torch.float32),
+        )
+
     monkeypatch.setattr(
         move_data,
         "_initial_board_state_for_clip",
         lambda clip_path: (chess.STARTING_BOARD_FEN, "w"),
     )
+    monkeypatch.setattr(board_data, "resolve_source_video_path", lambda _video_id: video_path)
+    monkeypatch.setattr(
+        move_data,
+        "prepare_board_neighborhood_image",
+        fake_prepare_board_neighborhood_image,
+    )
 
     sequences = load_eval_move_sequences(
         annotation_root=annotation_root,
         image_size=16,
-        observation_mode="native_oblique",
-        oblique_crop_margin=0.0,
+        observation_mode="piece_projection_board",
+        board_crop_margin=0.0,
     )
 
     assert len(sequences) == 1
+    assert len(captured) == 1
+    captured_image, captured_corners, captured_size, captured_margin = captured[0]
+    assert captured_image.shape == (40, 60, 3)
+    assert captured_corners == expected_full_corners
+    assert captured_size == 16
+    assert captured_margin == 0.0
+
     sequence = sequences[0]
     assert sequence.frames.shape == (1, 3, 16, 16)
     assert sequence.board_corners is not None
-    assert sequence.board_corners.shape == (1, 4, 2)
-    assert torch.all(sequence.board_corners >= 0)
-    assert torch.all(sequence.board_corners <= 16)
+    assert torch.equal(sequence.board_corners[0], torch.tensor(expected_full_corners))
 
 
 def test_slice_move_windows_can_repeat_positive_windows() -> None:
@@ -239,7 +279,7 @@ def test_load_real_move_sequences_supports_internal_selection_split(
         tmp_path / other_clip_path,
     )
 
-    import pipeline.physical.move_data as move_data
+    import pipeline.physical.shared.move_data as move_data
 
     monkeypatch.setattr(move_data, "_PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
@@ -281,8 +321,8 @@ def test_load_real_move_sequences_supports_internal_selection_split(
         clips_dir=tmp_path,
         image_size=8,
         selection_source_video_ids={"selected"},
-        observation_mode="rectified",
-        oblique_crop_margin=0.0,
+        observation_mode="piece_projection_board",
+        board_crop_margin=0.0,
     )
 
     assert len(sequences) == 1
@@ -290,7 +330,7 @@ def test_load_real_move_sequences_supports_internal_selection_split(
     assert sequence.clip_path == selected_clip_path
     assert sequence.source_video_id == "selected"
     assert sequence.frames.shape == (2, 3, 8, 8)
-    assert sequence.board_corners is None
+    assert sequence.board_corners is not None
     assert sequence.labels == (
         tuple(board_to_class_ids(board)),
         tuple(board_to_class_ids(moved_board)),
@@ -300,78 +340,34 @@ def test_load_real_move_sequences_supports_internal_selection_split(
     assert sequence.inferred_move_targets[1] == get_vocabulary().uci_to_index("e2e4")
 
 
-def test_load_real_native_context_falls_back_to_channel_calibration(monkeypatch) -> None:
-    import pipeline.physical.move_data as move_data
-    from pipeline.overlay.calibration import LayoutCalibration
-
-    monkeypatch.setattr(move_data, "_get_video_path", lambda video_id: f"/tmp/{video_id}.mp4")
-    monkeypatch.setattr(
-        "pipeline.overlay.calibration.get_calibration",
-        lambda channel_handle: LayoutCalibration(
-            overlay=(0, 0, 50, 50),
-            camera=(10, 20, 900, 600),
-            ref_resolution=(1280, 720),
-        ),
-    )
-
-    context = move_data._load_real_native_context(
-        "data/argus/train_real/clip_overlay_video123_2.pt",
-        clip={
-            "source_video_id": "video123",
-            "source_channel_handle": "channelA",
-        },
-    )
-
-    assert context == {
-        "video_path": "/tmp/video123.mp4",
-        "camera_bbox": (10, 20, 900, 600),
-        "ref_resolution": (1280, 720),
-    }
-
-
-def test_build_real_clip_sample_supports_native_oblique(
+def test_build_real_clip_sample_supports_piece_projection_board(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    video_path = tmp_path / "real_native.avi"
-    _write_test_video(
-        video_path,
-        [
-            np.full((20, 20, 3), 40, dtype=np.uint8),
-            np.full((20, 20, 3), 80, dtype=np.uint8),
-        ],
-    )
-
     clip = {
-        "frames": torch.zeros((2, 3, 224, 224), dtype=torch.uint8),
+        "frames": torch.stack(
+            [
+                torch.from_numpy(np.full((20, 20, 3), 40, dtype=np.uint8)).permute(2, 0, 1),
+                torch.from_numpy(np.full((20, 20, 3), 80, dtype=np.uint8)).permute(2, 0, 1),
+            ],
+            dim=0,
+        ),
         "initial_board_fen": chess.STARTING_BOARD_FEN,
         "move_ucis": [],
         "move_frame_indices": [],
         "frame_indices": [0, 1],
     }
 
-    import pipeline.physical.move_data as move_data
-
-    monkeypatch.setattr(
-        move_data,
-        "_load_real_native_context",
-        lambda clip_path, clip=None: {
-            "video_path": str(video_path),
-            "camera_bbox": (0, 0, 20, 20),
-            "ref_resolution": (20, 20),
-        },
-    )
-
     clip_data = _build_real_clip_sample(
         clip,
         clip_path="data/argus/train_real/clip_overlay_video123_clip1_0.pt",
-        clip_rows=[_RealClipRow(corners=((0.0, 0.0), (223.0, 0.0), (223.0, 223.0), (0.0, 223.0)))],
+        clip_rows=[_RealClipRow(corners=((0.0, 0.0), (19.0, 0.0), (19.0, 19.0), (0.0, 19.0)))],
         image_size=16,
-        observation_mode="native_oblique",
+        observation_mode="piece_projection_board",
         move_target_pre_frames=0,
         detect_target_radius=0,
         detect_target_decay=0.5,
-        oblique_crop_margin=0.0,
+        board_crop_margin=0.0,
     )
 
     assert clip_data is not None

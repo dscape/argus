@@ -1,83 +1,100 @@
 {
-  "architecture": "board_probe_ensemble",
-  "class_logit_bias": [
-    0.021971504684213015,
-    0.0,
-    0.0,
-    0.0,
-    -0.1345798715690096,
-    0.0,
-    0.0,
-    -0.061704644702603374,
-    0.0,
-    0.0,
-    -0.1213048880760791,
-    -1.370038138831457,
-    0.0
-  ],
-  "class_logit_bias_scale": 0.085,
-  "class_logit_bias_source": "pseudo_real_source_prior_ratio",
-  "class_logit_bias_source_videos": [
-    "hryRA0-fqm0"
-  ],
-  "class_logit_bias_temporal_order": "before_smoothing",
-  "code_version": "v7",
+  "architecture": "board_probe",
+  "best_selection_score": 0.4459,
+  "board_input_mode": "piece_projection_board",
+  "code_version": "v8",
   "encoder_type": "dinov2",
-  "ensemble_members": [
-    "outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real_train_split_holdoutpsr_layers8_10_11_rw4_seed0/board_probe.pt",
-    "outputs/2026-04-12/physical_board_probe_dino_topdown_posmlp512_real658_fixed_layers8_10_11_rw4_seed0/board_probe.pt",
-    "outputs/2026-04-12/physical_board_probe_dino_topdown_transformer_real658_fixed_layers8_10_11_seed0/board_probe.pt"
-  ],
-  "ensemble_mode": "logit_average",
-  "ensemble_weights": [
-    0.7241379310344828,
-    0.2413793103448276,
-    0.034482758620689655
-  ],
   "feature_layer_indices": [
     8,
     10,
     11
   ],
   "input_size": 224,
-  "member_probe_configs": [
-    {
-      "dropout": 0.1,
-      "head_type": "pos_mlp",
-      "hidden_dim": 512,
-      "transformer_ff_dim": 1024,
-      "transformer_heads": 8,
-      "transformer_layers": 2
-    },
-    {
-      "dropout": 0.1,
-      "head_type": "pos_mlp",
-      "hidden_dim": 512,
-      "transformer_ff_dim": 1024,
-      "transformer_heads": 8,
-      "transformer_layers": 2
-    },
-    {
-      "dropout": 0.1,
-      "head_type": "transformer",
-      "hidden_dim": 512,
-      "transformer_ff_dim": 1024,
-      "transformer_heads": 8,
-      "transformer_layers": 2
-    }
-  ],
   "model_name": "facebook/dinov2-base",
-  "num_classes": 13,
   "output_grid_size": null,
-  "probe_config": null,
+  "probe_config": {
+    "dropout": 0.1,
+    "head_type": "pos_mlp",
+    "hidden_dim": 512,
+    "transformer_ff_dim": 1024,
+    "transformer_heads": 8,
+    "transformer_layers": 2
+  },
+  "real_eval_metrics": {
+    "accuracy": 0.6085244082840237,
+    "board_exact_match": 0.0,
+    "class_accuracy": {
+      "B": 0.016748768472906402,
+      "K": 0.5846153846153846,
+      "N": 0.29797979797979796,
+      "P": 0.4344528710725894,
+      "Q": 0.08321579689703808,
+      "R": 0.35072655217965654,
+      "b": 0.032467532467532464,
+      "empty": 0.7674277980938121,
+      "k": 0.7337278106508875,
+      "n": 0.016755521706016754,
+      "p": 0.2924883669399512,
+      "q": 0.5063469675599436,
+      "r": 0.33707865168539325
+    },
+    "macro_f1": 0.2885836899932835,
+    "mean_confidence": 0.6244626641273499,
+    "non_empty_accuracy": 0.32334246292181285
+  },
   "recommended_temporal_smoothing": {
     "change_threshold": 8,
     "high_alpha": 0.12,
     "low_alpha": 0.02,
     "mode": "adaptive_ema"
   },
-  "revision": 6,
+  "recommended_tracker": {
+    "baseline": {
+      "kind": "lookahead",
+      "lookahead_margin": 10.0,
+      "lookahead_window": 2
+    },
+    "description": "Hybrid lookahead + segmental decoder promoted from the autoresearch resweep over the refactor-era retrained board-probe logits.",
+    "id": "v282",
+    "segmental": {
+      "anomaly_change_evidence_threshold": 0.25,
+      "anomaly_settled_gain_threshold": 0.0,
+      "beam_size": 8,
+      "board_change_peak_threshold": 0.046875,
+      "board_weight": 1.0,
+      "detect_peak_threshold": 0.1,
+      "detect_weight": 0.0,
+      "diagnostic_settled_horizon": 8,
+      "event_window_radius": 0,
+      "max_event_proposals": 16,
+      "min_event_separation": 2,
+      "move_score_margin": 9.895706176757812,
+      "move_weight": 0.0,
+      "secondary_min_event_separation": 2,
+      "secondary_peak_ratio": 0.95,
+      "segment_board_drop_worst_frames": 1,
+      "state_aware_proposal_passes": 0,
+      "top_board_candidates": 2,
+      "top_move_candidates": 2
+    },
+    "selection": {
+      "min_score_gain_per_added_move": 125.0,
+      "min_total_score_gain": 150.0
+    }
+  },
+  "revision": 1,
   "runtime_constraints": "back_rank_pawns_and_exactly_one_king_per_color",
   "runtime_format": "pytorch",
-  "version": "v7r6"
+  "selection_dataset": "synthetic_val",
+  "selection_metric": "accuracy",
+  "sources": {
+    "held_out_eval_size": 845,
+    "manual_train_positions": 421,
+    "real_selection_positions": 0,
+    "real_train_positions": 0,
+    "synthetic_train_positions": 0,
+    "synthetic_val_positions": 150
+  },
+  "trained_at": "2026-04-17T18:12:59.531671+00:00",
+  "version": "v8r1"
 }

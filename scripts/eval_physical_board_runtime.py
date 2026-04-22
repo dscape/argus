@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the committed physical runtime reader on held-out rectified boards."""
+"""Evaluate the committed physical runtime reader on held-out annotated clip frames."""
 
 from __future__ import annotations
 
@@ -7,17 +7,19 @@ import argparse
 import json
 import sys
 from pathlib import Path
-
-import cv2
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline.physical.board_data import PhysicalEvalBoardDataset
-from pipeline.physical.square_classifier import (
+from pipeline.physical.board_probe.board_data import (
+    PhysicalEvalBoardDataset,
+    load_annotated_board_frame_bgr,
+)
+from pipeline.physical.board_probe.runtime import (
     PhysicalBoardSequenceReader,
     read_board_observation_from_frame,
 )
-from pipeline.physical.square_probe import evaluate_probe
+from pipeline.physical.board_probe.square_probe import evaluate_probe
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -63,19 +65,25 @@ def main() -> None:
     predicted_labels: list[int] = []
     target_labels: list[int] = []
     missing_predictions = 0
+    clip_cache: dict[Path, dict[str, Any]] = {}
 
     for row in rows:
-        image = cv2.imread(str(_PROJECT_ROOT / row.board_path), cv2.IMREAD_COLOR)
-        if image is None:
-            raise ValueError(f"Failed to load board image: {row.board_path}")
+        image = load_annotated_board_frame_bgr(row, clip_cache=clip_cache)
         if sequence_reader is not None:
             clip_key = row.clip_path or row.annotation_id
             if clip_key != current_clip_key:
                 sequence_reader.reset()
                 current_clip_key = clip_key
-            observation = sequence_reader.read_board_observation_from_frame(image)
+            observation = sequence_reader.read_board_observation_from_frame(
+                image,
+                corners=row.corners,
+            )
         else:
-            observation = read_board_observation_from_frame(image, device=args.device)
+            observation = read_board_observation_from_frame(
+                image,
+                corners=row.corners,
+                device=args.device,
+            )
         if observation is None:
             missing_predictions += 1
             continue
