@@ -125,6 +125,9 @@ class TestBuildTrainingClip:
             assert "detect_targets" in clip
             assert "legal_masks" in clip
             assert "move_mask" in clip
+            assert "move_loss_mask" in clip
+            assert "move_loss_weights" in clip
+            assert "fens" in clip
         else:
             assert "pgn_moves" in clip
             assert "num_moves" in clip
@@ -252,6 +255,92 @@ class TestBuildTrainingClip:
         assert clip["move_mask"].dtype == torch.bool
         assert torch.equal(clip["move_mask"], clip["detect_targets"].bool())
         assert int(clip["move_mask"].sum().item()) == len(ITALIAN_GAME)
+
+    @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
+    def test_clip_includes_replay_fens_and_confidence_weighted_move_loss(self, generator):
+        segment, frame_indices = _make_game_segment(["e2e4", "e7e5"], frames_per_move=3)
+        segment.moves[0].confidence = 0.75
+        segment.moves[1].confidence = 0.5
+        camera_crops = _make_camera_crops(len(frame_indices))
+
+        clip = generator._build_training_clip(
+            camera_crops=camera_crops,
+            frame_indices=frame_indices,
+            segment=segment,
+            fps=30.0,
+        )
+
+        assert clip is not None
+        assert len(clip["fens"]) == clip["frames"].shape[0]
+
+        board = chess.Board()
+        assert clip["fens"][0] == board.fen()
+        board.push(chess.Move.from_uci("e2e4"))
+        first_move_index = (clip["move_mask"] == 1).nonzero(as_tuple=True)[0][0].item()
+        assert clip["fens"][first_move_index] == board.fen()
+
+        assert torch.equal(clip["move_loss_mask"], clip["move_mask"])
+        expected_weights = torch.zeros_like(clip["move_loss_weights"])
+        move_indices = (clip["move_mask"] == 1).nonzero(as_tuple=True)[0].tolist()
+        expected_weights[move_indices[0]] = 0.75
+        expected_weights[move_indices[1]] = 0.5
+        assert torch.allclose(clip["move_loss_weights"], expected_weights)
+
+    @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
+    def test_clip_can_estimate_board_corners_when_requested(self, generator, monkeypatch):
+        import pipeline.overlay.overlay_clip_generator as mod
+
+        segment, frame_indices = _make_game_segment(["e2e4"], frames_per_move=5)
+        camera_crops = _make_camera_crops(len(frame_indices))
+        base_corners = (
+            (10.0, 12.0),
+            (90.0, 12.0),
+            (90.0, 88.0),
+            (10.0, 88.0),
+        )
+        expected_corners = [base_corners]
+        for offset in range(1, len(frame_indices)):
+            expected_corners.append(tuple((x + offset, y + offset) for x, y in base_corners))
+
+        monkeypatch.setattr(
+            mod,
+            "localize_board",
+            lambda _frame, *, device="cpu": SimpleNamespace(
+                corners=base_corners,
+                confidence=0.9,
+                method="stub",
+            ),
+        )
+
+        tracked_corners = iter(expected_corners[1:])
+
+        monkeypatch.setattr(
+            mod,
+            "track_corners",
+            lambda _prev_frame, _curr_frame, _prev_corners: SimpleNamespace(
+                corners=next(tracked_corners),
+                confidence=0.8,
+                method="stub",
+            ),
+        )
+
+        clip = generator._build_training_clip(
+            camera_crops=camera_crops,
+            frame_indices=frame_indices,
+            segment=segment,
+            fps=30.0,
+            board_flipped=True,
+            estimate_board_corners=True,
+        )
+
+        assert clip is not None
+        assert clip["board_flipped"] is True
+        assert "board_corners" in clip
+        assert clip["board_corners"].shape == (len(frame_indices), 4, 2)
+        assert torch.allclose(
+            clip["board_corners"],
+            torch.tensor(expected_corners, dtype=torch.float32),
+        )
 
     @pytest.mark.skipif(not HAS_ARGUS, reason="argus package not installed")
     def test_legal_masks_shape(self, generator):

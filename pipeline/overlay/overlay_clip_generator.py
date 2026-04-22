@@ -32,6 +32,7 @@ from pipeline.overlay.overlay_move_detector import (
 )
 from pipeline.overlay.replay import build_replay_board
 from pipeline.overlay.sequence_reader import LockedOverlaySequenceReader
+from pipeline.physical.shared.board_localizer import localize_board, track_corners
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +292,8 @@ class OverlayClipGenerator:
                 fps=fps,
                 frame_skip=frame_skip,
                 move_delay_seconds=cal.move_delay_seconds,
+                board_flipped=cal.board_flipped,
+                estimate_board_corners=True,
             )
 
             if clip_data is not None:
@@ -336,6 +339,52 @@ class OverlayClipGenerator:
 
         return results
 
+    def _estimate_board_corners(self, camera_crops: list[np.ndarray]) -> torch.Tensor | None:
+        """Estimate per-frame board corners in the camera-crop coordinate space."""
+        if not camera_crops:
+            return None
+
+        first_index: int | None = None
+        first_localization = None
+        for frame_index, frame_bgr in enumerate(camera_crops):
+            localization = localize_board(frame_bgr, device=self.device)
+            if localization is None:
+                continue
+            first_index = frame_index
+            first_localization = localization
+            break
+
+        if first_index is None or first_localization is None:
+            return None
+
+        corners = np.zeros((len(camera_crops), 4, 2), dtype=np.float32)
+        initial_corners = np.asarray(first_localization.corners, dtype=np.float32)
+        corners[: first_index + 1] = initial_corners
+
+        prev_frame_bgr = camera_crops[first_index]
+        prev_corners = first_localization.corners
+        for frame_index in range(first_index + 1, len(camera_crops)):
+            curr_frame_bgr = camera_crops[frame_index]
+            tracked = track_corners(prev_frame_bgr, curr_frame_bgr, prev_corners)
+            if tracked is not None:
+                current_corners = tracked.corners
+            else:
+                fallback = localize_board(curr_frame_bgr, device=self.device)
+                if fallback is not None:
+                    current_corners = fallback.corners
+                else:
+                    current_corners = tuple(
+                        (float(point[0]), float(point[1])) for point in corners[frame_index - 1]
+                    )
+
+            corners[frame_index] = np.asarray(current_corners, dtype=np.float32)
+            prev_frame_bgr = curr_frame_bgr
+            prev_corners = tuple(
+                (float(point[0]), float(point[1])) for point in corners[frame_index]
+            )
+
+        return torch.from_numpy(corners)
+
     def _build_training_clip(
         self,
         camera_crops: list[np.ndarray],
@@ -344,6 +393,8 @@ class OverlayClipGenerator:
         fps: float,
         frame_skip: int = 1,
         move_delay_seconds: float = 0.0,
+        board_flipped: bool = False,
+        estimate_board_corners: bool = False,
     ) -> dict | None:
         """Build a training clip dict compatible with ArgusDataset.
 
@@ -358,9 +409,13 @@ class OverlayClipGenerator:
                 metadata only; training targets stay anchored to the raw
                 overlay-confirm frame so labels match the visible post-move
                 board state.
+            board_flipped: Whether the broadcast camera shows the board from
+                Black's perspective.
+            estimate_board_corners: When true, attach per-frame board corners
+                in the camera-crop coordinate space.
 
         Returns:
-            Dict with frames, move_targets, detect_targets, legal_masks, move_mask.
+            Dict with clip tensors and replay metadata.
         """
         # Find the frame range for this segment
         start_idx = None
@@ -405,6 +460,16 @@ class OverlayClipGenerator:
         frames_tensor = (
             torch.from_numpy(np.stack(resized)).permute(0, 3, 1, 2).to(torch.uint8)
         )  # (T, C, H, W)
+        board_corners = None
+        if estimate_board_corners:
+            board_corners = self._estimate_board_corners(segment_cameras)
+            if board_corners is None:
+                logger.warning(
+                    "Skipping segment %s-%s: could not estimate board corners",
+                    segment.start_frame,
+                    segment.end_frame,
+                )
+                return None
         frame_timestamps = torch.tensor(
             [frame_idx / fps for frame_idx in segment_frame_indices],
             dtype=torch.float32,
@@ -448,13 +513,17 @@ class OverlayClipGenerator:
             "training_target_timing": "overlay_confirm_post_move",
             "estimated_otb_delay_seconds": float(move_delay_seconds),
             "frame_resolution": "native",
+            "board_flipped": bool(board_flipped),
         }
 
         if VOCAB is None:
-            return {
+            payload = {
                 "frames": frames_tensor,
                 **clip_metadata,
             }
+            if board_corners is not None:
+                payload["board_corners"] = board_corners
+            return payload
 
         from argus.chess.move_vocabulary import NO_MOVE_IDX
 
@@ -465,7 +534,10 @@ class OverlayClipGenerator:
         detect_targets = torch.zeros(num_frames, dtype=torch.float32)
         legal_masks = torch.zeros(num_frames, vocab_size, dtype=torch.bool)
         move_mask = torch.zeros(num_frames, dtype=torch.bool)
-        move_confidence = torch.ones(num_frames, dtype=torch.float32)
+        move_confidence = torch.zeros(num_frames, dtype=torch.float32)
+        move_loss_mask = torch.zeros(num_frames, dtype=torch.bool)
+        move_loss_weights = torch.zeros(num_frames, dtype=torch.float32)
+        board_fens: list[str] = []
 
         # Build a map from frame index to move.
         move_frame_map = {}
@@ -481,41 +553,53 @@ class OverlayClipGenerator:
             legal_masks[i] = legal_mask
 
             # Check if this frame has a move
-            if frame_idx in move_frame_map:
-                m = move_frame_map[frame_idx]
-                uci = m.move_uci
-                idx = VOCAB.uci_to_index(uci) if VOCAB.contains(uci) else None
-                if idx is None:
-                    logger.warning("Move %s missing from vocabulary at frame %d", uci, frame_idx)
-                    return None
+            m = move_frame_map.get(frame_idx)
+            if m is None:
+                board_fens.append(board.fen())
+                continue
 
-                move_targets[i] = idx
-                detect_targets[i] = 1.0
-                move_mask[i] = True
-                move_confidence[i] = m.confidence
+            uci = m.move_uci
+            idx = VOCAB.uci_to_index(uci) if VOCAB.contains(uci) else None
+            if idx is None:
+                logger.warning("Move %s missing from vocabulary at frame %d", uci, frame_idx)
+                return None
 
-                # Push the move on the board
-                try:
-                    move = chess.Move.from_uci(uci)
-                except ValueError:
-                    logger.warning("Invalid UCI move: %s", uci)
-                    return None
+            move_targets[i] = idx
+            detect_targets[i] = 1.0
+            move_mask[i] = True
+            move_loss_mask[i] = True
+            move_confidence[i] = float(m.confidence)
+            move_loss_weights[i] = float(m.confidence)
 
-                if move not in board.legal_moves:
-                    logger.warning("Move %s not legal at frame %d", uci, frame_idx)
-                    return None
+            # Push the move on the board
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError:
+                logger.warning("Invalid UCI move: %s", uci)
+                return None
 
-                board.push(move)
+            if move not in board.legal_moves:
+                logger.warning("Move %s not legal at frame %d", uci, frame_idx)
+                return None
 
-        return {
+            board.push(move)
+            board_fens.append(board.fen())
+
+        payload = {
             "frames": frames_tensor,
             "move_targets": move_targets,
             "detect_targets": detect_targets,
             "legal_masks": legal_masks,
             "move_mask": move_mask,
+            "move_loss_mask": move_loss_mask,
+            "move_loss_weights": move_loss_weights,
             "move_confidence": move_confidence,
+            "fens": board_fens,
             **clip_metadata,
         }
+        if board_corners is not None:
+            payload["board_corners"] = board_corners
+        return payload
 
 
 def download_video(url: str, output_dir: str = "data/videos/overlay") -> str | None:
