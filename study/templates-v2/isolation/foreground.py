@@ -109,6 +109,33 @@ def _first_pc_signed_projection(patch_tokens: np.ndarray) -> np.ndarray:
     return centered @ pc1
 
 
+def _padding_patch_mask(
+    crop_bgr: np.ndarray,
+    patch_grid_shape: tuple[int, int],
+    patch_size: int,
+    *,
+    luminance_threshold: float = 4.0,
+) -> np.ndarray:
+    """Identify patches that are pure zero-padding from ``_place_on_canvas``.
+
+    Returns a bool array shaped ``patch_grid_shape``; ``True`` where the
+    patch is entirely dark (padding), ``False`` where there is any image
+    content. Padding patches are excluded from PCA and forced to 0 in the
+    resulting mask so the PCA ~50/50 split doesn't bleed onto black pixels.
+    """
+    height = patch_grid_shape[0] * patch_size
+    width = patch_grid_shape[1] * patch_size
+    gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    if gray.shape != (height, width):
+        raise ValueError(
+            f"crop shape {gray.shape} does not match patch grid * size {(height, width)}"
+        )
+    patch_means = gray.reshape(
+        patch_grid_shape[0], patch_size, patch_grid_shape[1], patch_size
+    ).mean(axis=(1, 3))
+    return patch_means < luminance_threshold
+
+
 def pca_mask(
     crop_bgr: np.ndarray,
     embedder: FrozenBackboneEmbedder,
@@ -116,17 +143,23 @@ def pca_mask(
     layer_index: int = DEFAULT_PCA_LAYER_INDEX,
     input_size: int = DEFAULT_INPUT_SIZE,
     patch_size: int = DEFAULT_PATCH_SIZE,
+    piece_symbol: str | None = None,
     disambiguation_hint: np.ndarray | None = None,
 ) -> np.ndarray:
     """Binary foreground mask on the patch grid from DINOv3 first-PC sign.
 
-    The sign of the first principal component separates patches into two
-    clusters but the sign itself is arbitrary. ``disambiguation_hint`` — if
-    provided — is an approximate foreground mask (same shape as the patch
-    grid); the sign whose ``+`` cluster overlaps the hint more is kept as
-    foreground. Without a hint we fall back to "bottom-left region =
-    foreground" since that matches where pieces sit after the extractor's
-    bottom-left aspect-preserving paste.
+    The crop canvas has zero-padding on its top and right (see
+    ``_place_on_canvas``) because the extractor preserves aspect ratio and
+    bottom-left-pastes the piece. Pure-padding patches are detected by
+    luminance and excluded from PCA — otherwise the first PC would spend
+    most of its variance separating padding from content, leaving only the
+    second PC to separate piece from board.
+
+    Among the remaining content patches, the first principal component
+    splits them into two clusters; the sign is arbitrary. When
+    ``disambiguation_hint`` is provided (typically the geometric visibility
+    mask), the sign whose ``+`` cluster overlaps the hint more is kept as
+    foreground. Padding patches are always forced to ``0`` in the output.
     """
     if crop_bgr.ndim != 3 or crop_bgr.shape[2] != 3:
         raise ValueError(f"crop_bgr must be HxWx3, got {crop_bgr.shape}")
@@ -139,31 +172,70 @@ def pca_mask(
             f"Expected {patch_grid_shape[0] * patch_grid_shape[1]} patch tokens, "
             f"got {patch_tokens.shape[0]}"
         )
-    projection = _first_pc_signed_projection(patch_tokens)
-    grid = projection.reshape(patch_grid_shape)
 
-    if disambiguation_hint is not None:
+    padding_mask = _padding_patch_mask(crop_bgr, patch_grid_shape, patch_size)
+    content_mask = ~padding_mask
+    content_flat = content_mask.ravel()
+    if int(content_flat.sum()) < 4:
+        return np.zeros(patch_grid_shape, dtype=np.float32)
+
+    content_tokens = patch_tokens[content_flat]
+    centered = content_tokens - content_tokens.mean(axis=0, keepdims=True)
+    _u, _s, vt = np.linalg.svd(centered, full_matrices=False)
+    pc1 = vt[0]
+    content_projection = centered @ pc1
+
+    grid = np.zeros(patch_grid_shape, dtype=np.float32)
+    grid_flat = grid.ravel()
+    grid_flat[content_flat] = content_projection.astype(np.float32)
+    grid = grid_flat.reshape(patch_grid_shape)
+
+    resolved = False
+    if piece_symbol is not None:
+        # Primary disambiguator: the piece's known color from the FEN.
+        # White pieces are brighter than the board; black pieces darker.
+        # Pick the sign whose ``+`` cluster's mean luminance is in the
+        # right direction. This is robust to a misaligned geometric mask.
+        gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        patch_luminance = gray.reshape(
+            patch_grid_shape[0], patch_size, patch_grid_shape[1], patch_size
+        ).mean(axis=(1, 3))
+        pos_patches = (grid > 0) & content_mask
+        neg_patches = (grid < 0) & content_mask
+        if pos_patches.any() and neg_patches.any():
+            pos_luminance = float(patch_luminance[pos_patches].mean())
+            neg_luminance = float(patch_luminance[neg_patches].mean())
+            if piece_symbol.isupper():
+                if pos_luminance < neg_luminance:
+                    grid = -grid
+            else:
+                if pos_luminance > neg_luminance:
+                    grid = -grid
+            resolved = True
+
+    if not resolved and disambiguation_hint is not None:
         if disambiguation_hint.shape != grid.shape:
             raise ValueError(
                 f"disambiguation_hint shape {disambiguation_hint.shape} does not match "
                 f"patch grid {grid.shape}"
             )
-        hint_binary = disambiguation_hint > 0.3
+        hint_binary = (disambiguation_hint > 0.3) & content_mask
         if hint_binary.any():
             pos_overlap = int(((grid > 0) & hint_binary).sum())
             neg_overlap = int(((grid < 0) & hint_binary).sum())
             if neg_overlap > pos_overlap:
                 grid = -grid
-        else:
-            # Hint is empty — fall back to geometric heuristic below.
-            disambiguation_hint = None
+            resolved = True
 
-    if disambiguation_hint is None:
+    if not resolved:
         h, w = grid.shape
         bottom_left = grid[h // 2 :, : max(1, w // 2)]
         if bottom_left.mean() < 0:
             grid = -grid
-    return (grid > 0).astype(np.float32)
+
+    mask = (grid > 0).astype(np.float32)
+    mask[padding_mask] = 0.0
+    return mask
 
 
 def geometric_mask(piece: PieceVisibility) -> np.ndarray:
@@ -208,6 +280,7 @@ def compute_foreground_masks(
         layer_index=layer_index,
         input_size=input_size,
         patch_size=patch_size,
+        piece_symbol=piece.symbol,
         disambiguation_hint=geometric,
     )
     intersect = intersect_mask(pca, geometric, geometric_threshold=geometric_threshold)

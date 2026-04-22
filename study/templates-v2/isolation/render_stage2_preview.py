@@ -41,7 +41,9 @@ from visibility import (
     DEFAULT_INPUT_SIZE,
     board_fen_from_piece_entries,
     compute_frame_visibility,
+    detect_piece_board_positions,
     extract_piece_crop,
+    occupied_squares_from_fen,
 )
 
 DEFAULT_LABELS_PATH = _PROJECT_ROOT / "study" / "eval" / "labels.jsonl"
@@ -59,7 +61,7 @@ CELL_SIZE = DEFAULT_INPUT_SIZE
 CELL_PAD = 12
 HEADER_HEIGHT = 42
 ROW_LABEL_WIDTH = 110
-MASK_ALPHA = 0.55
+MASK_ALPHA = 0.40
 PIECES_PER_FRAME = 4
 
 
@@ -189,10 +191,15 @@ def build_contact_sheet(
         if image_bgr is None:
             raise FileNotFoundError(label_row["image_path"])
         fen = board_fen_from_piece_entries(label_row["pieces"])
+        occupied = occupied_squares_from_fen(fen)
+        piece_positions = detect_piece_board_positions(
+            image_bgr, label_row["corners"], occupied
+        )
         frame_vis = compute_frame_visibility(
             image_shape=image_bgr.shape[:2],
             corners=label_row["corners"],
             fen=fen,
+            piece_positions=piece_positions,
             include_full_masks=False,
         )
         squares = _select_pieces_for_frame(frame_vis.pieces, used_types)

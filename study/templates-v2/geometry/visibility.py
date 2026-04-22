@@ -34,12 +34,12 @@ DEFAULT_PATCH_SIZE = 16
 # per-type dimensions makes the cuboid cover the actual piece even when the
 # piece is placed slightly off-center within its square.
 PIECE_DIMENSIONS: dict[str, tuple[float, float, float]] = {
-    "P": (0.45, 0.45, 1.20),
-    "N": (0.55, 0.55, 1.50),
-    "B": (0.50, 0.50, 1.75),
-    "R": (0.60, 0.60, 1.40),
-    "Q": (0.60, 0.60, 2.00),
-    "K": (0.65, 0.65, 2.15),
+    "P": (0.45, 0.45, 0.85),
+    "N": (0.55, 0.55, 1.05),
+    "B": (0.50, 0.50, 1.25),
+    "R": (0.60, 0.60, 0.95),
+    "Q": (0.60, 0.60, 1.40),
+    "K": (0.65, 0.65, 1.65),
 }
 
 
@@ -256,6 +256,78 @@ def _silhouette_from_cuboid(cuboid_vertices: np.ndarray) -> np.ndarray:
     return hull.reshape(-1, 2).astype(np.float64)
 
 
+def _estimate_focal_length_from_homography(
+    corners: Sequence[Sequence[float]],
+    principal_point: tuple[float, float],
+) -> float | None:
+    """Recover the camera's focal length from a planar homography.
+
+    For ``K = diag(f, f, 1)`` with principal point ``(cx, cy)`` and a
+    rotation-matrix decomposition ``H = lambda * K * [r1 | r2 | t]``,
+    ``r1`` and ``r2`` must be unit-length and orthogonal. That gives two
+    equations in one unknown ``f^2``; averaging the two consistent
+    estimates is robust to small residuals. Returns ``None`` when the
+    homography is degenerate (e.g. both columns have equal norm or the
+    cross-term vanishes).
+    """
+    board_corners_xy = np.array(
+        [[0.0, 0.0], [8.0, 0.0], [8.0, 8.0], [0.0, 8.0]],
+        dtype=np.float32,
+    )
+    image_corners = np.asarray(corners, dtype=np.float32)
+    h_matrix = cv2.getPerspectiveTransform(board_corners_xy, image_corners).astype(np.float64)
+    cx, cy = principal_point
+    h1 = h_matrix[:, 0]
+    h2 = h_matrix[:, 1]
+
+    a1, b1, c1 = h1[0] - cx * h1[2], h1[1] - cy * h1[2], h1[2]
+    a2, b2, c2 = h2[0] - cx * h2[2], h2[1] - cy * h2[2], h2[2]
+
+    candidates: list[float] = []
+    denom_equal = c2 * c2 - c1 * c1
+    if abs(denom_equal) > 1e-9:
+        f_sq_equal = (a1 * a1 + b1 * b1 - a2 * a2 - b2 * b2) / denom_equal
+        if f_sq_equal > 0:
+            candidates.append(float(np.sqrt(f_sq_equal)))
+
+    denom_orth = c1 * c2
+    if abs(denom_orth) > 1e-9:
+        f_sq_orth = -(a1 * a2 + b1 * b2) / denom_orth
+        if f_sq_orth > 0:
+            candidates.append(float(np.sqrt(f_sq_orth)))
+
+    if not candidates:
+        return None
+    return float(np.mean(candidates))
+
+
+def _camera_matrix_from_corners(
+    corners: Sequence[Sequence[float]],
+    image_shape: tuple[int, int],
+) -> np.ndarray:
+    """Camera matrix with focal length estimated from the board homography.
+
+    Typical broadcast cameras on 1920×1080 frames have focal lengths in
+    ``[0.5 · max_dim, 2.5 · max_dim]``. We accept estimates only inside
+    that range and fall back to a 60° FOV guess otherwise. Using a
+    consistent K keeps the homography and ``K[R|t]`` projections in
+    agreement — both hit the annotated corners exactly, so the cuboid
+    silhouette (drawn via homography) and the 3D z-buffer (computed via
+    ``K[R|t]``) operate in the same frame.
+    """
+    height, width = image_shape
+    cx = width / 2.0
+    cy = height / 2.0
+    max_dim = float(max(width, height))
+    focal = _estimate_focal_length_from_homography(corners, (cx, cy))
+    if focal is None or focal < 0.5 * max_dim or focal > 2.5 * max_dim:
+        return default_camera_matrix(image_shape)
+    return np.array(
+        [[focal, 0.0, cx], [0.0, focal, cy], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+
+
 def _compute_up_vanishing_point(pose: CameraPose) -> tuple[np.ndarray, bool]:
     """Return (vp_image, is_finite). ``vp_image`` is the image-space point
     where all 3D vertical lines converge. If the up-direction is parallel to
@@ -457,6 +529,78 @@ def extract_piece_crop(
     )
 
 
+def _compute_visibility_zbuffer(
+    projections: list[dict[str, Any]],
+    own_masks: dict[str, np.ndarray],
+    pose: CameraPose,
+    image_shape: tuple[int, int],
+) -> dict[str, np.ndarray]:
+    """Per-pixel 3D z-buffer over piece cuboids.
+
+    For each pixel in each piece's rasterized silhouette, back-project the
+    pixel to a world-space camera ray and intersect the ray with the
+    piece's axis-aligned cuboid in board coordinates. The entry depth of
+    that ray-cuboid intersection is the pixel's contribution to a global
+    depth buffer; each pixel ends up "owned" by whichever piece's cuboid
+    the camera ray hits first. This correctly handles side-by-side pieces
+    whose 2D silhouettes overlap in image space but whose 3D cuboids do
+    not — 2D silhouette subtraction wrongly occludes those pairs, while
+    z-buffering keeps each piece's real ray-intersection region.
+    """
+    height, width = image_shape
+    depth_buffer = np.full((height, width), np.inf, dtype=np.float32)
+    owner_buffer = np.full((height, width), -1, dtype=np.int32)
+    rotation = pose.R
+    camera_position_world = -rotation.T @ pose.t.reshape(3)
+    k_inv = np.linalg.inv(pose.K)
+
+    for index, entry in enumerate(projections):
+        mask = own_masks[entry["square"]]
+        ys, xs = np.where(mask > 0)
+        if ys.size == 0:
+            continue
+
+        pixels_image = np.stack(
+            [xs.astype(np.float64), ys.astype(np.float64), np.ones(ys.size, dtype=np.float64)],
+            axis=0,
+        )
+        rays_camera = k_inv @ pixels_image
+        rays_world = rotation.T @ rays_camera  # (3, N)
+
+        cx, cy = entry["center"]
+        half_w = entry["width"] / 2.0
+        half_d = entry["depth_size"] / 2.0
+        z_top = float(pose.up_sign) * float(entry["height"])
+        cuboid_min = np.array([cx - half_w, cy - half_d, min(0.0, z_top)], dtype=np.float64)
+        cuboid_max = np.array([cx + half_w, cy + half_d, max(0.0, z_top)], dtype=np.float64)
+
+        # Ray-AABB via slabs.
+        safe_dirs = np.where(np.abs(rays_world) < 1e-12, 1e-12, rays_world)
+        origin_col = camera_position_world[:, None]
+        t_lo = (cuboid_min[:, None] - origin_col) / safe_dirs
+        t_hi = (cuboid_max[:, None] - origin_col) / safe_dirs
+        t_min = np.minimum(t_lo, t_hi)
+        t_max = np.maximum(t_lo, t_hi)
+        t_near = np.max(t_min, axis=0)
+        t_far = np.min(t_max, axis=0)
+        valid = (t_near <= t_far) & (t_far >= 0)
+        t_entry = np.where(t_near > 0, t_near, t_far)
+        t_entry = np.where(valid, t_entry, np.inf)
+
+        current = depth_buffer[ys, xs]
+        closer = t_entry < current
+        if not np.any(closer):
+            continue
+        depth_buffer[ys[closer], xs[closer]] = t_entry[closer].astype(np.float32)
+        owner_buffer[ys[closer], xs[closer]] = index
+
+    visible_by_square: dict[str, np.ndarray] = {}
+    for index, entry in enumerate(projections):
+        visible = (owner_buffer == index).astype(np.uint8)
+        visible_by_square[entry["square"]] = visible
+    return visible_by_square
+
+
 def _compute_frame_visibility_impl(
     *,
     image_shape: tuple[int, int] | tuple[int, int, int],
@@ -479,7 +623,9 @@ def _compute_frame_visibility_impl(
 
     image_shape_2d = (int(image_shape[0]), int(image_shape[1]))
     resolved_camera_matrix = (
-        default_camera_matrix(image_shape_2d) if camera_matrix is None else camera_matrix
+        _camera_matrix_from_corners(corners, image_shape_2d)
+        if camera_matrix is None
+        else camera_matrix
     )
     pose = camera_pose_from_corners(corners, K=resolved_camera_matrix)
     board_homography = board_to_image_homography(corners)
@@ -512,6 +658,9 @@ def _compute_frame_visibility_impl(
                 "row": row,
                 "col": col,
                 "center": (cx, cy),
+                "width": width,
+                "depth_size": depth_size,
+                "height": height,
                 "depth": depth,
                 "cuboid": cuboid,
                 "silhouette": silhouette,
@@ -525,13 +674,15 @@ def _compute_frame_visibility_impl(
         entry["square"]: _rasterize_silhouette(entry["silhouette"], image_shape_2d)
         for entry in projections
     }
-    seen_mask = np.zeros(image_shape_2d, dtype=np.uint8)
+    visible_by_square = _compute_visibility_zbuffer(
+        projections, own_masks, pose, image_shape_2d
+    )
+
     pieces: dict[str, PieceVisibility] = {}
     for entry in projections:
         square = entry["square"]
         own_mask = own_masks[square]
-        visible_mask = np.where(seen_mask == 0, own_mask, np.uint8(0))
-        np.bitwise_or(seen_mask, own_mask, out=seen_mask)
+        visible_mask = visible_by_square[square]
 
         own_area = int(own_mask.sum())
         visible_area = int(visible_mask.sum())
