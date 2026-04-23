@@ -1,0 +1,3 @@
+- Continue the templates-v2 study from completed Stage 1 visibility masks.
+- Immediate next steps: proceed to Stage 2 foreground isolation, then masked patch-token embedding and multi-frame bank builder, preserving required debug artifacts and human checkpoints at each stage.
+- Keep evaluation sequencing aligned with plan: after pipeline pieces are ready, extend harness and evaluate on `2wWUKmCBr6A` before `h2WrtkfwRl8`.

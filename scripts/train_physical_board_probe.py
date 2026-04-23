@@ -37,6 +37,7 @@ from pipeline.physical.shared.real_board_data import (
     PhysicalRealBoardRow,
     load_real_board_rows,
 )
+from pipeline.physical.shared.training_receipts import write_training_receipt
 from pipeline.shared import SQUARE_CLASS_NAMES
 
 from argus.device import resolve_device
@@ -297,6 +298,15 @@ def main() -> None:
         eval_labels,
         device=device,
         annotation_ids=eval_annotation_ids,
+    )
+
+    write_training_receipt(
+        output_dir,
+        kind="board_probe",
+        entries=_collect_probe_receipt_entries(
+            real_train_dataset=real_train_dataset,
+            manual_train_dataset=manual_train_dataset,
+        ),
     )
 
     checkpoint_path = output_dir / "board_probe.pt"
@@ -605,6 +615,43 @@ def resolve_output_dir(output_dir: Path | None) -> Path:
         return output_dir.resolve()
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
     return (_DEFAULT_OUTPUT_ROOT / timestamp).resolve()
+
+
+def _collect_probe_receipt_entries(
+    *,
+    real_train_dataset: Dataset[Any] | None,
+    manual_train_dataset: Dataset[Any] | None,
+) -> list[dict[str, str | int | None]]:
+    entries: list[dict[str, str | int | None]] = []
+    seen_clips: set[str] = set()
+    rows = list(getattr(real_train_dataset, "rows", []) or [])
+    for row in rows:
+        clip_path = getattr(row, "clip_path", None)
+        if not isinstance(clip_path, str) or clip_path in seen_clips:
+            continue
+        seen_clips.add(clip_path)
+        entries.append(
+            {
+                "source": "real_train",
+                "clip_path": clip_path,
+                "source_channel_handle": getattr(row, "source_channel_handle", None),
+                "source_video_id": getattr(row, "source_video_id", None),
+            }
+        )
+    manual_rows = list(getattr(manual_train_dataset, "rows", []) or [])
+    for row in manual_rows:
+        annotation_id = getattr(row, "annotation_id", None)
+        if not isinstance(annotation_id, str):
+            continue
+        entries.append(
+            {
+                "source": "manual_train",
+                "annotation_id": annotation_id,
+                "clip_path": getattr(row, "clip_path", None),
+                "source_video_id": getattr(row, "source_video_id", None),
+            }
+        )
+    return entries
 
 
 def build_encoder_kwargs(args: argparse.Namespace) -> dict[str, object]:

@@ -1,0 +1,5 @@
+- Confirm human acceptance of Stage 1 debug overlays in `study/templates-v2/geometry/debug-stage1/` before relying on visibility masks as settled.
+- Implement remaining planned stages: foreground isolation, masked patch-token embedding, multi-frame bank builder, quality gate, classifier, proposal-source import, and eval harness extension.
+- Run full eval on `2wWUKmCBr6A`, then `h2WrtkfwRl8`, then inspect failures.
+- Existing unrelated mypy failures remain in `pipeline/physical/piece_projection.py`; not caused by templates-v2 work.
+- If the `study/mlx_vlm_segmentation/` line continues, validate on more **physical-board** stills and try a stronger grounding-capable `mlx-vlm` model or prompt revision; current `gemma4_local` native-crop preview on `clip_overlay_e4lGbQp4pU4_clip70_9_frame0000` parsed only 3 pieces and remains far from true visible-part segmentation.

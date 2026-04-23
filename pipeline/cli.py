@@ -256,9 +256,7 @@ def cmd_physical_board_failure_study(args):
             if args.temporal_ema_alpha is None
             else args.temporal_ema_alpha
         ),
-        tracker_mode=(
-            base_config.tracker_mode if args.tracker_mode is None else args.tracker_mode
-        ),
+        tracker_mode=(base_config.tracker_mode if args.tracker_mode is None else args.tracker_mode),
         move_accept_threshold=(
             base_config.move_accept_threshold
             if args.move_accept_threshold is None
@@ -270,14 +268,10 @@ def cmd_physical_board_failure_study(args):
             else args.move_accept_margin
         ),
         lookahead_window=(
-            base_config.lookahead_window
-            if args.lookahead_window is None
-            else args.lookahead_window
+            base_config.lookahead_window if args.lookahead_window is None else args.lookahead_window
         ),
         lookahead_margin=(
-            base_config.lookahead_margin
-            if args.lookahead_margin is None
-            else args.lookahead_margin
+            base_config.lookahead_margin if args.lookahead_margin is None else args.lookahead_margin
         ),
         weights_path=base_config.weights_path if args.weights_path is None else args.weights_path,
         preceding_frames=args.preceding_frames,
@@ -474,9 +468,7 @@ def _get_real_data_overview(
                 "modified_ts": local["modified_ts"],
                 "title": video_row.get("title") if video_row is not None else None,
                 "channel_handle": channel_handle,
-                "published_at": (
-                    video_row.get("published_at") if video_row is not None else None
-                ),
+                "published_at": (video_row.get("published_at") if video_row is not None else None),
                 "screening_status": (
                     video_row.get("screening_status") if video_row is not None else None
                 ),
@@ -610,9 +602,7 @@ def cmd_real_data_audit(args):
         limit=5000,
     )
     if args.video_id:
-        candidates = [
-            video for video in overview["videos"] if video["video_id"] == args.video_id
-        ]
+        candidates = [video for video in overview["videos"] if video["video_id"] == args.video_id]
         if not candidates:
             print(f"No local video found for {args.video_id}")
             return
@@ -1196,13 +1186,9 @@ def cmd_auto_calibrate_clip(args):
     proposal = result["proposal"]
     print(f"Overlay bbox:     {proposal['overlay_bbox']}")
     print(f"Camera bbox:      {proposal['camera_bbox']}")
+    print(f"Theme:            {proposal['board_theme']} ({proposal['theme_confidence']:.3f})")
     print(
-        f"Theme:            {proposal['board_theme']} "
-        f"({proposal['theme_confidence']:.3f})"
-    )
-    print(
-        f"Board flipped:    {proposal['board_flipped']} "
-        f"({proposal['orientation_confidence']:.3f})"
+        f"Board flipped:    {proposal['board_flipped']} ({proposal['orientation_confidence']:.3f})"
     )
     print(f"Ref resolution:   {proposal['ref_resolution']}")
 
@@ -1709,8 +1695,7 @@ def main():
     p = subparsers.add_parser(
         "physical-board-failure-study",
         help=(
-            "Bundle board_exact tracker failures for manual "
-            "rectification/classifier/tracker review"
+            "Bundle board_exact tracker failures for manual rectification/classifier/tracker review"
         ),
     )
     p.add_argument(
@@ -1787,18 +1772,14 @@ def main():
         type=int,
         default=5,
         help=(
-            "Hard cap on episodes per source_video_id, so one game cannot "
-            "dominate the selection"
+            "Hard cap on episodes per source_video_id, so one game cannot dominate the selection"
         ),
     )
     p.add_argument(
         "--preceding-frames",
         type=int,
         default=10,
-        help=(
-            "How many frames of context to capture before each episode's "
-            "first failing frame"
-        ),
+        help=("How many frames of context to capture before each episode's first failing frame"),
     )
     p.add_argument(
         "--recovery-gap",

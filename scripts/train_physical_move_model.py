@@ -27,6 +27,7 @@ from pipeline.physical.shared.move_data import (
     load_real_move_sequences,
 )
 from pipeline.physical.shared.real_board_data import load_real_board_rows
+from pipeline.physical.shared.training_receipts import write_training_receipt
 from pipeline.shared import SQUARE_CLASS_NAMES, board_to_class_ids
 from scripts.eval_physical_board_tracker import (
     FramePrediction,
@@ -142,6 +143,7 @@ def main() -> None:
     train_component_sizes: dict[str, int] = {}
     train_component_repeats: dict[str, int] = {}
     real_train_source_video_ids: list[str] = []
+    real_train_meta: list = []
     val_dataset: Dataset | None = None
 
     real_val_source_video_id_list = resolve_real_val_source_video_ids(args) if args.use_real else []
@@ -518,6 +520,29 @@ def main() -> None:
         "checkpoint": str(best_path.relative_to(_PROJECT_ROOT)),
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True))
+    write_training_receipt(
+        output_dir,
+        kind="physical_move_model",
+        entries=_move_model_receipt_entries(real_train_meta),
+    )
+
+
+def _move_model_receipt_entries(real_train_meta) -> list[dict[str, str | int | None]]:
+    entries: list[dict[str, str | int | None]] = []
+    seen: set[str] = set()
+    for meta in real_train_meta or []:
+        clip_path = getattr(meta, "clip_path", None)
+        if not isinstance(clip_path, str) or clip_path in seen:
+            continue
+        seen.add(clip_path)
+        entries.append(
+            {
+                "source": "real_train",
+                "clip_path": clip_path,
+                "source_video_id": getattr(meta, "source_video_id", None),
+            }
+        )
+    return entries
 
 
 def build_parser() -> argparse.ArgumentParser:

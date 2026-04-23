@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.physical.shared.annotation_rows import load_annotated_oblique_rows
+from pipeline.physical.shared.training_receipts import write_training_receipt
 from pipeline.physical.two_stage.classifier_data import (
     DEFAULT_OCCUPANCY_CROP_SIZE,
     DEFAULT_PIECE_CROP_SIZE,
@@ -53,6 +54,7 @@ def main() -> None:
     physical_train_row_count: int | None = None
     selected_synthetic_train_row_count: int | None = None
     train_allow_clip_fallback = False
+    physical_train_rows_for_receipt: list = []
 
     if args.source == "chesscog-png":
         from pipeline.physical.chesscog_baseline.png_square_dataset import (
@@ -111,6 +113,7 @@ def main() -> None:
             val_rows = load_annotated_oblique_rows(args.physical_val_root)
 
         physical_train_row_count = len(train_rows)
+        physical_train_rows_for_receipt = list(train_rows)
         if args.synthetic_train_root is not None:
             synthetic_train_rows = load_synthetic_oblique_rows(args.synthetic_train_root)
             train_rows, selected_synthetic_train_row_count = _merge_train_rows(
@@ -282,6 +285,20 @@ def main() -> None:
         "history": history,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True))
+    write_training_receipt(
+        output_dir,
+        kind=f"square_classifier_{args.task}",
+        entries=[
+            {
+                "source": "manual_train",
+                "annotation_id": getattr(row, "annotation_id", None),
+                "clip_path": getattr(row, "clip_path", None),
+                "source_video_id": getattr(row, "source_video_id", None),
+            }
+            for row in physical_train_rows_for_receipt
+            if isinstance(getattr(row, "annotation_id", None), str)
+        ],
+    )
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 

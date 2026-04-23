@@ -1,0 +1,5 @@
+- Keep all template-v2 work under `study/templates-v2/`; treat core Argus code as read-only.
+- Before coding in this area, read `study/templates/RESULTS.md` and `study/FINAL_DECISION.md`.
+- Do not inspect or reuse prior failed files if encountered.
+- Stage acceptances require debug visualizations/contact sheets/preview artifacts plus explicit human checkpoints.
+- Use explicit `supersedes`/`invalidates` links when replacing prior memory.

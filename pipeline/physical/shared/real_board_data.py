@@ -1,4 +1,13 @@
-"""Real physical-board training data built from replayed clip metadata."""
+"""Real physical-board training data built from replayed clip metadata.
+
+Per-channel corner templates are inferred from the **val** split annotations
+(`data/physical/val/board_annotations.jsonl`). Any training clip whose
+`source_channel_handle` has no val-split template is silently skipped
+(`load_real_board_rows` continues past it). Consequence for annotation effort:
+labelling train-split frames from a channel that has zero val annotations
+contributes nothing to the board probe — it only feeds the square classifier.
+Prefer >=3 val annotations per channel for stable median corners.
+"""
 
 from __future__ import annotations
 

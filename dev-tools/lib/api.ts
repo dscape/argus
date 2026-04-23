@@ -2278,6 +2278,30 @@ export async function listPhysicalTrainClips(
   return res.json();
 }
 
+export type PhysicalAnnotationRoiAction =
+  | "needs_val"
+  | "needs_train"
+  | "add_diversity"
+  | "saturated";
+
+export interface PhysicalTrainPriorityClip extends PhysicalEvalClip {
+  source_channel_handle: string | null;
+  roi_action: PhysicalAnnotationRoiAction;
+}
+
+export async function listPhysicalTrainClipPriorities(
+  clipsDir: string = "data/argus/train_real",
+  limit: number = 200,
+): Promise<{ clips_dir: string; clips: PhysicalTrainPriorityClip[] }> {
+  const params = new URLSearchParams({
+    clips_dir: clipsDir,
+    limit: String(limit),
+  });
+  const res = await fetch(`/api/physical-train/clips/priorities?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function getPhysicalTrainSummary(): Promise<PhysicalEvalSummary> {
   const res = await fetch("/api/physical-train/summary");
   if (!res.ok) throw new Error(await res.text());

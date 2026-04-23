@@ -1,9 +1,0 @@
-{
-  "device": "cpu",
-  "frame_count": 10,
-  "match_threshold": 0.75,
-  "max_frames": null,
-  "proposal_source": "cuboid",
-  "source_video_id": null,
-  "template_bank_path": "/Users/dscape/dev/argus/study/templates/data/2wWUKmCBr6A.pt"
-}

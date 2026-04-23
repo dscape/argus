@@ -66,7 +66,11 @@ def _load_model(model_name: str) -> None:
     logger.info("VLM model loaded")
 
 
-def _generate(prompt: str, images: list[Image.Image], config: VideoAnalysisConfig) -> str:
+def generate_text_response(
+    prompt: str,
+    images: list[Image.Image],
+    config: VideoAnalysisConfig,
+) -> str:
     """Run VLM generation on images with a prompt."""
     try:
         from mlx_vlm import generate
@@ -106,6 +110,10 @@ def _generate(prompt: str, images: list[Image.Image], config: VideoAnalysisConfi
                 os.unlink(path)
             except OSError:
                 pass
+
+
+def _generate(prompt: str, images: list[Image.Image], config: VideoAnalysisConfig) -> str:
+    return generate_text_response(prompt, images, config)
 
 
 def _parse_scene_json(text: str) -> dict[str, Any]:

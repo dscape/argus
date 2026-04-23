@@ -498,3 +498,15 @@ User proposed a new template-matching study under `study/templates-v2/` after v1
 ## 2026-04-21T21:16:12.345Z | experiment | medium | Templates-v2 stage 1 visibility masks implemented
 
 Implemented `study/templates-v2/geometry/visibility.py` from scratch without reusing prior failed v2 files. Stage 1 now builds piece-type cuboids from FEN, projects them with a single frame-level `pose.up_sign` invariant, rasterizes convex-hull silhouettes, sorts by camera-space depth, subtracts closer-piece unions, and maps visible regions into crop-aligned patch masks via `compute_frame_visibility(...)` and `build_square_patch_visibility_mask(...)`. Added targeted coverage in `tests/test_study_templates_v2_visibility.py` (synthetic front-pawn/back-rank occlusion + patch-grid downsampling checks). Generated 5 acceptance-style overlays plus manifest under `study/templates-v2/geometry/debug-stage1/`. Targeted `ruff` and `pytest` pass. Targeted `mypy` is clean for the new files; remaining mypy failures come from existing `pipeline/physical/piece_projection.py` return-type issues.
+
+## 2026-04-23T08:54:32.330Z | experiment | medium | MLX-VLM board-still segmentation study scaffolded
+
+Added `study/mlx_vlm_segmentation/segment_board_still.py`, `study/mlx_vlm_segmentation/README.md`, tests, and the pipeline CLI entry `study-vlm-segment-board`. The study prompts `mlx-vlm` with the original still plus a square-labeled guide image, parses per-piece polygon JSON, renders unique-color overlays, and appends a legend under the still. Sample run on `study/eval/frames/clip_overlay_e4lGbQp4pU4_clip70_9_frame0000.jpg` with `gemma4_local` wrote artifacts under `study/mlx_vlm_segmentation/preview/` and parsed 15 pieces, but the returned polygons were mostly square-like rectangles rather than tight visible contours.
+
+## 2026-04-23T09:37:05.978Z | decision | high | MLX-VLM segmentation study should target physical board, not overlay
+
+Corrected `study/mlx_vlm_segmentation/` so the intended input is the **real physical board**. Added CLI support for `--annotation-id` + `--image-space native-crop|rectified`, backed by `data/physical/*/board_annotations.jsonl` and native frame loading/cropping. Updated docs and examples away from `study/eval/frames/*` overlay stills. Also made JSON extraction more robust to trailing model text and wrote `parse_error` into manifests instead of hard-failing. New sample artifact: `study/mlx_vlm_segmentation/preview/clip_overlay_e4lGbQp4pU4_clip70_9_frame0000_native_crop_annotated.png`.
+
+## Memory links
+
+- Invalidates: experiment: MLX-VLM board-still segmentation study scaffolded

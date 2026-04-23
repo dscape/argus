@@ -8,7 +8,9 @@ import { toast } from "sonner";
 import { ClipGallery } from "@/components/data/ClipGallery";
 import {
   listPhysicalEvalClips,
+  listPhysicalTrainClipPriorities,
   listPhysicalTrainClips,
+  type PhysicalAnnotationRoiAction,
   type PhysicalEvalClip,
 } from "@/lib/api";
 import type { SyntheticClipFile } from "@/lib/types";
@@ -16,6 +18,19 @@ import type { SyntheticClipFile } from "@/lib/types";
 type PhysicalAnnotationSplit = "val" | "train";
 type StatusFilter = "all" | "complete" | "incomplete";
 type FrameFilter = "all" | "lt100" | "lt500" | "gt500";
+type SortMode = "recent" | "priority";
+
+type PhysicalClipWithRoi = PhysicalEvalClip & {
+  source_channel_handle?: string | null;
+  roi_action?: PhysicalAnnotationRoiAction;
+};
+
+const ROI_LABELS: Record<PhysicalAnnotationRoiAction, string> = {
+  needs_val: "needs val",
+  needs_train: "needs train",
+  add_diversity: "diversity",
+  saturated: "saturated",
+};
 
 function normalizeSplit(value: string | null): PhysicalAnnotationSplit {
   return value === "train" ? "train" : "val";
@@ -37,20 +52,25 @@ export default function PhysicalAnnotationIndexPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const split = normalizeSplit(searchParams.get("split"));
-  const [clips, setClips] = useState<PhysicalEvalClip[]>([]);
+  const [clips, setClips] = useState<PhysicalClipWithRoi[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [frameFilter, setFrameFilter] = useState<FrameFilter>("all");
+  const [sortMode, setSortMode] = useState<SortMode>("recent");
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     void (async () => {
       try {
-        const data =
-          split === "train"
-            ? await listPhysicalTrainClips()
-            : await listPhysicalEvalClips();
+        let data: { clips: PhysicalClipWithRoi[] };
+        if (split === "train" && sortMode === "priority") {
+          data = await listPhysicalTrainClipPriorities();
+        } else if (split === "train") {
+          data = await listPhysicalTrainClips();
+        } else {
+          data = await listPhysicalEvalClips();
+        }
         if (!cancelled) {
           setClips(data.clips);
         }
@@ -70,7 +90,7 @@ export default function PhysicalAnnotationIndexPage() {
     return () => {
       cancelled = true;
     };
-  }, [split]);
+  }, [split, sortMode]);
 
   const filteredClips = useMemo(
     () =>
@@ -99,7 +119,7 @@ export default function PhysicalAnnotationIndexPage() {
   );
 
   const clipMetaByFilename = useMemo(() => {
-    const map = new Map<string, PhysicalEvalClip>();
+    const map = new Map<string, PhysicalClipWithRoi>();
     for (const clip of clips) map.set(clip.filename, clip);
     return map;
   }, [clips]);
@@ -126,6 +146,11 @@ export default function PhysicalAnnotationIndexPage() {
                 {meta.annotated_frame_count}/{meta.num_frames ?? "?"}
               </span>
             )}
+          {meta.roi_action && (
+            <span className="absolute bottom-1.5 left-1.5 rounded bg-amber-500/80 px-1 py-0.5 text-[9px] font-medium text-white drop-shadow">
+              {ROI_LABELS[meta.roi_action]}
+            </span>
+          )}
         </>
       );
     },
@@ -190,6 +215,19 @@ export default function PhysicalAnnotationIndexPage() {
             <option value="gt500">&gt; 500</option>
           </select>
         </label>
+        {split === "train" && (
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Sort</span>
+            <select
+              value={sortMode}
+              onChange={(e) => setSortMode(e.target.value as SortMode)}
+              className="h-9 rounded-md border bg-background px-3 text-sm shadow-sm outline-none transition-colors focus:border-ring"
+            >
+              <option value="recent">Recent</option>
+              <option value="priority">Annotation ROI</option>
+            </select>
+          </label>
+        )}
         <span className="text-sm text-muted-foreground">
           {filteredClips.length}/{clips.length} clips ({completedCount}{" "}
           complete)

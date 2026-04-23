@@ -60,6 +60,15 @@ async def list_clip_files(clips_dir: str = "data/argus/train_real", limit: int =
     )
 
 
+@router.get("/clips/priorities")
+async def list_clip_priorities(clips_dir: str = "data/argus/train_real", limit: int = 200):
+    return await run_in_threadpool(
+        physical_train_service.list_clip_priorities,
+        clips_dir,
+        limit=limit,
+    )
+
+
 @router.get("/summary")
 async def get_annotation_summary():
     return await run_in_threadpool(physical_train_service.get_annotation_summary)
