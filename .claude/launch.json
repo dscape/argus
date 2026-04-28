@@ -6,9 +6,10 @@
       "runtimeExecutable": "bash",
       "runtimeArgs": [
         "-c",
-        "cd dev-tools && npx next dev -p 3001"
+        "cd dev-tools && npx next dev"
       ],
       "port": 3001,
+      "autoPort": true,
       "env": {
         "API_URL": "http://localhost:8000",
         "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
